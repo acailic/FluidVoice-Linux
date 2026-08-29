@@ -911,6 +911,10 @@ struct ContentView: View {
     private func handleModeTransition(from oldValue: SidebarItem?, to newValue: SidebarItem?) {
         DebugLogger.shared.debug("Mode transition: \(String(describing: oldValue)) → \(String(describing: newValue))", source: "ContentView")
 
+        if oldValue != newValue {
+            self.clearShortcutRecordingMode()
+        }
+
         // Clean up state from the previous mode
         if let old = oldValue {
             switch old {
@@ -977,17 +981,20 @@ struct ContentView: View {
     }
 
     private func navigateToApp(_ destination: SidebarItem) {
+        self.clearShortcutRecordingMode()
         self.resetSettingsSearch()
         self.settingsNavigation.leaveForApp()
         self.selectedSidebarItem = destination
     }
 
     private func openSettings(_ section: SettingsSection) {
+        self.clearShortcutRecordingMode()
         self.resetSettingsSearch()
         self.settingsNavigation.present(section, returningTo: self.selectedSidebarItem)
     }
 
     private func closeSettings() {
+        self.clearShortcutRecordingMode()
         self.resetSettingsSearch()
         self.selectedSidebarItem = self.settingsNavigation.dismiss()
     }
@@ -1279,19 +1286,21 @@ struct ContentView: View {
             SettingsSearchField(text: Binding(
                 get: { self.settingsSearchQuery },
                 set: { self.updateSettingsSearchQuery($0) }
-            ))
-            .frame(height: 24)
-            .padding(.horizontal, self.theme.metrics.spacing.md)
-            .padding(.top, self.theme.metrics.spacing.xs)
-            .padding(.bottom, self.theme.metrics.spacing.sm)
+            ), isActive: self.settingsNavigation.isPresented)
+                .frame(height: 24)
+                .padding(.horizontal, self.theme.metrics.spacing.md)
+                .padding(.top, self.theme.metrics.spacing.xs)
+                .padding(.bottom, self.theme.metrics.spacing.sm)
 
             List(selection: Binding(
                 get: { self.settingsNavigation.selectedSection },
                 set: { newValue in
-                    if let newValue {
-                        self.settingsNavigation.selectedSection = newValue
-                        self.settingsSearchScrollRequest += 1
+                    guard let newValue else { return }
+                    if self.settingsNavigation.isLeaving(.dictation, for: newValue) {
+                        self.clearShortcutRecordingMode()
                     }
+                    self.settingsNavigation.selectedSection = newValue
+                    self.settingsSearchScrollRequest += 1
                 }
             )) {
                 ForEach(self.filteredSettingsSections) { section in
@@ -1781,9 +1790,13 @@ struct ContentView: View {
     }
 
     private var commandModeView: some View {
-        CommandModeView(service: self.commandModeService, onClose: {
-            self.navigateToApp(.welcome)
-        })
+        CommandModeView(
+            service: self.commandModeService,
+            isActive: !self.settingsNavigation.isPresented,
+            onClose: {
+                self.navigateToApp(.welcome)
+            }
+        )
     }
 
     private var rewriteModeView: some View {

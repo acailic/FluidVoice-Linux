@@ -525,6 +525,7 @@ enum SettingsSearchIndex {
 
 struct SettingsSearchField: NSViewRepresentable {
     @Binding var text: String
+    let isActive: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -547,6 +548,16 @@ struct SettingsSearchField: NSViewRepresentable {
         if searchField.stringValue != self.text {
             searchField.stringValue = self.text
         }
+        Self.resignFocusIfNeeded(from: searchField, isActive: self.isActive)
+    }
+
+    static func resignFocusIfNeeded(from searchField: NSSearchField, isActive: Bool) {
+        guard !isActive,
+              searchField.currentEditor() != nil,
+              let window = searchField.window
+        else { return }
+
+        window.makeFirstResponder(nil)
     }
 
     final class Coordinator: NSObject, NSSearchFieldDelegate {

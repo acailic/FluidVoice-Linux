@@ -64,6 +64,10 @@ struct SettingsNavigationState: Equatable {
         self.selectedSection != nil
     }
 
+    func isLeaving(_ section: SettingsSection, for destination: SettingsSection?) -> Bool {
+        self.selectedSection == section && destination != section
+    }
+
     mutating func present(_ section: SettingsSection, returningTo currentDestination: SidebarItem?) {
         if !self.isPresented {
             self.returnDestination = currentDestination ?? .welcome

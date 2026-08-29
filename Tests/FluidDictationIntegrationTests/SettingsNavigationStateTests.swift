@@ -1,3 +1,4 @@
+import AppKit
 @testable import FluidVoice_Debug
 import XCTest
 
@@ -41,6 +42,33 @@ final class SettingsNavigationStateTests: XCTestCase {
 
         XCTAssertFalse(state.isPresented)
         XCTAssertNil(state.selectedSection)
+    }
+
+    func testDetectsWhenNavigationLeavesDictationSettings() {
+        var state = SettingsNavigationState()
+        state.present(.dictation, returningTo: .welcome)
+
+        XCTAssertTrue(state.isLeaving(.dictation, for: .audio))
+        XCTAssertTrue(state.isLeaving(.dictation, for: nil))
+        XCTAssertFalse(state.isLeaving(.dictation, for: .dictation))
+    }
+
+    func testInactiveSettingsSearchResignsFirstResponder() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 240, height: 80),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let searchField = NSSearchField(frame: NSRect(x: 20, y: 20, width: 200, height: 24))
+        window.contentView?.addSubview(searchField)
+
+        XCTAssertTrue(window.makeFirstResponder(searchField))
+        XCTAssertNotNil(searchField.currentEditor())
+
+        SettingsSearchField.resignFocusIfNeeded(from: searchField, isActive: false)
+
+        XCTAssertNil(searchField.currentEditor())
     }
 
     func testSettingsSectionsHaveStableTitlesAndIcons() {
