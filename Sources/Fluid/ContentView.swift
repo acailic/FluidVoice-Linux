@@ -991,6 +991,8 @@ struct ContentView: View {
             self.selectedSidebarItem = .aiEnhancements
         case .history:
             self.selectedSidebarItem = .history
+        case .meetingTranscription:
+            self.selectedSidebarItem = .meetingTranscription
         }
     }
 
@@ -3570,7 +3572,6 @@ struct ContentView: View {
             },
             rewriteModeCallback: {
                 guard !self.presentExclusiveActivityBlockIfNeeded() else { return }
-                guard !self.showPrivateAIEditModeUnavailableIfNeeded() else { return }
 
                 self.captureRecordingContext()
 
