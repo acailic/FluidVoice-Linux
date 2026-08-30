@@ -71,6 +71,36 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertNil(searchField.currentEditor())
     }
 
+    func testCommandModeOnlyOwnsRecordingItStarted() {
+        XCTAssertTrue(CommandModeRecordingOwnershipPolicy.ownsRecording(after: .started, isRunning: true))
+        XCTAssertFalse(CommandModeRecordingOwnershipPolicy.ownsRecording(after: .started, isRunning: false))
+        XCTAssertFalse(CommandModeRecordingOwnershipPolicy.ownsRecording(after: .alreadyActive, isRunning: true))
+        XCTAssertFalse(CommandModeRecordingOwnershipPolicy.ownsRecording(after: .failed, isRunning: true))
+    }
+
+    func testCommandModeDeactivationNeverStopsUnownedRecording() {
+        XCTAssertTrue(CommandModeRecordingOwnershipPolicy.shouldStopOnDeactivate(
+            ownsRecording: true,
+            isRunning: true
+        ))
+        XCTAssertFalse(CommandModeRecordingOwnershipPolicy.shouldStopOnDeactivate(
+            ownsRecording: false,
+            isRunning: true
+        ))
+        XCTAssertFalse(CommandModeRecordingOwnershipPolicy.shouldStopOnDeactivate(
+            ownsRecording: true,
+            isRunning: false
+        ))
+        XCTAssertTrue(CommandModeRecordingOwnershipPolicy.shouldStopAfterStart(
+            ownsRecording: true,
+            isPresentationActive: false
+        ))
+        XCTAssertFalse(CommandModeRecordingOwnershipPolicy.shouldStopAfterStart(
+            ownsRecording: false,
+            isPresentationActive: false
+        ))
+    }
+
     func testSettingsSectionsHaveStableTitlesAndIcons() {
         XCTAssertEqual(
             SettingsSection.allCases.map(\.title),

@@ -1,5 +1,19 @@
 import SwiftUI
 
+enum CommandModeRecordingOwnershipPolicy {
+    static func ownsRecording(after outcome: AudioCaptureStartOutcome, isRunning: Bool) -> Bool {
+        outcome == .started && isRunning
+    }
+
+    static func shouldStopOnDeactivate(ownsRecording: Bool, isRunning: Bool) -> Bool {
+        ownsRecording && isRunning
+    }
+
+    static func shouldStopAfterStart(ownsRecording: Bool, isPresentationActive: Bool) -> Bool {
+        ownsRecording && !isPresentationActive
+    }
+}
+
 struct CommandModeView: View {
     @ObservedObject var service: CommandModeService
     let isActive: Bool
@@ -20,6 +34,9 @@ struct CommandModeView: View {
     @State private var showingClearConfirmation = false
     @State private var showHowTo = false
     @State private var isHoveringHowTo = false
+    @State private var ownsASRRecording = false
+    @State private var isASRStartPending = false
+    @State private var isPresentationActive = false
 
     @Environment(\.theme) private var theme
 
@@ -59,6 +76,11 @@ struct CommandModeView: View {
         .onChange(of: self.asr.finalText) { _, newText in
             if !newText.isEmpty {
                 self.inputText = newText
+            }
+        }
+        .onChange(of: self.asr.isRunning) { _, isRunning in
+            if !isRunning {
+                self.ownsASRRecording = false
             }
         }
         .onChange(of: self.settings.commandModeSelectedProviderID) { _, _ in
@@ -583,15 +605,24 @@ struct CommandModeView: View {
     }
 
     private func updatePresentationActivity(_ isActive: Bool) {
+        self.isPresentationActive = isActive
         self.service.enableNotchOutput = !isActive
 
-        if !isActive, self.asr.isRunning {
-            Task { await self.asr.stopWithoutTranscription() }
-        }
+        guard !isActive,
+              CommandModeRecordingOwnershipPolicy.shouldStopOnDeactivate(
+                  ownsRecording: self.ownsASRRecording,
+                  isRunning: self.asr.isRunning
+              )
+        else { return }
+
+        self.ownsASRRecording = false
+        Task { await self.asr.stopWithoutTranscription() }
     }
 
     private func toggleRecording() {
         if self.asr.isRunning {
+            guard self.ownsASRRecording else { return }
+            self.ownsASRRecording = false
             Task {
                 let command = await self.asr.stop().trimmingCharacters(in: .whitespacesAndNewlines)
                 _ = self.asr.consumeLastCompletedAudioSnapshot()
@@ -606,7 +637,22 @@ struct CommandModeView: View {
                 }
             }
         } else {
-            Task { await self.asr.start() }
+            guard !self.isASRStartPending else { return }
+            self.isASRStartPending = true
+            Task { @MainActor in
+                let outcome = await self.asr.start()
+                self.isASRStartPending = false
+                self.ownsASRRecording = CommandModeRecordingOwnershipPolicy.ownsRecording(
+                    after: outcome,
+                    isRunning: self.asr.isRunning
+                )
+                if CommandModeRecordingOwnershipPolicy.shouldStopAfterStart(
+                    ownsRecording: self.ownsASRRecording,
+                    isPresentationActive: self.isPresentationActive
+                ) {
+                    self.updatePresentationActivity(false)
+                }
+            }
         }
     }
 
