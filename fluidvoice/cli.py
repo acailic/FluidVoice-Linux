@@ -43,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("config", help="show/init the config file")
     p.add_argument("action", nargs="?", default="path", choices=["path", "init", "print"])
 
+    p = sub.add_parser("settings", help="open the settings web UI in a browser")
     sub.add_parser("doctor", help="environment check")
 
     args = parser.parse_args(argv)
@@ -105,6 +106,28 @@ def main(argv: list[str] | None = None) -> int:
                   else "(no config file - defaults in use; run `fluidvoice config init`)")
         else:
             print(paths.config_file())
+        return 0
+
+    if args.cmd == "settings":
+        from . import control
+        import shutil
+        import subprocess
+        try:
+            resp = control.request("status")
+            port = resp.get("webui_port")
+        except control.ControlError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        if not port:
+            print("settings UI is disabled (server.enabled=false) or the daemon "
+                  "failed to start it", file=sys.stderr)
+            return 1
+        url = f"http://127.0.0.1:{port}"
+        print(url)
+        opener = shutil.which("xdg-open")
+        if opener:
+            subprocess.Popen([opener, url], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
         return 0
 
     if args.cmd == "doctor":

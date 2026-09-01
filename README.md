@@ -46,6 +46,7 @@ Press **Right Ctrl**, speak, press **Right Ctrl** again. Done.
 Useful commands:
 
 ```bash
+fluidvoice settings          # open the settings web UI (model picker, AI config...)
 fluidvoice doctor            # environment check
 fluidvoice toggle            # CLI trigger (bind to a DE shortcut on Wayland)
 fluidvoice cancel            # abort a recording
@@ -54,6 +55,22 @@ fluidvoice transcribe x.wav  # one-shot transcription
 fluidvoice history -n 10
 fluidvoice config init       # write ~/.config/fluidvoice/config.toml
 ```
+
+### Settings UI
+
+`fluidvoice settings` opens a local web page (127.0.0.1 only, served by the
+daemon) that mirrors the macOS app's settings window:
+
+- **Speech models** — cards for tiny → large-v3-turbo with sizes and download
+  state; one click switches (and downloads) the active model.
+- **AI polish** — enable/configure any OpenAI-compatible endpoint with a
+  live "Test connection" button.
+- **Dictation** — hotkey, mode, language, insertion strategy, filler/punctuation
+  toggles.
+- **History** — your recent transcriptions.
+
+Everything it saves goes to the same `config.toml` (with a strict whitelist;
+API keys are never exposed through the UI — use the env var).
 
 ### Enable AI polish (optional)
 
@@ -83,6 +100,7 @@ providers set `api_key_env = "FLUIDVOICE_API_KEY"` and export the variable
 | Write/Rewrite selected text | ✅ (⌥R) | 🚧 roadmap (X11 selection via xclip) |
 | Command mode (voice → terminal agent) | ✅ | 🚧 roadmap |
 | Per-app prompt sets | ✅ | 🚧 roadmap (app hint is already captured) |
+| Settings UI with model picker | ✅ | ✅ local web UI (`fluidvoice settings`) |
 | Notch overlay / menu bar | ✅ | ➖ N/A on Linux; notifications today |
 
 See [docs/COMPARISON.md](docs/COMPARISON.md) for how this relates to other Linux

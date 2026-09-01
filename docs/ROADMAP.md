@@ -28,8 +28,10 @@
 - [ ] Command mode (voice → terminal agent) with the upstream tool schema and
       destructive-command confirmation list.
 - [ ] Custom-dictionary auto-learning from post-insertion corrections.
-- [ ] Tray icon / settings UI (preferably a tiny GTK app talking to the daemon
-      socket; keep the daemon headless).
+- [x] Settings UI — done as a local web page served by the daemon
+      (`fluidvoice settings`, 127.0.0.1 only): model picker with download,
+      AI config + live test, dictation toggles, history. A tray icon may
+      still be added on top.
 - [ ] Local HTTP API (upstream exposes an OpenAI-style server on 127.0.0.1).
 - [ ] Packaging: AUR, nix, flatpak-less deb, pipx.
 

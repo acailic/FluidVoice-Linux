@@ -1,0 +1,400 @@
+"""Local settings web UI (127.0.0.1 only) - the Linux counterpart of the
+macOS app's settings window: model picker, AI config, processing toggles,
+history. Zero dependencies: stdlib http.server + one embedded page.
+"""
+from __future__ import annotations
+
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
+
+from . import __version__, backends, history as history_mod, paths
+from .ai.client import AIClient, AIError
+from .config import load_config, save_config
+
+# name -> (display size, languages, note)
+MODEL_CATALOG: dict[str, dict[str, str]] = {
+    "tiny": {"size": "~75 MB", "langs": "99", "note": "fastest, lowest accuracy"},
+    "base": {"size": "~145 MB", "langs": "99", "note": "fast; CPU default"},
+    "small": {"size": "~484 MB", "langs": "99", "note": "balanced; GPU default"},
+    "medium": {"size": "~1.5 GB", "langs": "99", "note": "accurate, heavier"},
+    "large-v3": {"size": "~2.9 GB", "langs": "99", "note": "best accuracy"},
+    "large-v3-turbo": {"size": "~1.6 GB", "langs": "99", "note": "near-large quality, faster"},
+}
+
+
+def model_downloaded(name: str) -> bool:
+    """Best-effort check of the faster-whisper download cache."""
+    repo = backends.FW_MODEL_REPOS.get(backends.ALIASES.get(name, name), "")
+    if not repo:
+        return False
+    for root in (paths.models_dir() / "faster-whisper",
+                 paths.cache_dir().parent / "huggingface" / "hub"):
+        candidate = root / ("models--" + repo.replace("/", "--"))
+        if candidate.exists() and any(candidate.iterdir()):
+            return True
+    return False
+
+
+class WebUI:
+    """Serves the settings page + JSON API; talks to the daemon for live state."""
+
+    def __init__(self, daemon=None, cfg: dict | None = None):
+        self.daemon = daemon
+        self.cfg = cfg or load_config()
+        self.warmup = {"running": False, "error": None, "model": None}
+        self._srv: ThreadingHTTPServer | None = None
+        self.port = 0
+
+    # -- lifecycle -----------------------------------------------------------
+
+    def start(self) -> int:
+        webui = self
+
+        class Handler(_Handler):
+            webui_ref = webui
+
+        self._srv = ThreadingHTTPServer(("127.0.0.1", int(self.cfg["server"]["port"])), Handler)
+        self.port = self._srv.server_address[1]
+        threading.Thread(target=self._srv.serve_forever, name="fluidvoice-webui",
+                         daemon=True).start()
+        return self.port
+
+    def stop(self) -> None:
+        if self._srv:
+            self._srv.shutdown()
+            self._srv = None
+
+    # -- api helpers -----------------------------------------------------------
+
+    def api_status(self) -> dict:
+        d = self.daemon
+        status = d.handle_request({"action": "status"}) if d else {"recording": False, "busy": False}
+        active = backends.resolve_model_name(self.cfg["model"]["name"]) \
+            if str(self.cfg["model"].get("name", "auto")) in ("", "auto") \
+            else backends.ALIASES.get(str(self.cfg["model"]["name"]).lower(),
+                                      str(self.cfg["model"]["name"]).lower())
+        return {
+            "version": __version__,
+            "recording": status.get("recording", False),
+            "busy": status.get("busy", False),
+            "backend": status.get("backend"),
+            "cuda": backends.cuda_available(),
+            "active_model": active,
+            "warmup": dict(self.warmup),
+        }
+
+    def api_models(self) -> list[dict]:
+        active = self.api_status()["active_model"]
+        out = []
+        for name, info in MODEL_CATALOG.items():
+            out.append({"name": name, **info,
+                        "active": name == active,
+                        "downloaded": model_downloaded(name)})
+        return out
+
+    def api_select_model(self, name: str) -> dict:
+        name = backends.ALIASES.get(name.strip().lower(), name.strip().lower())
+        if name not in backends.FW_MODEL_REPOS:
+            return {"ok": False, "error": f"unknown model '{name}'"}
+        self.cfg["model"]["name"] = name
+        save_config(self.cfg)
+        if not self.warmup["running"]:
+            self.warmup = {"running": True, "error": None, "model": name}
+            threading.Thread(target=self._warmup_model, args=(name,), daemon=True).start()
+        return {"ok": True, "model": name}
+
+    def _warmup_model(self, name: str) -> None:
+        try:
+            cfg = dict(self.cfg)
+            cfg["model"] = dict(self.cfg["model"], name=name)
+            backend = backends.load_backend(cfg)
+            backend.warmup()
+            if self.daemon is not None:
+                self.daemon.backend = backend  # hot-swap into the running daemon
+            self.warmup = {"running": False, "error": None, "model": name}
+        except Exception as e:  # noqa: BLE001 - surfaced in the UI
+            self.warmup = {"running": False, "error": str(e)[:300], "model": name}
+
+    def api_test_ai(self, body: dict) -> dict:
+        cfg = dict(self.cfg)
+        cfg["ai"] = dict(self.cfg["ai"], **{k: v for k, v in body.items()
+                                            if k in ("enabled", "base_url", "model")})
+        cfg["ai"]["enabled"] = True
+        client = AIClient(cfg)
+        if not client.configured:
+            return {"ok": False, "error": "set base_url and model first"}
+        try:
+            reply = client.chat("Reply with exactly: ok")
+            return {"ok": True, "reply": reply[:200]}
+        except AIError as e:
+            return {"ok": False, "error": str(e)[:300]}
+
+    def api_config_get(self) -> dict:
+        safe = json.loads(json.dumps(self.cfg))  # plain copy
+        key = safe.get("ai", {}).get("api_key", "")
+        safe.setdefault("ai", {})["api_key"] = bool(key)  # never leak the value
+        return safe
+
+    def api_config_post(self, body: dict) -> dict:
+        """Whitelisted merge; ignores anything the UI doesn't own."""
+        allowed = {
+            "general": {"language"},
+            "hotkey": {"key", "modifiers", "mode", "cancel_key"},
+            "recording": {"device", "max_seconds", "skip_silent"},
+            "model": {"backend", "name", "device", "compute", "whispercpp_model"},
+            "processing": {"remove_filler_words", "filler_words",
+                           "punctuation_enabled", "punctuation_prefix", "dictionary"},
+            "ai": {"enabled", "base_url", "model", "api_key_env",
+                   "temperature", "timeout_seconds", "max_retries"},
+            "insertion": {"mode", "type_delay_ms", "paste_threshold_chars"},
+            "sounds": {"enabled", "volume"},
+            "notifications": {"enabled"},
+            "history": {"save", "save_audio", "audio_budget_gb"},
+            "server": {"enabled", "port"},
+        }
+        changed: list[str] = []
+        for section, keys in allowed.items():
+            for key in keys:
+                if section in body and key in body[section]:
+                    new = body[section][key]
+                    if self.cfg.get(section, {}).get(key) != new:
+                        changed.append(f"{section}.{key}")
+                    self.cfg.setdefault(section, {})[key] = new
+        save_config(self.cfg)
+        return {"ok": True, "changed": changed,
+                "note": "some changes apply after the daemon restarts"}
+
+
+class _Handler(BaseHTTPRequestHandler):
+    webui_ref: WebUI | None = None
+
+    def log_message(self, *args) -> None:  # quiet
+        pass
+
+    # -- plumbing --------------------------------------------------------------
+
+    def _json(self, obj: Any, code: int = 200) -> None:
+        data = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _body(self) -> dict:
+        length = int(self.headers.get("Content-Length") or 0)
+        if not length:
+            return {}
+        try:
+            return json.loads(self.rfile.read(length).decode())
+        except json.JSONDecodeError:
+            return {}
+
+    # -- routes ------------------------------------------------------------------
+
+    def do_GET(self) -> None:  # noqa: N802
+        w = self.webui_ref
+        assert w is not None
+        if self.path in ("/", "/index.html"):
+            data = PAGE.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        elif self.path == "/api/status":
+            self._json(w.api_status())
+        elif self.path == "/api/models":
+            self._json(w.api_models())
+        elif self.path == "/api/config":
+            self._json(w.api_config_get())
+        elif self.path == "/api/history":
+            self._json(history_mod.tail(20))
+        else:
+            self._json({"error": "not found"}, 404)
+
+    def do_POST(self) -> None:  # noqa: N802
+        w = self.webui_ref
+        assert w is not None
+        body = self._body()
+        if self.path == "/api/config":
+            self._json(w.api_config_post(body))
+        elif self.path == "/api/models/select":
+            self._json(w.api_select_model(body.get("name", "")))
+        elif self.path == "/api/test-ai":
+            self._json(w.api_test_ai(body))
+        elif self.path == "/api/toggle":
+            if w.daemon is not None:
+                self._json(w.daemon.handle_request({"action": "toggle"}))
+            else:
+                self._json({"ok": False, "error": "daemon not attached"})
+        else:
+            self._json({"error": "not found"}, 404)
+
+
+PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>FluidVoice Linux</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0f1420;--card:#171e2e;--line:#253048;--text:#e6ebf5;--mut:#8b96ad;
+--acc:#3ac8c6;--ok:#4cc38a;--warn:#f2a33c;--err:#e5534b}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 system-ui,sans-serif;
+background:var(--bg);color:var(--text)}
+.wrap{max-width:880px;margin:0 auto;padding:24px 20px 60px}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 10px;color:var(--mut);
+text-transform:uppercase;letter-spacing:.06em}
+.sub{color:var(--mut);margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+padding:14px 16px;margin-bottom:10px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.spread{justify-content:space-between}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--mut);display:inline-block}
+.dot.rec{background:var(--err);animation:pulse 1s infinite}
+.dot.busy{background:var(--warn);animation:pulse 1s infinite}
+.dot.idle{background:var(--ok)}
+@keyframes pulse{50%{opacity:.35}}
+.models{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+.model{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.model.active{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.model b{display:block;font-size:15px}.model .meta{color:var(--mut);font-size:12px;margin:2px 0 8px}
+.model .note{color:var(--mut);font-size:12px;font-style:italic}
+label{display:block;margin:10px 0 4px;color:var(--mut);font-size:13px}
+input,select{width:100%;background:#0c111c;border:1px solid var(--line);color:var(--text);
+border-radius:7px;padding:7px 10px;font:inherit}
+input[type=checkbox]{width:auto}
+button{background:var(--acc);border:0;color:#04211f;font-weight:600;border-radius:7px;
+padding:7px 14px;font:inherit;cursor:pointer}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+button:disabled{opacity:.5;cursor:default}
+.hint{font-size:12px;color:var(--mut)}.err{color:var(--err)}.ok{color:var(--ok)}
+.hist{border-left:2px solid var(--line);padding:2px 0 2px 12px;margin:6px 0}
+.hist .t{color:var(--mut);font-size:12px}
+.toast{position:fixed;bottom:18px;right:18px;background:var(--card);border:1px solid var(--acc);
+border-radius:8px;padding:10px 16px;display:none}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:640px){.two{grid-template-columns:1fr}}
+</style></head><body><div class="wrap">
+<h1>FluidVoice <span style="color:var(--mut);font-weight:400">Linux</span></h1>
+<div class="sub"><span class="dot idle" id="dot"></span> <span id="state">idle</span>
+&middot; <span id="backend"></span> &middot; <span id="cuda"></span>
+&middot; model <b id="activeModel"></b></div>
+
+<h2>Speech models</h2>
+<div class="models" id="models"></div>
+<div class="hint" id="warmupMsg" style="margin-top:8px"></div>
+
+<h2>AI polish <span class="hint">(optional - any OpenAI-compatible endpoint)</span></h2>
+<div class="card">
+ <div class="row"><label style="margin:0 8px 0 0"><input type="checkbox" id="aiEnabled"> enabled</label>
+  <span class="grow"></span><button class="ghost" id="testAi">Test connection</button>
+  <span id="testAiOut" class="hint"></span></div>
+ <div class="two">
+  <div><label>Base URL</label><input id="aiUrl" placeholder="http://localhost:11434/v1"></div>
+  <div><label>Model</label><input id="aiModel" placeholder="qwen3:8b"></div>
+ </div>
+ <div class="two">
+  <div><label>API key env var</label><input id="aiKeyEnv" placeholder="FLUIDVOICE_API_KEY"></div>
+  <div><label>Temperature</label><input id="aiTemp" type="number" step="0.1" min="0" max="2"></div>
+ </div>
+</div>
+
+<h2>Dictation</h2>
+<div class="card">
+ <div class="two">
+  <div><label>Hotkey (keysym)</label><input id="hkKey" placeholder="Right_Control"></div>
+  <div><label>Mode</label><select id="hkMode"><option>toggle</option><option>hold</option></select></div>
+ </div>
+ <div class="two">
+  <div><label>Language</label><input id="lang" placeholder="auto"></div>
+  <div><label>Insertion</label><select id="insMode"><option>auto</option><option>typed</option><option>paste</option></select></div>
+ </div>
+ <div class="row" style="margin-top:10px">
+  <label style="margin:0 8px 0 0"><input type="checkbox" id="fillers"> remove filler words</label>
+  <label style="margin:0 8px 0 0"><input type="checkbox" id="punct"> spoken punctuation</label>
+  <label style="margin:0"><input type="checkbox" id="sounds"> sounds</label>
+ </div>
+ <div><label>Spoken-command prefix</label><input id="punctPrefix" placeholder="literal"></div>
+</div>
+
+<div class="row spread" style="margin-top:16px">
+ <span class="hint" id="saveMsg"></span>
+ <button id="save">Save settings</button>
+</div>
+
+<h2>History</h2>
+<div id="history" class="hint">no transcriptions yet</div>
+<div class="toast" id="toast"></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const api=(p,opts)=>fetch(p,opts).then(r=>r.json());
+const toast=m=>{const t=$('toast');t.textContent=m;t.style.display='block';
+ setTimeout(()=>t.style.display='none',2500)};
+
+async function refresh(){
+ const s=await api('/api/status');
+ const dot=$('dot');dot.className='dot '+(s.recording?'rec':s.busy?'busy':'idle');
+ $('state').textContent=s.recording?'recording':s.busy?'processing':'idle';
+ $('backend').textContent='backend: '+(s.backend||'-');
+ $('cuda').textContent='GPU: '+(s.cuda?'yes':'no');
+ $('activeModel').textContent=s.active_model;
+ if(s.warmup.running){$('warmupMsg').textContent=
+   'downloading/loading '+s.warmup.model+' ... (see daemon log)';}
+ else if(s.warmup.error){$('warmupMsg').innerHTML=
+   '<span class="err">warmup failed: '+s.warmup.error+'</span>';}
+ const ms=await api('/api/models');
+ $('models').innerHTML=ms.map(m=>`
+  <div class="model ${m.active?'active':''}">
+   <b>${m.name}${m.active?' ✓':''}</b>
+   <div class="meta">${m.size} · ${m.langs} languages · ${m.downloaded?'downloaded':'not downloaded'}</div>
+   <div class="note">${m.note}</div>
+   ${m.active?'':`<button style="margin-top:8px" onclick="pick('${m.name}')">${m.downloaded?'Use':'Download & use'}</button>`}
+  </div>`).join('');
+}
+async function pick(name){
+ await api('/api/models/select',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({name})});
+ toast('switching to '+name);refresh();
+}
+async function load(){
+ const c=await api('/api/config');
+ $('aiEnabled').checked=c.ai.enabled;$('aiUrl').value=c.ai.base_url;
+ $('aiModel').value=c.ai.model||'';$('aiKeyEnv').value=c.ai.api_key_env;
+ $('aiTemp').value=c.ai.temperature;$('hkKey').value=c.hotkey.key;
+ $('hkMode').value=c.hotkey.mode;$('lang').value=c.general.language;
+ $('insMode').value=c.insertion.mode;$('fillers').checked=c.processing.remove_filler_words;
+ $('punct').checked=c.processing.punctuation_enabled;$('punctPrefix').value=c.processing.punctuation_prefix;
+ $('sounds').checked=c.sounds.enabled;
+ const h=await api('/api/history');
+ $('history').innerHTML=h.length?h.map(e=>
+  `<div class="hist"><div class="t">${new Date((e.ts||0)*1000).toLocaleString()}${e.ai?' · AI':''}${e.app?' · '+e.app:''}</div><div>${(e.text||'').replace(/</g,'&lt;')}</div></div>`).join('')
+  :'no transcriptions yet';
+}
+$('save').onclick=async()=>{
+ const body={general:{language:$('lang').value.trim()||'auto'},
+  hotkey:{key:$('hkKey').value.trim()||'Right_Control',mode:$('hkMode').value},
+  ai:{enabled:$('aiEnabled').checked,base_url:$('aiUrl').value.trim(),
+      model:$('aiModel').value.trim(),api_key_env:$('aiKeyEnv').value.trim(),
+      temperature:parseFloat($('aiTemp').value)||0.2},
+  insertion:{mode:$('insMode').value},
+  processing:{remove_filler_words:$('fillers').checked,punctuation_enabled:$('punct').checked,
+   punctuation_prefix:$('punctPrefix').value.trim()||'literal'},
+  sounds:{enabled:$('sounds').checked}};
+ const r=await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify(body)});
+ $('saveMsg').textContent=r.changed.length?('saved: '+r.changed.join(', ')+' — '):'no changes — ';
+ $('saveMsg').textContent+=r.note;toast('settings saved');
+};
+$('testAi').onclick=async()=>{
+ $('testAiOut').textContent='testing...';$('testAiOut').className='hint';
+ const r=await api('/api/test-ai',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({base_url:$('aiUrl').value.trim(),model:$('aiModel').value.trim()})});
+ $('testAiOut').textContent=r.ok?('reply: '+r.reply):r.error;
+ $('testAiOut').className=r.ok?'ok':'err';
+};
+load();refresh();setInterval(refresh,3000);
+</script></body></html>
+"""

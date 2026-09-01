@@ -152,6 +152,7 @@ class Daemon:
         self._lock = threading.Lock()
         self._hotkey = None
         self._srv: Any = None
+        self.webui: Any = None
         self._process_thread: threading.Thread | None = None
 
     # -- lifecycle -----------------------------------------------------------
@@ -171,6 +172,17 @@ class Daemon:
         self._srv = control.serve(self.handle_request, ready=ready)
         ready.wait(timeout=5)
         log(f"control socket: {paths.socket_path()}")
+
+        self.webui = None
+        if self.cfg.get("server", {}).get("enabled", True):
+            try:
+                from .webui import WebUI
+                self.webui = WebUI(daemon=self, cfg=self.cfg)
+                port = self.webui.start()
+                log(f"settings UI: http://127.0.0.1:{port} (`fluidvoice settings`)")
+            except Exception as e:
+                log(f"WARN settings UI unavailable: {e}")
+
         log("ready - press the hotkey to dictate "
             f"(or run `fluidvoice toggle`; config: {paths.config_file()})")
 
@@ -198,6 +210,8 @@ class Daemon:
             except OSError:
                 pass
             paths.socket_path().unlink(missing_ok=True)
+        if self.webui:
+            self.webui.stop()
 
     def _start_hotkey(self) -> None:
         from .hotkey import HotkeyError, HotkeyListener
@@ -230,9 +244,10 @@ class Daemon:
             self.cancel()
             return {"ok": True, "recording": False, "cancelled": True}
         if action == "status":
+            webui_port = self.webui.port if getattr(self, "webui", None) else None
             return {"ok": True, "recording": self.recording, "busy": self.busy,
                     "backend": self.backend.name if self.backend else None,
-                    "version": __version__}
+                    "version": __version__, "webui_port": webui_port}
         return {"ok": False, "error": f"unknown action {action!r}"}
 
     # -- dictation -----------------------------------------------------------

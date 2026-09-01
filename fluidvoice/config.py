@@ -77,6 +77,11 @@ DEFAULTS: dict[str, Any] = {
         "save_audio": False,
         "audio_budget_gb": 4.0,
     },
+    "server": {
+        # Local settings web UI (127.0.0.1 only) - like upstream's local API
+        "enabled": True,
+        "port": 47735,
+    },
 }
 
 
@@ -187,6 +192,11 @@ enabled = true
 save = true
 save_audio = false
 audio_budget_gb = 4.0
+
+[server]
+# Local settings web UI (`fluidvoice settings`), bound to 127.0.0.1 only
+enabled = true
+port = 47735
 """
 
 
@@ -194,4 +204,73 @@ def write_template(path: Path | None = None) -> Path:
     path = path or paths.config_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(TEMPLATE)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Saving (used by the settings UI). Only whitelisted keys are written; values
+# for keys the UI does not manage (like ai.api_key) are carried over from the
+# existing file so a save never loses them.
+# ---------------------------------------------------------------------------
+
+_SAVE_WHITELIST: dict[str, list[str]] = {
+    "general": ["language"],
+    "hotkey": ["key", "modifiers", "mode", "cancel_key"],
+    "recording": ["command", "device", "max_seconds", "skip_silent"],
+    "model": ["backend", "name", "device", "compute", "whispercpp_model"],
+    "processing": ["remove_filler_words", "filler_words", "punctuation_enabled",
+                   "punctuation_prefix", "dictionary"],
+    "ai": ["enabled", "base_url", "model", "api_key", "api_key_env", "temperature",
+           "timeout_seconds", "max_retries"],
+    "insertion": ["mode", "type_delay_ms", "paste_threshold_chars"],
+    "sounds": ["enabled", "volume"],
+    "notifications": ["enabled"],
+    "history": ["save", "save_audio", "audio_budget_gb"],
+    "server": ["enabled", "port"],
+}
+
+
+def _toml_value(value: Any) -> str:
+    import json
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)  # JSON escaping is valid TOML
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    if isinstance(value, dict):
+        parts = []
+        for k, v in value.items():
+            parts.append(f"{k} = {_toml_value(v)}")
+        return "{ " + ", ".join(parts) + " }"
+    raise ValueError(f"cannot serialize {type(value).__name__} to TOML")
+
+
+def save_config(cfg: dict, path: Path | None = None) -> Path:
+    """Persist the whitelisted config keys as TOML, carrying over api_key."""
+    path = path or paths.config_file()
+    carry: dict = {}
+    if path.exists():
+        try:
+            with open(path, "rb") as fh:
+                carry = tomllib.load(fh)
+        except tomllib.TOMLDecodeError:
+            carry = {}
+    lines: list[str] = ["# FluidVoiceLinux configuration (managed by the settings UI)",
+                        ""]
+    for section, keys in _SAVE_WHITELIST.items():
+        values = cfg.get(section, {})
+        carried = carry.get(section, {})
+        lines.append(f"[{section}]")
+        for key in keys:
+            value = values.get(key)
+            if value in ("", None) and key in carried:
+                value = carried[key]  # e.g. keep an existing api_key
+            if value not in ("", None):
+                lines.append(f"{key} = {_toml_value(value)}")
+        lines.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines).rstrip() + "\n")
     return path

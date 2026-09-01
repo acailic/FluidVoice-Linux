@@ -83,8 +83,8 @@ def cfg():
 
 
 @pytest.fixture()
-def quiet_ui(monkeypatch):
-    """Silence real notifications/sounds and record them."""
+def quiet_ui(tmp_path, monkeypatch):
+    """Silence real notifications/sounds, isolate history, and record them."""
     calls = {"notify": [], "sound": []}
 
     def fake_notify(title, body="", timeout_ms=2500, enabled=True):
@@ -98,6 +98,8 @@ def quiet_ui(monkeypatch):
     monkeypatch.setattr(dm.ui, "notify", fake_notify)
     monkeypatch.setattr(dm.ui, "play_sound", fake_sound)
     monkeypatch.setattr(dm.insertion, "active_window_class", lambda: "TestApp")
+    monkeypatch.setattr(dm.history_mod.paths, "history_file",
+                        lambda: tmp_path / "test-history.jsonl")
     return calls
 
 

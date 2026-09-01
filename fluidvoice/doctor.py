@@ -7,6 +7,15 @@ import shutil
 from . import __version__, backends, paths
 
 
+def _daemon_webui_port() -> int | None:
+    try:
+        from . import control
+        resp = control.request("status")
+        return resp.get("webui_port")
+    except Exception:
+        return None
+
+
 def run() -> int:
     print(f"FluidVoiceLinux v{__version__} doctor\n")
     ok = True
@@ -53,6 +62,9 @@ def run() -> int:
 
     print(f"\ncontrol socket: {paths.socket_path()} "
           f"({'alive' if paths.socket_path().exists() else 'daemon not running'})")
+    print(f"settings UI: http://127.0.0.1:{port} (`fluidvoice settings`)"
+          if (port := _daemon_webui_port()) else
+          "settings UI: daemon not running or server.enabled=false")
 
     print("\nresult:", "ready" if ok else "see warnings above")
     return 0 if ok else 1
