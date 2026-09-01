@@ -196,6 +196,8 @@ def _atsign_app(app_hint: str | None) -> bool:
 
 
 class _Renderer:
+    _pending_skip_hws: bool = False
+
     def __init__(self, app_hint: str | None):
         self.app_hint = app_hint
         self.out = _Out()
@@ -228,8 +230,6 @@ class _Renderer:
         self.out.append(symbol, generated=True)
         if spacing in (LEFT, NOSPACE):
             self._pending_skip_hws = True
-
-    _pending_skip_hws: bool = False
 
     def flush_skip(self, tokens: list[str], i: int) -> int:
         if self._pending_skip_hws:

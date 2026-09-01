@@ -6,6 +6,8 @@ Mirrors FluidVoice's TypingService strategies:
 """
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import subprocess
 import time
@@ -13,6 +15,10 @@ import time
 
 class InsertError(RuntimeError):
     pass
+
+
+def _display_active() -> bool:
+    return bool(os.environ.get("DISPLAY"))
 
 
 def _run(args: list[str], timeout: float = 15.0, stdin: bytes | None = None) -> subprocess.CompletedProcess:
@@ -24,7 +30,7 @@ def _run(args: list[str], timeout: float = 15.0, stdin: bytes | None = None) -> 
 
 def active_window_class() -> str | None:
     """WM_CLASS (or title) of the active window - the punctuation app hint."""
-    if not (shutil.which("xdotool") and os_env_display()):
+    if not (shutil.which("xdotool") and _display_active()):
         return None
     try:
         wid = _run(["xdotool", "getactivewindow"], timeout=3).stdout.decode().strip()
@@ -32,20 +38,13 @@ def active_window_class() -> str | None:
             return None
         if shutil.which("xprop"):
             out = _run(["xprop", "-id", wid, "WM_CLASS"], timeout=3).stdout.decode()
-            import re
-            quoted = re.findall(r'"([^"]*)"', out)
-            for p in reversed(quoted):  # class is last
-                if p:
-                    return p
+            for part in reversed(re.findall(r'"([^"]*)"', out)):  # class is last
+                if part:
+                    return part
         name = _run(["xdotool", "getwindowname", wid], timeout=3).stdout.decode().strip()
         return name or None
     except Exception:
         return None
-
-
-def os_env_display() -> bool:
-    import os
-    return bool(os.environ.get("DISPLAY"))
 
 
 def insert_typed(text: str, delay_ms: int) -> None:
@@ -107,3 +106,13 @@ def insert_text(text: str, cfg: dict) -> str:
                 raise
     insert_typed(text, delay)
     return "typed"
+
+
+def clipboard_fallback(text: str) -> None:
+    """Last resort when neither typing nor pasting worked: leave text on the clipboard."""
+    if not shutil.which("xclip"):
+        return
+    try:
+        _clipboard_write(text.encode())
+    except Exception:
+        pass

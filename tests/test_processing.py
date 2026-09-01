@@ -42,3 +42,15 @@ class TestDictionary:
 
     def test_empty_noop(self):
         assert apply_custom_dictionary("hello", []) == "hello"
+
+
+class TestPipelineOrder:
+    def test_fillers_then_dictionary_then_punctuation(self, ):
+        from fluidvoice.processing import post_process
+        from fluidvoice.config import DEFAULTS
+        import copy
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["processing"]["dictionary"] = [
+            {"triggers": ["fluid voice"], "replacement": "FluidVoice"}]
+        out = post_process("um fluid voice literal period", cfg)
+        assert out == "FluidVoice."

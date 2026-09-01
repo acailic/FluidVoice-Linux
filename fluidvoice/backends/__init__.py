@@ -10,10 +10,7 @@ from __future__ import annotations
 import ctypes
 import glob
 import os
-from pathlib import Path
-from typing import Any, Callable
-
-from .. import paths
+from typing import Any
 
 # faster-whisper model names -> HuggingFace repos
 FW_MODEL_REPOS: dict[str, str] = {
@@ -92,6 +89,15 @@ def _import_ok(module: str) -> bool:
         return False
 
 
+def _whispercpp_binary() -> str | None:
+    import shutil
+    for name in ("whisper-cli", "whisper-cpp", "whisper.cpp", "whisper-main"):
+        p = shutil.which(name)
+        if p:
+            return p
+    return None
+
+
 def backend_status() -> dict[str, str]:
     """Human-readable availability report for `fluidvoice doctor`."""
     status = {}
@@ -110,15 +116,6 @@ def backend_status() -> dict[str, str]:
         status["faster-whisper"] = "not installed (pip install faster-whisper)"
     status["whisper.cpp"] = _whispercpp_binary() or "binary not found on PATH"
     return status
-
-
-def _whispercpp_binary() -> str | None:
-    import shutil
-    for name in ("whisper-cli", "whisper-cpp", "whisper.cpp", "whisper-main"):
-        p = shutil.which(name)
-        if p:
-            return p
-    return None
 
 
 class Backend:

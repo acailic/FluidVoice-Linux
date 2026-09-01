@@ -1,6 +1,8 @@
 import pytest
 
-from fluidvoice.ai.client import AIClient, _endpoint, strip_thinking
+from fluidvoice.ai import client as ai_client
+from fluidvoice.ai.client import AIError, AIClient, _endpoint, strip_thinking
+import json
 from fluidvoice.ai.prompts import (
     BASE_DICTATION_PROMPT,
     DEFAULT_DICTATION_PROMPT_BODY,
@@ -82,3 +84,94 @@ class TestAIClientDefaults:
                       "api_key": "", "api_key_env": "NOPE", "temperature": 0.2,
                       "timeout_seconds": 60, "max_retries": 3}}
         assert not AIClient(cfg).configured
+
+
+class TestChatTransport:
+    """chat() transport behavior with a mocked urlopen (no network)."""
+
+    def make_client(self, **overrides):
+        import copy
+        cfg = {"ai": {"base_url": "http://x/v1", "model": "m", "api_key": "",
+                      "api_key_env": "NOPE", "temperature": 0.2,
+                      "timeout_seconds": 5, "max_retries": 3}}
+        cfg["ai"].update(overrides)
+        return AIClient(cfg)
+
+    def _respond(self, payload: dict, status: int = 200):
+        import io
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        body = json.dumps(payload).encode()
+        if status != 200:
+            import urllib.error
+            err = urllib.error.HTTPError("url", status, "err", {}, io.BytesIO(body))
+            raise err
+        return Resp(body)
+
+    def test_success(self, monkeypatch):
+        client = self.make_client()
+        monkeypatch.setattr(ai_client.urllib.request, "urlopen",
+                            lambda req, timeout=None: self._respond(
+                                {"choices": [{"message": {"content": "hi"}}]}))
+        assert client.chat("hello") == "hi"
+
+    def test_retries_then_succeeds(self, monkeypatch):
+        attempts = {"n": 0}
+
+        def flaky(req, timeout=None):
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                import urllib.error
+                raise urllib.error.URLError("conn reset")
+            return self._respond({"choices": [{"message": {"content": "ok"}}]})
+
+        monkeypatch.setattr(ai_client.urllib.request, "urlopen", flaky)
+        monkeypatch.setattr(ai_client.time, "sleep", lambda s: None)
+        assert self.make_client().chat("x") == "ok"
+        assert attempts["n"] == 3
+
+    def test_config_error_no_retry(self, monkeypatch):
+        attempts = {"n": 0}
+
+        def always_401(req, timeout=None):
+            attempts["n"] += 1
+            return self._respond({}, status=401)
+
+        monkeypatch.setattr(ai_client.urllib.request, "urlopen", always_401)
+        with pytest.raises(AIError, match="401"):
+            self.make_client().chat("x")
+        assert attempts["n"] == 1  # did not retry
+
+    def test_exhausted_retries_raise(self, monkeypatch):
+        import urllib.error
+        monkeypatch.setattr(ai_client.urllib.request, "urlopen",
+                            lambda req, timeout=None: (_ for _ in ()).throw(
+                                urllib.error.URLError("down")))
+        monkeypatch.setattr(ai_client.time, "sleep", lambda s: None)
+        with pytest.raises(AIError, match="down"):
+            self.make_client().chat("x")
+
+    def test_polish_empty_response_returns_transcript(self, monkeypatch):
+        # model answers with thinking only -> cleaned empty -> raw kept
+        monkeypatch.setattr(ai_client.urllib.request, "urlopen",
+                            lambda req, timeout=None: self._respond(
+                                {"choices": [{"message": {"content": "<think>   </think>"}}]}))
+        out = self.make_client().polish("keep me")
+        assert out == "keep me"
+
+    def test_auth_header_sent_when_key_present(self, monkeypatch):
+        seen = {}
+
+        def grab(req, timeout=None):
+            seen["auth"] = req.headers.get("Authorization")
+            return self._respond({"choices": [{"message": {"content": "ok"}}]})
+
+        monkeypatch.setattr(ai_client.urllib.request, "urlopen", grab)
+        self.make_client(api_key="sk-test").chat("x")
+        assert seen["auth"] == "Bearer sk-test"

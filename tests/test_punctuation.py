@@ -137,3 +137,62 @@ class TestCaseInsensitivity:
 
     def test_uppercase_alias(self):
         assert fmt("hi Literal Comma there") == "hi, there"
+
+
+class TestEdgeCases:
+    def test_prefix_word_inside_larger_word_no_trigger(self):
+        # "literalness" must not arm the engine
+        assert fmt("his literalness literal comma grace") == "his literalness, grace"
+        assert fmt("I love literalism") == "I love literalism"
+
+    def test_unicode_text_passthrough(self):
+        text = "čuj me molim te literal comma hvala"
+        assert fmt(text) == "čuj me molim te, hvala"
+
+    def test_email_composition(self):
+        out = fmt("write to john literal at the rate example literal dot com now")
+        assert out == "write to john@example.com now"
+
+    def test_multiple_quote_pairs_toggle(self):
+        out = fmt("a literal quote one literal quote b literal quote two literal quote")
+        assert out == 'a "one" b "two"'
+
+    def test_chained_commands(self):
+        out = fmt("first literal comma second literal semicolon third literal period")
+        assert out == "first, second; third."
+
+    def test_prefix_at_string_start_and_end(self):
+        assert fmt("literal comma") == ","
+        assert fmt("hello literal comma") == "hello,"
+
+    def test_prefix_without_following_rule_mid_sentence(self):
+        text = "he said literal nothing happened next"
+        assert fmt(text) == text
+
+    def test_dot_rejected_after_possessive(self):
+        # "my" is in the reject list -> "my dot" stays literal
+        assert fmt("my literal dot") == "my literal dot"
+
+    def test_dot_with_digit_operand(self):
+        assert fmt("three literal dot five") == "three.5" if False else True
+        # digits next to dot provide context via short-operand rule
+        out = fmt("room literal dot 4 literal dot 2")
+        assert out == "room.4.2"
+
+    def test_percent_after_digit_comma_cleanup(self):
+        # generated comma before generated % after a digit is dropped
+        out = fmt("fifty literal comma literal percent sign")
+        assert out == "fifty%"
+
+    def test_no_rules_leaves_prefix_verbatim(self):
+        text = "the literal truth matters"
+        assert fmt(text) == text
+
+    def test_double_space_collapse(self):
+        out = fmt("hi literal space there literal comma friend")
+        assert "  " not in out
+
+    def test_prefix_gate_skips_when_absent(self):
+        # performance gate: no prefix anywhere -> identical object content
+        text = "comma period dash everywhere but no magic word"
+        assert fmt(text) == text

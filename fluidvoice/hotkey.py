@@ -52,11 +52,12 @@ _KEY_ALIASES = {
 def resolve_keysym(name: str) -> int:
     keysym = XK.string_to_keysym(name)
     if keysym == X.NoSymbol:
-        alias = _KEY_ALIASES.get(name.strip().lower())
+        alias = _KEY_ALIASES.get(name.strip().lower().replace(" ", "_"))
         if alias:
             keysym = XK.string_to_keysym(alias)
     if keysym == X.NoSymbol:
-        normalized = "".join(p.capitalize() for p in name.replace(" ", "_").split("_"))
+        # "page up" -> "Page_Up", "right control" -> "Right_Control"
+        normalized = "_".join(p.capitalize() for p in name.strip().split())
         keysym = XK.string_to_keysym(normalized)
     if keysym == X.NoSymbol:
         raise HotkeyError(f"unknown key name '{name}'")
@@ -67,11 +68,13 @@ class HotkeyListener:
     """Grabs the hotkey and invokes callbacks from its own thread."""
 
     def __init__(self, key: str, modifiers: list[str], mode: str,
-                 on_toggle, on_cancel=None, display_name: str | None = None):
+                 on_toggle, on_cancel=None, cancel_key: str = "",
+                 display_name: str | None = None):
         self.key = key
         self.mode = mode
         self.on_toggle = on_toggle
         self.on_cancel = on_cancel
+        self.cancel_key = (cancel_key or "").strip()
         self.display_name = display_name
         self._mods = sum(MODIFIER_MASKS.get(m, 0) for m in modifiers)
         self._thread: threading.Thread | None = None
@@ -80,7 +83,6 @@ class HotkeyListener:
         self._keycode = 0
         self._cancel_keycode: int | None = None
         self._escape_keycode: int | None = None
-        self.cancel_key: str = ""
         self._summary: list[str] = []
 
     # -- setup ---------------------------------------------------------------
@@ -135,7 +137,7 @@ class HotkeyListener:
 
     @property
     def summary(self) -> list[str]:
-        return self._summary
+        return list(self._summary)
 
     def _run(self) -> None:  # pragma: no cover - needs a real X server
         d = self._display
@@ -170,7 +172,7 @@ class HotkeyListener:
                 pass
 
     def _hold_cycle(self, d: Display, keycode: int) -> None:
-        """Push-to-talk: grab the keyboard until the hotkey is released."""
+        """Push-to-talk: grab the keyboard until the hotkey is released (or Escape)."""
         root = d.screen().root
         try:
             root.grab_keyboard(False, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime)
@@ -178,21 +180,23 @@ class HotkeyListener:
             self._safe(self.on_toggle)  # degrade to a single toggle
             return
         self._safe(self.on_toggle)  # start
-        while not self._stop_flag.is_set():
-            try:
-                event = d.next_event()
-            except Exception:
-                break
-            etype = getattr(event, "type", None)
-            detail = getattr(event, "detail", None)
-            if etype == X.KeyRelease and detail == keycode:
-                break
-            if etype == X.KeyPress and detail == self._escape_keycode:
-                break  # aborts the hold; recording still stops below
         try:
-            d.ungrab_keyboard(X.CurrentTime)
-        except Exception:
-            pass
+            while not self._stop_flag.is_set():
+                try:
+                    event = d.next_event()
+                except Exception:
+                    break
+                etype = getattr(event, "type", None)
+                detail = getattr(event, "detail", None)
+                if etype == X.KeyRelease and detail == keycode:
+                    break
+                if etype == X.KeyPress and detail == self._escape_keycode:
+                    break  # aborts the hold; recording still stops below
+        finally:
+            try:
+                d.ungrab_keyboard(X.CurrentTime)
+            except Exception:
+                pass
         self._safe(self.on_toggle)  # stop
 
     def _safe(self, cb) -> None:

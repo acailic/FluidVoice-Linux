@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from . import __version__, doctor as doctor_mod, paths
@@ -90,7 +91,6 @@ def main(argv: list[str] | None = None) -> int:
         from . import history
         for entry in history.tail(args.n):
             ts = entry.get("ts")
-            import time
             when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts else "?"
             ai = " [AI]" if entry.get("ai") else ""
             print(f"{when}{ai}: {entry.get('text', '')}")
