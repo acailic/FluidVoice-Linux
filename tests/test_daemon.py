@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import math
 import struct
+import threading
 import time
 import wave
 from pathlib import Path
@@ -296,3 +297,36 @@ class TestDaemon:
         assert self.wait_done(d)
         assert d.last_result == {}  # nothing typed, error notified
         assert any("Transcription failed" in (t + b) for t, b in quiet_ui["notify"])
+
+
+class TestAutoStopRace:
+    def test_auto_stop_after_cancel_starts_nothing(self, cfg, quiet_ui):
+        rec = StubRecorder()
+        d = dm.Daemon(cfg, recorder=rec,
+                      backend_factory=lambda c: StubBackend("x"),
+                      use_hotkey=False, use_sounds=False)
+        d.backend = StubBackend("x")
+        d.toggle()
+        assert d.recording
+        d.cancel()  # timer may still be pending
+        d._watchdog = threading.Timer(0.05, d._auto_stop)  # simulate late fire
+        d._watchdog.start()
+        time.sleep(0.3)
+        assert not d.recording  # and crucially:
+        assert rec.started == 1  # no second recording began
+
+
+class TestStaleTmpSweep:
+    def test_old_tmp_files_removed(self, tmp_path, monkeypatch):
+        import glob
+        import os
+        old = tmp_path / "fluidvoice-old.wav"
+        new = tmp_path / "fluidvoice-new.wav"
+        old.write_bytes(b"x")
+        new.write_bytes(b"x")
+        far_past = time.time() - 2 * 86400
+        os.utime(old, (far_past, far_past))
+        monkeypatch.setattr(glob, "glob",
+                            lambda pattern: [str(old), str(new)] if "fluidvoice" in pattern else [])
+        dm.Daemon._sweep_stale_tmp()
+        assert not old.exists() and new.exists()

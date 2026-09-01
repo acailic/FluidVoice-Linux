@@ -175,3 +175,105 @@ class TestChatTransport:
         monkeypatch.setattr(ai_client.urllib.request, "urlopen", grab)
         self.make_client(api_key="sk-test").chat("x")
         assert seen["auth"] == "Bearer sk-test"
+
+
+class TestRequestBodyBuilding:
+    """Upstream-faithful request params (audit: temperature/reasoning/responses)."""
+
+    def client(self, model="qwen3:8b", **ai):
+        cfg = {"ai": {"base_url": "http://x/v1", "model": model, "api_key": "",
+                      "api_key_env": "NOPE", "temperature": 0.2,
+                      "timeout_seconds": 120, "max_retries": 3, **ai}}
+        return AIClient(cfg)
+
+    def test_temperature_sent_for_normal_models(self):
+        body = json.loads(self.client().chat.__self__._build_body("hi", False))
+        assert body["temperature"] == 0.2
+
+    def test_temperature_omitted_for_gpt5(self):
+        c = self.client(model="gpt-5-mini")
+        body = json.loads(c._build_body("hi", False))
+        assert "temperature" not in body
+        assert body["reasoning_effort"] == "low"
+
+    def test_temperature_omitted_for_o_series(self):
+        body = json.loads(self.client(model="o3-mini")._build_body("hi", False))
+        assert "temperature" not in body and body["reasoning_effort"] == "medium"
+
+    def test_temperature_omitted_for_claude5(self):
+        body = json.loads(self.client(model="claude-sonnet-5")._build_body("hi", False))
+        assert "temperature" not in body and "reasoning_effort" not in body
+
+    def test_provider_prefix_stripped(self):
+        body = json.loads(self.client(model="openai/gpt-oss-120b")._build_body("hi", False))
+        assert body["reasoning_effort"] == "low" and "temperature" not in body
+
+    def test_nemotron_gets_enable_thinking(self):
+        body = json.loads(self.client(model="nemotron-nano")._build_body("hi", False))
+        assert body["enable_thinking"] is True
+
+    def test_deepseek_reasoner_gets_enable_thinking(self):
+        body = json.loads(self.client(model="deepseek-r1")._build_body("hi", False))
+        assert body["enable_thinking"] is True
+
+    def test_normal_model_gets_no_extras(self):
+        body = json.loads(self.client(model="llama3.1")._build_body("hi", False))
+        assert "reasoning_effort" not in body and "enable_thinking" not in body
+
+
+class TestResponsesAPI:
+    def test_selection_rules(self):
+        from fluidvoice.ai.client import _use_responses_api
+        assert _use_responses_api("https://api.openai.com/v1", "gpt-5-mini")
+        assert _use_responses_api("https://api.openai.com/v1", "o3")
+        assert not _use_responses_api("https://api.openai.com/v1", "gpt-4.1")
+        assert not _use_responses_api("http://localhost:11434/v1", "gpt-5")
+        assert _use_responses_api("https://x/v1/responses", "anything")
+
+    def test_responses_body_and_parsing(self):
+        c = AIClient({"ai": {"base_url": "https://api.openai.com/v1",
+                             "model": "gpt-5-mini", "api_key": "", "api_key_env": "N",
+                             "temperature": 0.2, "timeout_seconds": 5, "max_retries": 1}})
+        body = json.loads(c._build_body("hello", True))
+        assert body["input"] == "hello" and body["store"] is False
+        assert body["reasoning"] == {"effort": "low"}
+        parsed = c._parse_response(
+            {"output": [{"content": [{"text": "he"}, {"text": "llo"}]}]})
+        assert parsed == "hello"
+
+
+class TestStripThinkingGuard:
+    """Upstream's opening-tag guard (audit finding: content loss)."""
+
+    def test_stray_close_after_pair_preserves_text(self):
+        assert strip_thinking("A <think>x</think> B </think> C") == "A  B  C"
+
+    def test_orphan_still_works_without_pair(self):
+        assert strip_thinking("thinking... </think>answer") == "answer"
+
+    def test_plain_orphan_close_removed_inline(self):
+        # no opening tag anywhere: everything before the close is thinking
+        assert strip_thinking("a </think> b") == "b"
+
+
+class TestEmptyResponse:
+    def test_polish_raises_on_empty_content(self, monkeypatch):
+        import urllib.request
+        import io
+        from fluidvoice.ai import client as c
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        cfg = {"ai": {"base_url": "http://x/v1", "model": "m", "api_key": "",
+                      "api_key_env": "N", "temperature": 0.2,
+                      "timeout_seconds": 5, "max_retries": 1}}
+        monkeypatch.setattr(c.urllib.request, "urlopen",
+                            lambda req, timeout=None: Resp(
+                                json.dumps({"choices": [{"message": {"content": "   "}}]}).encode()))
+        with pytest.raises(AIError, match="empty response"):
+            AIClient(cfg).polish("keep me")

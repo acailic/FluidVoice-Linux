@@ -6,7 +6,10 @@ import re
 
 def _pattern(trigger: str) -> re.Pattern:
     escaped = re.escape(trigger.strip())
-    return re.compile(r"(?<!\w)" + escaped + r"(?!\w)", re.IGNORECASE)
+    # Upstream adds word boundaries only when the trigger edge is a word char
+    lead = r"(?<!\w)" if trigger[:1].isalnum() or trigger[:1] == "_" else ""
+    trail = r"(?!\w)" if trigger[-1:].isalnum() or trigger[-1:] == "_" else ""
+    return re.compile(lead + escaped + trail, re.IGNORECASE)
 
 
 def apply_custom_dictionary(text: str, entries: list[dict]) -> str:

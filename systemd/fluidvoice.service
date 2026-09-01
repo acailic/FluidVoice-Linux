@@ -1,13 +1,23 @@
+# FluidVoiceLinux systemd user unit (EXAMPLE).
+# install.sh generates a copy with your real paths at
+# ~/.config/systemd/user/fluidvoice.service - prefer using that one.
+
 [Unit]
 Description=FluidVoiceLinux dictation daemon
 Documentation=https://github.com/acailic/FluidVoice
 PartOf=graphical-session.target
+After=graphical-session.target
 
 [Service]
 Type=simple
+# The hotkey listener and xdotool insertion need the X session environment;
+# a systemd user manager does NOT inherit it, so it must be set explicitly
+# (install.sh bakes in the DISPLAY that was active during installation).
+Environment=DISPLAY=%h/.fluidvoice-display-see-install-sh
+Environment=XAUTHORITY=%h/.Xauthority
 ExecStart=%h/Documents/github/FluidVoiceLinux/.venv/bin/fluidvoice daemon
 Restart=on-failure
 RestartSec=3
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target

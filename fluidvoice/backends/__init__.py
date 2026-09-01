@@ -22,6 +22,13 @@ FW_MODEL_REPOS: dict[str, str] = {
     "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
 }
 ALIASES = {"turbo": "large-v3-turbo", "large": "large-v3", "large-v3-turbo": "large-v3-turbo"}
+# Accept upstream's raw value names ("whisper-small", "whisper-large-turbo", ...)
+ALIASES.update({
+    "whisper-tiny": "tiny", "whisper-base": "base", "whisper-small": "small",
+    "whisper-medium": "medium", "whisper-large": "large-v3",
+    "whisper-large-v3": "large-v3", "whisper-large-turbo": "large-v3-turbo",
+    "whisper-large-v3-turbo": "large-v3-turbo",
+})
 
 _cuda_libs_preloaded: bool | None = None
 

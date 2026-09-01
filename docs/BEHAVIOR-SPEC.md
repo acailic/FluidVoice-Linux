@@ -101,7 +101,16 @@ close tag; stray tags removed. Separate `reasoning_content` / `reasoning` /
 `/chat/completions`, `/api/chat`, or `/api/generate`. `Bearer` auth when a key
 exists (even localhost). Retries 3 with linear backoff.
 
-**Port status:** ✅ implemented (`fluidvoice/ai/`).
+**Port status:** ✅ implemented (`fluidvoice/ai/`) — verified byte-identical
+prompts (2026-09 audit) plus request params: temperature omitted for
+reasoning/claude-5-family models, reasoning extras (reasoning_effort
+gpt-5*/o1/o3/o4/gpt-oss, enable_thinking nemotron/deepseek-reasoner),
+OpenAI Responses API (/responses) support, the opening-tag think guard, and
+the empty-response error. Intentional divergences: 429/5xx responses ARE
+retried (upstream never retries HTTP errors); when cleaning empties a
+non-empty response the raw transcript is kept (upstream types the raw
+content); dictation timeout 120 s (upstream: 30 s streaming path / 120 s
+non-streaming path — we are non-streaming).
 
 ---
 
@@ -139,9 +148,18 @@ skip following hspace · **N** both · **S** single spaces both sides (not after
 newline) · **toggle** alternate L/R per quote state.
 
 **Port status:** ✅ implemented with tests (`fluidvoice/processing/punctuation.py`).
-Upstream extras not yet ported: user-editable alias table (config override of
-the whole rule list), slash-command/mention literal formatting (`/ fix`,
-`@ John Smith` in Slack/Discord/Teams).
+**Critical fidelity note (2026-09 audit):** upstream's LIVE rule table (the
+UserDefaults defaults applied via `makeRules(from:)`) applies every rule
+UNCONDITIONALLY — the dot/slash/at-sign "context gates" exist only in a
+parameterless `makeRules()` overload that is never called (dead code). This
+port matches the LIVE behavior (ungated) and the full alias set (108
+upstream aliases incl. `left/right parentheses`, `opening/closing double
+quote`, `plus`, `equal`, `equals`), longest-alias-first matching, and the
+real cleanup passes (comma sandwiched between two symbols; comma before %
+after a digit; original-text trailing period before actions). `double quote`
+toggles like `quote`. Not yet ported: user-editable alias tables,
+slash-command/mention literal formatting (`/ fix`, `@ John Smith` in
+Slack/Discord/Teams), terminal autocomplete spacing.
 
 ---
 
@@ -162,8 +180,13 @@ no max duration** — recording runs until the user stops it. Streaming preview
 intervals 0.2–1.0 s per model. Sub-1s audio is zero-padded to 16,000 samples
 before whisper.cpp.
 
-**Port status:** 🔄 Whisper models ✅ (faster-whisper/whisper.cpp/torch);
-Parakeet/Nemotron/Cohere on the roadmap (NeMo/ONNX on Linux).
+**Port status:** 🔄 Whisper models ✅ (faster-whisper/torch; whisper.cpp works
+but you must supply the ggml model yourself — no auto-download). Parakeet
+TDT v2/v3 via NeMo/ONNX is the highest-value addition (roadmap v0.4);
+parakeet-realtime streaming and Nemotron are also roadmap items. Cohere
+Transcribe has no viable non-CoreML runtime — effectively a non-goal on
+Linux. Gaps: per-model language selection (upstream has separate
+whisper/cohere/nemotron language stores; we have one global `language`).
 
 ---
 
@@ -176,8 +199,12 @@ Parakeet/Nemotron/Cohere on the roadmap (NeMo/ONNX on Linux).
   machine; other keys during hold interrupt the trigger.
 
 **Port status:** ✅ toggle (any keysym, incl. modifier-only Right Ctrl);
-✅ hold for non-modifier keys via temporary keyboard grab; automatic mode and
-mode-switch-while-recording are roadmap.
+✅ hold for non-modifier keys via temporary keyboard grab (known divergence:
+the grab swallows other keystrokes during the hold, where upstream passes
+them through and uses them to interrupt the trigger — roadmap). Automatic
+mode, mode-switch-while-recording, paste-last-transcription hotkey and
+Escape-cancel (default Escape semantics) are roadmap. Divergence: the port
+caps recordings at `max_seconds` (300 s default) where upstream has no cap.
 
 ---
 

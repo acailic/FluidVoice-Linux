@@ -7,7 +7,7 @@ name = "fluidvoice-linux"
 version = "0.1.0"
 description = "FluidVoice for Linux - local voice dictation with AI polish (community port of altic-dev/FluidVoice behavior)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "FluidVoiceLinux contributors" }]
 keywords = ["speech-to-text", "dictation", "whisper", "voice", "linux"]

@@ -188,3 +188,179 @@ class TestModelDownloaded:
         (repo_dir / "model.bin").write_bytes(b"x")
         assert webui.model_downloaded("small") is True
 
+
+
+class TestWebUISecurity:
+    """CSRF / DNS-rebinding / abuse guards (audit findings C1, C2, M4, M6)."""
+
+    def _raw_post(self, port, path, headers, data=b"{}"):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("POST", path, body=data, headers=headers)
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+        return resp.status, body
+
+    def _raw_get(self, port, path, headers):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+        return resp.status, body
+
+    def test_cross_site_origin_post_rejected(self, server):
+        w, port = server
+        status, body = self._raw_post(
+            port, "/api/config",
+            {"Host": f"127.0.0.1:{port}", "Origin": "https://evil.example",
+             "Content-Type": "application/json"},
+            data=json.dumps({"hotkey": {"key": "F9"}}).encode())
+        assert status == 403
+        assert w.cfg["hotkey"]["key"] != "F9"  # nothing was applied
+
+    def test_same_origin_post_allowed(self, server):
+        w, port = server
+        status, _ = self._raw_post(
+            port, "/api/config",
+            {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}",
+             "Content-Type": "application/json"},
+            data=json.dumps({"hotkey": {"key": "F7"}}).encode())
+        assert status == 200 and w.cfg["hotkey"]["key"] == "F7"
+
+    def test_foreign_host_rejected_get(self, server):
+        # DNS rebinding: attacker.com resolves here, sends Host: attacker.com
+        w, port = server
+        status, _ = self._raw_get(port, "/api/history", {"Host": "attacker.com"})
+        assert status == 403
+
+    def test_post_requires_json_content_type(self, server):
+        w, port = server
+        status, _ = self._raw_post(
+            port, "/api/config",
+            {"Host": f"127.0.0.1:{port}", "Content-Type": "text/plain"},
+            data=json.dumps({"hotkey": {"key": "F6"}}).encode())
+        assert status == 403
+
+    def test_oversized_body_rejected(self, server):
+        w, port = server
+        big = b"x" * (200 * 1024)
+        status, _ = self._raw_post(
+            port, "/api/config",
+            {"Host": f"127.0.0.1:{port}", "Content-Type": "application/json",
+             "Content-Length": str(len(big))},
+            data=big)
+        assert status == 413
+
+    def test_test_ai_hides_key_from_foreign_host(self, server, monkeypatch):
+        captured = {}
+
+        class FakeClient:
+            configured = True
+
+            def __init__(self, cfg):
+                captured["base_url"] = cfg["ai"]["base_url"]
+                captured["api_key"] = cfg["ai"].get("api_key", "")
+
+            def chat(self, msg):
+                return "ok"
+
+        monkeypatch.setattr(webui, "AIClient", FakeClient)
+        w, port = server
+        w.cfg["ai"]["api_key"] = "sk-secret"
+        resp = post(port, "/api/test-ai",
+                    {"base_url": "https://attacker.example/v1", "model": "m"})
+        assert resp["ok"]
+        assert captured["api_key"] == ""  # key never sent to a foreign host
+        assert captured["base_url"] == "https://attacker.example/v1"
+
+    def test_test_ai_keeps_key_for_saved_host(self, server, monkeypatch):
+        captured = {}
+
+        class FakeClient:
+            configured = True
+
+            def __init__(self, cfg):
+                captured["api_key"] = cfg["ai"].get("api_key", "")
+
+            def chat(self, msg):
+                return "ok"
+
+        monkeypatch.setattr(webui, "AIClient", FakeClient)
+        w, port = server
+        w.cfg["ai"]["api_key"] = "sk-secret"
+        w.cfg["ai"]["base_url"] = "http://localhost:11434/v1"
+        post(port, "/api/test-ai", {"base_url": "http://localhost:11434/v1",
+                                    "model": "m"})
+        assert captured["api_key"] == "sk-secret"
+
+    def test_config_validation_rejects_garbage(self, server):
+        w, port = server
+        resp = post(port, "/api/config",
+                    {"recording": {"max_seconds": "abc"},
+                     "insertion": {"type_delay_ms": "8; rm"},
+                     "hotkey": {"mode": "explode"}})
+        assert sorted(resp["rejected"]) == ["hotkey.mode",
+                                            "insertion.type_delay_ms",
+                                            "recording.max_seconds"]
+        assert w.cfg["recording"]["max_seconds"] != "abc"
+
+    def test_config_rejects_dash_prefixed_strings(self, server):
+        w, port = server
+        resp = post(port, "/api/config", {"hotkey": {"key": "--injection"}})
+        assert "hotkey.key" in resp["rejected"]
+
+    def test_warmup_failure_rolls_back_model(self, server, monkeypatch):
+        import time as _time
+
+        def boom(cfg):
+            raise RuntimeError("download failed")
+
+        monkeypatch.setattr(webui.backends, "load_backend", boom)
+        w, port = server
+        before = w.cfg["model"]["name"]
+        post(port, "/api/models/select", {"name": "medium"})
+        deadline = _time.monotonic() + 5
+        while w.warmup["running"] and _time.monotonic() < deadline:
+            _time.sleep(0.05)
+        assert w.warmup["error"] == "download failed"
+        assert w.cfg["model"]["name"] == before  # rolled back
+
+    def test_warmup_double_spawn_rejected(self, server, monkeypatch):
+        import time as _time
+        release = _time.monotonic() + 1.5
+
+        class SlowBackend:
+            name = "slow"
+
+            def warmup(self):
+                while _time.monotonic() < release:
+                    _time.sleep(0.05)
+
+        monkeypatch.setattr(webui.backends, "load_backend",
+                            lambda c: SlowBackend())
+        w, port = server
+        assert post(port, "/api/models/select", {"name": "tiny"})["ok"]
+        second = post(port, "/api/models/select", {"name": "base"})
+        assert not second["ok"] and "already running" in second["error"]
+
+
+class TestConfigPermissions:
+    def test_saved_config_is_0600(self, tmp_path, monkeypatch):
+        import os
+        from fluidvoice import paths as p
+        target = tmp_path / "c.toml"
+        monkeypatch.setattr(p, "config_file", lambda: target)
+        save_config(copy.deepcopy(DEFAULTS))
+        assert os.stat(target).st_mode & 0o777 == 0o600
+
+    def test_write_template_is_0600(self, tmp_path, monkeypatch):
+        import os
+        from fluidvoice import paths as p
+        from fluidvoice.config import write_template
+        target = tmp_path / "c.toml"
+        monkeypatch.setattr(p, "config_file", lambda: target)
+        write_template()
+        assert os.stat(target).st_mode & 0o777 == 0o600

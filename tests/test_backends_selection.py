@@ -119,3 +119,10 @@ class TestWhisperCppBinary:
         import shutil
         monkeypatch.setattr(shutil, "which", lambda n: None)
         assert backends._whispercpp_binary() is None
+
+
+class TestUpstreamNameAliases:
+    def test_whisper_prefix_aliases(self):
+        assert backends.resolve_model_name("whisper-small") == "small"
+        assert backends.resolve_model_name("whisper-large-turbo") == "large-v3-turbo"
+        assert backends.resolve_model_name("WHISPER-BASE") == "base"

@@ -57,7 +57,7 @@ DEFAULTS: dict[str, Any] = {
         "api_key": "",  # preferred: leave empty and use api_key_env
         "api_key_env": "FLUIDVOICE_API_KEY",
         "temperature": 0.2,
-        "timeout_seconds": 60,
+        "timeout_seconds": 120,
         "max_retries": 3,
     },
     "insertion": {
@@ -170,7 +170,7 @@ model = ""
 api_key = ""             # preferred: leave empty and export the env var below
 api_key_env = "FLUIDVOICE_API_KEY"
 temperature = 0.2
-timeout_seconds = 60
+timeout_seconds = 120
 max_retries = 3
 
 [insertion]
@@ -200,10 +200,25 @@ port = 47735
 """
 
 
+def _write_private(path: Path, text: str) -> None:
+    """Atomic write with 0600 - the file may contain an API key."""
+    import os
+    import tempfile
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".fluidvoice-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
 def write_template(path: Path | None = None) -> Path:
     path = path or paths.config_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(TEMPLATE)
+    _write_private(path, TEMPLATE)
     return path
 
 
@@ -271,6 +286,5 @@ def save_config(cfg: dict, path: Path | None = None) -> Path:
             if value not in ("", None):
                 lines.append(f"{key} = {_toml_value(value)}")
         lines.append("")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines).rstrip() + "\n")
+    _write_private(path, "\n".join(lines).rstrip() + "\n")
     return path

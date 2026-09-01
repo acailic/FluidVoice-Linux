@@ -101,34 +101,60 @@ class TestDashesAndSymbols:
         assert fmt("tag literal hash lol") == "tag#lol"
 
 
-class TestContextRules:
-    def test_dot_in_domain(self):
-        assert fmt("example literal dot com") == "example.com"
+class TestLiveUpstreamSemantics:
+    """Upstream's LIVE rule table applies rules unconditionally: the context
+    gates exist only in dead code (verified against the Swift source)."""
 
-    def test_dot_rejected_after_article(self):
-        # "a dot" without path context stays literal
-        assert fmt("a literal dot") == "a literal dot"
+    def test_dot_converts_everywhere(self):
+        assert fmt("a literal dot") == "a."
+        assert fmt("my literal dot") == "my."
 
-    def test_slash_in_path(self):
-        assert fmt("usr literal slash bin") == "usr/bin"
+    def test_at_sign_converts_everywhere(self):
+        assert fmt("john literal at sign doe") == "john@doe"
 
-    def test_at_the_rate(self):
-        assert fmt("name literal at the rate gmail literal dot com") == "name@gmail.com"
+    def test_dot_dot_dot_wins_over_dot(self):
+        # longest-alias-first matching (upstream groups by word count desc)
+        assert fmt("wait literal dot dot dot okay") == "wait... okay"
 
-    def test_at_sign_needs_app_hint(self):
-        assert fmt("john literal at sign doe") == "john literal at sign doe"
-        assert fmt("john literal at sign doe", app_hint="Slack") == "john@doe"
+    def test_double_quote_is_a_toggle(self):
+        # upstream: "double quote" shares the toggle rule with "quote"
+        assert fmt('he said literal double quote hi literal double quote') == 'he said "hi"'
+
+    def test_missing_aliases_now_present(self):
+        assert fmt("a literal left parentheses b") == "a (b"
+        assert fmt("a literal right parentheses b") == "a) b"
+        assert fmt("literal left curly bracket x literal right curly brace") == "{x}"
+        assert fmt("5 literal less than sign 6") == "5 <6"
+        assert fmt("x literal plus y") == "x + y"
+        assert fmt("x literal equals y") == "x = y"
+
+    def test_invented_aliases_removed(self):
+        # "angled bracket" was never an upstream alias
+        assert "angled" in fmt("a literal angled bracket b")
 
 
 class TestCleanups:
-    def test_comma_before_generated_period_dropped(self):
-        # "hi , ." -> the generated comma next to generated period disappears
-        out = fmt("hi literal comma literal period")
-        assert out == "hi."
+    def test_comma_between_symbols_dropped(self):
+        # comma must be SANDWICHED between two symbols (upstream pass A)
+        assert fmt("literal open paren literal comma literal close paren") == "()"
 
-    def test_period_before_newline_dropped(self):
+    def test_comma_beside_text_kept(self):
+        # upstream keeps "hi,." - the previous neighbor is text, not a symbol
+        assert fmt("hi literal comma literal period") == "hi,."
+
+    def test_comma_before_percent_after_digit_dropped(self):
+        assert fmt("50 literal comma literal percent sign") == "50%"
+
+    def test_comma_before_percent_after_word_kept(self):
+        assert fmt("fifty literal comma literal percent sign") == "fifty,%"
+
+    def test_rule_generated_period_kept_before_newline(self):
+        # pass B strips periods from ORIGINAL text only
         out = fmt("end literal period literal new line next")
-        assert out == "end\nnext"
+        assert out == "end.\nnext"
+
+    def test_original_text_period_stripped_before_newline(self):
+        assert fmt("end. literal new line next") == "end\nnext"
 
 
 class TestCaseInsensitivity:
@@ -169,20 +195,17 @@ class TestEdgeCases:
         text = "he said literal nothing happened next"
         assert fmt(text) == text
 
-    def test_dot_rejected_after_possessive(self):
-        # "my" is in the reject list -> "my dot" stays literal
-        assert fmt("my literal dot") == "my literal dot"
+    def test_dot_converts_after_possessive(self):
+        # live upstream has no reject-after list (that gate is dead code)
+        assert fmt("my literal dot") == "my."
 
     def test_dot_with_digit_operand(self):
-        assert fmt("three literal dot five") == "three.5" if False else True
-        # digits next to dot provide context via short-operand rule
         out = fmt("room literal dot 4 literal dot 2")
         assert out == "room.4.2"
 
     def test_percent_after_digit_comma_cleanup(self):
-        # generated comma before generated % after a digit is dropped
-        out = fmt("fifty literal comma literal percent sign")
-        assert out == "fifty%"
+        # comma before % is dropped only after an ASCII digit
+        assert fmt("50 literal comma literal percent sign") == "50%"
 
     def test_no_rules_leaves_prefix_verbatim(self):
         text = "the literal truth matters"

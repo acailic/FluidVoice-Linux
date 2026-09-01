@@ -1,29 +1,30 @@
-"""Whole-word filler removal (um, uh, ...) - ported from FluidVoice."""
+"""Whole-word filler removal (um, uh, ...) - ported from FluidVoice.
+
+Semantics mirror upstream ASRService.removeFillerWords: split on single
+spaces, trim Unicode punctuation from both ends of each token for the
+comparison, drop matching tokens entirely, rejoin with single spaces.
+"""
 from __future__ import annotations
 
-import re
+import unicodedata
 
 from ..config import DEFAULT_FILLERS
 
-_STRIP_PUNCT = "".join(sorted(set(re.escape(c) for c in ".,!?;:'\"()[]{}-—–…")))
+
+def _trim_punct(token: str) -> str:
+    start, end = 0, len(token)
+    while start < end and unicodedata.category(token[start]).startswith("P"):
+        start += 1
+    while end > start and unicodedata.category(token[end - 1]).startswith("P"):
+        end -= 1
+    return token[start:end]
 
 
 def remove_filler_words(text: str, fillers: list[str] | None = None) -> str:
     fillers = fillers if fillers is not None else DEFAULT_FILLERS
     filler_set = {f.lower() for f in fillers if f and f.strip()}
-    if not filler_set:
+    if not filler_set or not text:
         return text
-    parts = re.split(r"(\s+)", text)  # keep exact whitespace
-    out: list[str] = []
-    for part in parts:
-        if not part or part.isspace():
-            out.append(part)
-            continue
-        core = part.strip(_STRIP_PUNCT)
-        if core.lower() in filler_set:
-            continue  # drop the filler (its adjacent whitespace stays)
-        out.append(part)
-    # Dropping tokens can leave doubled whitespace; collapse horizontal runs.
-    result = "".join(out)
-    result = re.sub(r"[ \t]{2,}", " ", result)
-    return result.strip()
+    kept = [part for part in text.split(" ")
+            if _trim_punct(part).lower() not in filler_set]
+    return " ".join(kept)

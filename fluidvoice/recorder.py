@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import shutil
 import signal
+import threading
 import subprocess
 import time
 from pathlib import Path
@@ -71,6 +72,17 @@ class Recorder:
             stderr = (self.proc.stderr.read() or b"").decode(errors="replace").strip()
             self.proc = None
             raise RecorderError(f"{cmd} exited immediately: {stderr}")
+        # Drain stderr for the rest of the session: a chatty recorder would
+        # otherwise fill the 64 KB pipe buffer and silently block mid-recording.
+        proc = self.proc
+
+        def _drain(p: subprocess.Popen) -> None:
+            try:
+                p.stderr.read()
+            except Exception:
+                pass
+
+        threading.Thread(target=_drain, args=(proc,), daemon=True).start()
 
     def stop(self, timeout: float = 5.0) -> Path | None:
         """Stop recording, finalize the WAV, return its path (None if nothing recorded)."""

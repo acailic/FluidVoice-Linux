@@ -25,15 +25,19 @@ MODEL_CATALOG: dict[str, dict[str, str]] = {
 
 
 def model_downloaded(name: str) -> bool:
-    """Best-effort check of the faster-whisper download cache."""
+    """Best-effort check of the faster-whisper download cache (ignores
+    in-progress .incomplete blobs)."""
     repo = backends.FW_MODEL_REPOS.get(backends.ALIASES.get(name, name), "")
     if not repo:
         return False
     for root in (paths.models_dir() / "faster-whisper",
                  paths.cache_dir().parent / "huggingface" / "hub"):
         candidate = root / ("models--" + repo.replace("/", "--"))
-        if candidate.exists() and any(candidate.iterdir()):
-            return True
+        if not candidate.exists():
+            continue
+        for blob in candidate.rglob("*"):
+            if blob.is_file() and ".incomplete" not in blob.name:
+                return True
     return False
 
 
@@ -44,6 +48,7 @@ class WebUI:
         self.daemon = daemon
         self.cfg = cfg or load_config()
         self.warmup = {"running": False, "error": None, "model": None}
+        self._warmup_lock = threading.Lock()
         self._srv: ThreadingHTTPServer | None = None
         self.port = 0
 
@@ -98,30 +103,44 @@ class WebUI:
         name = backends.ALIASES.get(name.strip().lower(), name.strip().lower())
         if name not in backends.FW_MODEL_REPOS:
             return {"ok": False, "error": f"unknown model '{name}'"}
-        self.cfg["model"]["name"] = name
-        save_config(self.cfg)
-        if not self.warmup["running"]:
+        with self._warmup_lock:
+            if self.warmup["running"]:
+                return {"ok": False, "error": "a model download is already running"}
             self.warmup = {"running": True, "error": None, "model": name}
-            threading.Thread(target=self._warmup_model, args=(name,), daemon=True).start()
+        threading.Thread(target=self._warmup_model, args=(name,), daemon=True).start()
         return {"ok": True, "model": name}
 
     def _warmup_model(self, name: str) -> None:
+        previous = self.cfg["model"].get("name", "auto")
         try:
             cfg = dict(self.cfg)
             cfg["model"] = dict(self.cfg["model"], name=name)
             backend = backends.load_backend(cfg)
             backend.warmup()
+            # Persist the choice only after the model is verified usable.
+            self.cfg["model"]["name"] = name
+            save_config(self.cfg)
             if self.daemon is not None:
                 self.daemon.backend = backend  # hot-swap into the running daemon
             self.warmup = {"running": False, "error": None, "model": name}
         except Exception as e:  # noqa: BLE001 - surfaced in the UI
+            self.cfg["model"]["name"] = previous  # roll back, keep the daemon usable
             self.warmup = {"running": False, "error": str(e)[:300], "model": name}
 
     def api_test_ai(self, body: dict) -> dict:
+        from urllib.parse import urlparse
         cfg = dict(self.cfg)
-        cfg["ai"] = dict(self.cfg["ai"], **{k: v for k, v in body.items()
-                                            if k in ("enabled", "base_url", "model")})
-        cfg["ai"]["enabled"] = True
+        ai = dict(self.cfg["ai"], **{k: v for k, v in body.items()
+                                     if k in ("enabled", "base_url", "model")})
+        ai["enabled"] = True
+        # Never attach the stored/env API key to a host the user has not saved:
+        # this endpoint must not become a way to exfiltrate secrets elsewhere.
+        tested = (ai.get("base_url") or "").rstrip("/")
+        saved = (self.cfg["ai"].get("base_url") or "").rstrip("/")
+        if urlparse(tested).hostname != urlparse(saved).hostname:
+            ai["api_key"] = ""
+            ai["api_key_env"] = ""
+        cfg["ai"] = ai
         client = AIClient(cfg)
         if not client.configured:
             return {"ok": False, "error": "set base_url and model first"}
@@ -137,12 +156,86 @@ class WebUI:
         safe.setdefault("ai", {})["api_key"] = bool(key)  # never leak the value
         return safe
 
+    # Per-key coercion/validation so a garbled or hostile POST can't break the
+    # dictation loop (e.g. max_seconds="abc" crashing float()).
+    _VALIDATORS: dict[tuple[str, str], Any] = {
+        ("general", "language"): ("str", 32),
+        ("hotkey", "key"): ("str", 64),
+        ("hotkey", "cancel_key"): ("str", 64),
+        ("recording", "device"): ("str", 256),
+        ("recording", "max_seconds"): ("float", (1, 86400)),
+        ("model", "whispercpp_model"): ("str", 4096),
+        ("processing", "punctuation_prefix"): ("str", 32),
+        ("ai", "base_url"): ("str", 2048),
+        ("ai", "model"): ("str", 256),
+        ("ai", "api_key_env"): ("str", 128),
+        ("ai", "temperature"): ("float", (0.0, 2.0)),
+        ("ai", "timeout_seconds"): ("float", (1, 3600)),
+        ("insertion", "type_delay_ms"): ("int", (0, 1000)),
+        ("insertion", "paste_threshold_chars"): ("int", (1, 1_000_000)),
+        ("sounds", "volume"): ("float", (0.0, 1.0)),
+        ("history", "audio_budget_gb"): ("float", (0.0, 1024.0)),
+        ("server", "port"): ("int", (1024, 65535)),
+    }
+    _ENUMS = {
+        ("hotkey", "mode"): {"toggle", "hold"},
+        ("model", "backend"): {"auto", "faster-whisper", "whisper-torch", "whisper.cpp"},
+        ("model", "device"): {"auto", "cuda", "cpu"},
+        ("model", "compute"): {"auto", "float16", "int8"},
+        ("insertion", "mode"): {"auto", "typed", "paste"},
+        ("recording", "command"): {"auto", "pw-record", "parecord"},
+    }
+    _BOOLS = {("processing", "remove_filler_words"), ("processing", "punctuation_enabled"),
+              ("ai", "enabled"), ("sounds", "enabled"), ("notifications", "enabled"),
+              ("history", "save"), ("history", "save_audio"), ("server", "enabled"),
+              ("recording", "skip_silent")}
+
+    def _coerce(self, section: str, key: str, value: Any) -> tuple[bool, Any]:
+        if (section, key) in self._BOOLS:
+            return (isinstance(value, bool), value)
+        if (section, key) in self._ENUMS:
+            return (isinstance(value, str) and value in self._ENUMS[(section, key)], value)
+        rule = self._VALIDATORS.get((section, key))
+        if rule:
+            kind, bound = rule
+            if kind == "str":
+                ok = isinstance(value, str) and 0 < len(value) <= bound \
+                    and not value.startswith("-")
+                return (ok, value)
+            try:
+                num = float(value) if kind == "float" else int(value)
+                if isinstance(value, bool) or not (bound[0] <= num <= bound[1]):
+                    return (False, value)
+                return (True, num)
+            except (TypeError, ValueError):
+                return (False, value)
+        # unvalidated pass-through keys the UI owns (lists, dictionaries)
+        if (section, key) in (("processing", "filler_words"),
+                              ("processing", "dictionary"), ("hotkey", "modifiers")):
+            if not isinstance(value, list):
+                return (False, value)
+            if key == "modifiers" and any(m not in ("ctrl", "alt", "shift", "super")
+                                          for m in value):
+                return (False, value)
+            if key == "filler_words" and any(not isinstance(w, str) or len(w) > 64
+                                             or not w.strip() for w in value):
+                return (False, value)
+            if key == "dictionary":
+                for entry in value:
+                    if (not isinstance(entry, dict)
+                            or not isinstance(entry.get("triggers", []), list)
+                            or not isinstance(entry.get("replacement", ""), str)
+                            or len(entry.get("replacement", "")) > 512):
+                        return (False, value)
+            return (True, value)
+        return (False, value)  # unknown key -> reject
+
     def api_config_post(self, body: dict) -> dict:
-        """Whitelisted merge; ignores anything the UI doesn't own."""
+        """Whitelisted, validated merge; rejects unknown keys and bad types."""
         allowed = {
             "general": {"language"},
             "hotkey": {"key", "modifiers", "mode", "cancel_key"},
-            "recording": {"device", "max_seconds", "skip_silent"},
+            "recording": {"command", "device", "max_seconds", "skip_silent"},
             "model": {"backend", "name", "device", "compute", "whispercpp_model"},
             "processing": {"remove_filler_words", "filler_words",
                            "punctuation_enabled", "punctuation_prefix", "dictionary"},
@@ -154,24 +247,68 @@ class WebUI:
             "history": {"save", "save_audio", "audio_budget_gb"},
             "server": {"enabled", "port"},
         }
+        # model.name / ai.max_retries validated separately (model aliasing / small int)
         changed: list[str] = []
+        rejected: list[str] = []
         for section, keys in allowed.items():
             for key in keys:
                 if section in body and key in body[section]:
-                    new = body[section][key]
-                    if self.cfg.get(section, {}).get(key) != new:
+                    value = body[section][key]
+                    if (section, key) == ("model", "name"):
+                        value = backends.ALIASES.get(str(value).strip().lower(),
+                                                     str(value).strip().lower())
+                        ok = value in backends.FW_MODEL_REPOS or value == "auto"
+                    elif (section, key) == ("ai", "max_retries"):
+                        try:
+                            ok = isinstance(value, (int, float)) and not isinstance(value, bool) \
+                                and 0 <= int(value) <= 10
+                            value = int(value)
+                        except (TypeError, ValueError):
+                            ok = False
+                    else:
+                        ok, value = self._coerce(section, key, value)
+                    if not ok:
+                        rejected.append(f"{section}.{key}")
+                        continue
+                    if self.cfg.get(section, {}).get(key) != value:
                         changed.append(f"{section}.{key}")
-                    self.cfg.setdefault(section, {})[key] = new
+                    self.cfg.setdefault(section, {})[key] = value
         save_config(self.cfg)
-        return {"ok": True, "changed": changed,
+        return {"ok": not rejected, "changed": changed, "rejected": rejected,
                 "note": "some changes apply after the daemon restarts"}
 
 
 class _Handler(BaseHTTPRequestHandler):
     webui_ref: WebUI | None = None
+    MAX_BODY = 64 * 1024
 
     def log_message(self, *args) -> None:  # quiet
         pass
+
+    # -- request guards (CSRF / DNS-rebinding / abuse) --------------------------
+
+    def _host_ok(self) -> bool:
+        """Only our own origin may talk to us: blocks DNS rebinding (reading
+        GETs from a rebound domain) and cross-site form posts."""
+        host = (self.headers.get("Host") or "").strip().lower()
+        port = self.webui_ref.port if self.webui_ref else ""
+        allowed = {"127.0.0.1", "localhost",
+                   f"127.0.0.1:{port}", f"localhost:{port}",
+                   f"[::1]:{port}", "::1"}
+        return host in allowed
+
+    def _origin_ok(self) -> bool:
+        """Same-origin browser requests carry Origin == our own URL; curl
+        carries none. Anything else (a website's fetch/form) is rejected."""
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        from urllib.parse import urlparse
+        parsed = urlparse(origin)
+        return parsed.scheme == "http" and parsed.hostname in ("127.0.0.1", "localhost")
+
+    def _forbidden(self, why: str) -> None:
+        self._json({"error": why}, code=403)
 
     # -- plumbing --------------------------------------------------------------
 
@@ -187,6 +324,8 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         if not length:
             return {}
+        if length > self.MAX_BODY:
+            return {}
         try:
             return json.loads(self.rfile.read(length).decode())
         except json.JSONDecodeError:
@@ -197,6 +336,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         w = self.webui_ref
         assert w is not None
+        if not self._host_ok():
+            return self._forbidden("bad host")
         if self.path in ("/", "/index.html"):
             data = PAGE.encode()
             self.send_response(200)
@@ -218,6 +359,13 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         w = self.webui_ref
         assert w is not None
+        if not self._host_ok() or not self._origin_ok():
+            return self._forbidden("cross-site requests are not allowed")
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            return self._forbidden("application/json required")
+        if (int(self.headers.get("Content-Length") or 0)) > self.MAX_BODY:
+            return self._json({"error": "body too large"}, code=413)
         body = self._body()
         if self.path == "/api/config":
             self._json(w.api_config_post(body))
@@ -330,6 +478,7 @@ border-radius:8px;padding:10px 16px;display:none}
 </div>
 <script>
 const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const api=(p,opts)=>fetch(p,opts).then(r=>r.json());
 const toast=m=>{const t=$('toast');t.textContent=m;t.style.display='block';
  setTimeout(()=>t.style.display='none',2500)};
@@ -344,7 +493,7 @@ async function refresh(){
  if(s.warmup.running){$('warmupMsg').textContent=
    'downloading/loading '+s.warmup.model+' ... (see daemon log)';}
  else if(s.warmup.error){$('warmupMsg').innerHTML=
-   '<span class="err">warmup failed: '+s.warmup.error+'</span>';}
+   '<span class="err">warmup failed: '+esc(s.warmup.error)+'</span>';}
  const ms=await api('/api/models');
  $('models').innerHTML=ms.map(m=>`
   <div class="model ${m.active?'active':''}">
@@ -370,7 +519,7 @@ async function load(){
  $('sounds').checked=c.sounds.enabled;
  const h=await api('/api/history');
  $('history').innerHTML=h.length?h.map(e=>
-  `<div class="hist"><div class="t">${new Date((e.ts||0)*1000).toLocaleString()}${e.ai?' · AI':''}${e.app?' · '+e.app:''}</div><div>${(e.text||'').replace(/</g,'&lt;')}</div></div>`).join('')
+  `<div class="hist"><div class="t">${new Date((e.ts||0)*1000).toLocaleString()}${e.ai?' · AI':''}${e.app?' · '+esc(e.app):''}</div><div>${esc(e.text||'')}</div></div>`).join('')
   :'no transcriptions yet';
 }
 $('save').onclick=async()=>{

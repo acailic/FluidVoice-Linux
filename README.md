@@ -70,7 +70,11 @@ daemon) that mirrors the macOS app's settings window:
 - **History** — your recent transcriptions.
 
 Everything it saves goes to the same `config.toml` (with a strict whitelist;
-API keys are never exposed through the UI — use the env var).
+API keys are never exposed through the UI — use the env var). The page is
+hardened against cross-site requests (Host/Origin checks, JSON-only POSTs,
+64 KB body cap) and the stored key is only ever attached to the endpoint host
+you saved — a website can't use it as an exfiltration relay. The config file
+is written with 0600 permissions.
 
 ### Enable AI polish (optional)
 
@@ -115,8 +119,8 @@ dictation tools (Handy, Vocalinux, nerd-dictation, …) and
   (not implemented yet — see roadmap).
 - Python 3.10+ (tested 3.12), `pipewire` (`pw-record`), `xdotool`, `xclip`,
   `libnotify-bin`, `pulseaudio-utils` (sounds).
-- A whisper model is downloaded on first use (~75 MB tiny … 1.5 GB large-v3;
-  default `small` ≈ 460 MB, or `base` on CPU).
+- A whisper model is downloaded on first use (~75 MB tiny … ~3.1 GB large-v3;
+  default `small` ≈ 484 MB, or `base` on CPU).
 - GPU is optional: faster-whisper uses CUDA automatically when cuBLAS 12 +
   cuDNN 9 are resolvable (the installer reuses the NVIDIA pip packages that
   ship with a CUDA torch install); otherwise it falls back to CPU int8.

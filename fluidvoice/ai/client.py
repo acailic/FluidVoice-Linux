@@ -1,10 +1,17 @@
 """Minimal OpenAI-compatible chat client for the AI polish step.
 
-- Endpoint: <base_url>/chat/completions (path appended only when the base URL
-  does not already end with /chat/completions, /api/chat or /api/generate,
-  mirroring FluidVoice's LLMClient).
-- Dictation params: stream=false, temperature from config (default 0.2).
-- Responses pass through the same <think>-tag stripping as upstream.
+Mirrors FluidVoice's LLMClient behavior:
+- Endpoint: <base_url>/chat/completions (appended unless the base URL already
+  ends with /chat/completions, /api/chat or /api/generate).
+- OpenAI Responses API (/responses) is used when the base URL contains
+  "/responses", or the host is api.openai.com with a gpt-5*/o1/o3/o4 model.
+- temperature is omitted for models that reject it (reasoning models,
+  claude-opus-4-7/4-8, claude-sonnet-5, claude-fable, claude-mythos).
+- Reasoning extras: reasoning_effort for gpt-5*/o1/o3/o4/gpt-oss, and
+  enable_thinking for nemotron/nemo and deepseek-reasoner style models.
+- Responses pass through the same <think>-tag stripping as upstream,
+  including the opening-tag guard (a stray close tag after a real pair must
+  not eat the answer).
 """
 from __future__ import annotations
 
@@ -14,6 +21,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 from .prompts import default_dictation_prompt, render_dictation_user_message
 
@@ -21,14 +29,51 @@ THINK_RE = re.compile(r"<think(?:ing)?>([\s\S]*?)</think(?:ing)?>")
 ORPHAN_CLOSE_RE = re.compile(r"^([\s\S]*?)</think(?:ing)?>")
 STRAY_TAG_RE = re.compile(r"</?think(?:ing)?>")
 
+# Models that reject the temperature parameter (upstream isTemperatureUnsupported)
+_CLAUDE_TEMP_UNSUPPORTED = {"claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-5",
+                            "claude-fable", "claude-mythos"}
+
+
+def _normalize_model_name(model: str) -> str:
+    # strip provider prefixes like "openai/" or "groq/" (upstream does the same)
+    return model.rsplit("/", 1)[-1].strip().lower().replace(".", "-")
+
+
+def is_reasoning_model(model: str) -> bool:
+    name = _normalize_model_name(model)
+    return (name.startswith(("gpt-5", "o1", "o3", "o4")) or "gpt-oss" in name
+            or ("deepseek" in name and "reasoner" in name))
+
+
+def is_temperature_unsupported(model: str) -> bool:
+    name = _normalize_model_name(model)
+    return is_reasoning_model(model) or name in _CLAUDE_TEMP_UNSUPPORTED
+
+
+def _reasoning_extras(model: str) -> dict:
+    """Upstream getReasoningConfig + ThinkingParserFactory extra parameters."""
+    name = _normalize_model_name(model)
+    extras: dict = {}
+    if "nemotron" in name or "nemo" in name:
+        extras["enable_thinking"] = True
+    if "deepseek" in name and ("r1" in name or "reasoner" in name):
+        extras["enable_thinking"] = True
+    if name.startswith("gpt-5") or "gpt-oss" in name:
+        extras["reasoning_effort"] = "low"
+    elif name.startswith(("o1", "o3", "o4")):
+        extras["reasoning_effort"] = "medium"
+    return extras
+
 
 def strip_thinking(text: str) -> str:
-    """Port of FluidVoice's StripThinkingTags (incl. Nemotron-style orphan close)."""
+    """Port of FluidVoice's StripThinkingTags (incl. the opening-tag guard:
+    the orphan-close pattern only applies when no opening tag was present)."""
     if not text:
         return text
+    has_opening = ("<think>" in text or "<thinking>" in text)
     text = THINK_RE.sub("", text)
-    if "</think>" in text or "</thinking>" in text:
-        # thinking emitted without an opening tag: keep only what follows the close
+    if not has_opening and ("</think>" in text or "</thinking>" in text):
+        # Nemotron-style: output begins with thinking and a bare close tag
         m = ORPHAN_CLOSE_RE.match(text)
         if m:
             text = text[m.end():]
@@ -42,10 +87,18 @@ class AIError(RuntimeError):
 
 def _endpoint(base_url: str) -> str:
     base = base_url.rstrip("/")
-    for suffix in ("/chat/completions", "/api/chat", "/api/generate"):
+    for suffix in ("/chat/completions", "/api/chat", "/api/generate", "/responses"):
         if base.endswith(suffix):
             return base
     return base + "/chat/completions"
+
+
+def _use_responses_api(base_url: str, model: str) -> bool:
+    base = base_url.rstrip("/")
+    if base.endswith("/responses"):
+        return True
+    host = urlparse(base).hostname or ""
+    return host == "api.openai.com" and is_reasoning_model(model)
 
 
 class AIClient:
@@ -54,7 +107,7 @@ class AIClient:
         self.base_url = ai["base_url"].rstrip("/")
         self.model = ai.get("model", "")
         self.temperature = float(ai.get("temperature", 0.2))
-        self.timeout = float(ai.get("timeout_seconds", 60))
+        self.timeout = float(ai.get("timeout_seconds", 120))
         self.retries = int(ai.get("max_retries", 3))
         self.api_key = ai.get("api_key", "") or os.environ.get(ai.get("api_key_env", ""), "")
         self.system_prompt = default_dictation_prompt()
@@ -70,17 +123,48 @@ class AIClient:
         prompt = (system_prompt or self.system_prompt).strip()
         user_message = render_dictation_user_message(prompt, transcript)
         content = self.chat(user_message)
+        if not content.strip():
+            # upstream raises AIProcessingError.emptyResponse; the daemon
+            # catches it and falls back to the raw transcript
+            raise AIError("empty response from model")
         cleaned = strip_thinking(content)
+        # Divergence (intentional): upstream falls back to the raw content when
+        # cleaning empties it; we prefer the transcript over typed <think> junk.
         return cleaned or transcript
 
+    # -- request building ------------------------------------------------------
+
+    def _build_body(self, user_message: str, responses_api: bool) -> bytes:
+        extras = _reasoning_extras(self.model)
+        if responses_api:
+            body: dict = {"model": self.model, "input": user_message, "store": False}
+            if extras.get("reasoning_effort"):
+                body["reasoning"] = {"effort": extras["reasoning_effort"]}
+            extras.pop("reasoning_effort", None)
+            body.update(extras)
+        else:
+            body = {"model": self.model,
+                    "messages": [{"role": "user", "content": user_message}],
+                    "stream": False}
+            if not is_temperature_unsupported(self.model):
+                body["temperature"] = self.temperature
+            body.update(extras)
+        return json.dumps(body).encode()
+
+    def _parse_response(self, data: dict) -> str:
+        if "choices" in data:  # chat/completions
+            return data["choices"][0]["message"]["content"]
+        # Responses API: collect text parts from the output items
+        parts: list[str] = []
+        for item in data.get("output", []) or []:
+            for content in item.get("content", []) or []:
+                if isinstance(content, dict) and content.get("text"):
+                    parts.append(content["text"])
+        return "".join(parts)
+
     def chat(self, user_message: str) -> str:
-        body = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": user_message}],
-            "temperature": self.temperature,
-            "stream": False,
-        }
-        payload = json.dumps(body).encode()
+        responses_api = _use_responses_api(self.base_url, self.model)
+        payload = self._build_body(user_message, responses_api)
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -91,7 +175,7 @@ class AIClient:
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     data = json.loads(resp.read().decode())
-                return data["choices"][0]["message"]["content"]
+                return self._parse_response(data)
             except urllib.error.HTTPError as e:
                 detail = ""
                 try:
@@ -101,6 +185,7 @@ class AIClient:
                 last_err = AIError(f"HTTP {e.code}: {detail}")
                 if e.code in (400, 401, 403, 404, 422):
                     raise last_err  # config errors won't fix themselves
+                # Divergence (intentional): 429/5xx are retried, unlike upstream.
             except Exception as e:  # noqa: BLE001 - transport errors retry
                 last_err = AIError(str(e))
             if attempt < self.retries:

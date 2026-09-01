@@ -159,6 +159,7 @@ class Daemon:
 
     def run(self) -> None:
         log(f"FluidVoiceLinux v{__version__} starting")
+        self._sweep_stale_tmp()
         try:
             self.backend = self._backend_factory(self.cfg)
         except Exception as e:
@@ -212,6 +213,19 @@ class Daemon:
             paths.socket_path().unlink(missing_ok=True)
         if self.webui:
             self.webui.stop()
+
+    @staticmethod
+    def _sweep_stale_tmp() -> None:
+        """Delete fluidvoice temp wavs abandoned by hard crashes (older than 1 day)."""
+        import glob
+        import time as _time
+        cutoff = _time.time() - 86400
+        for f in glob.glob("/tmp/fluidvoice-*.wav"):
+            try:
+                if os.path.getmtime(f) < cutoff:
+                    os.unlink(f)
+            except OSError:
+                pass
 
     def _start_hotkey(self) -> None:
         from .hotkey import HotkeyError, HotkeyListener
@@ -285,21 +299,28 @@ class Daemon:
         self._watchdog.start()
 
     def _auto_stop(self) -> None:
-        if self.recording:
+        # Re-check under the lock: cancel()/shutdown() may have finished in
+        # between the timer firing and now - never start anything new here.
+        with self._lock:
+            if not self.recording:
+                return
             log("max duration reached, stopping")
-            self.toggle()
+            self._stop_recording_locked()
 
     def _stop_recording_locked(self) -> None:
         if self._watchdog:
             self._watchdog.cancel()
             self._watchdog = None
-        wav = self.recorder.stop()
-        self.recording = False
+        # Stop cue fires at capture stop (upstream behavior), before waiting
+        # for the recorder process to flush and exit.
         ui.play_sound("stop", self.cfg["sounds"]["volume"],
                       self.use_sounds and self.cfg["sounds"]["enabled"])
+        wav = self.recorder.stop()
+        self.recording = False
         if wav is None or not Path(wav).exists() or Path(wav).stat().st_size < 200:
             log("no audio captured")
-            Path(wav or "").unlink(missing_ok=True)
+            if wav:
+                Path(wav).unlink(missing_ok=True)
             return
         self._process_thread = threading.Thread(
             target=self._process, args=(Path(wav), self._app_hint), daemon=True)
