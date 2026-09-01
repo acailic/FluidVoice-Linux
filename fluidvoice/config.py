@@ -19,6 +19,7 @@ DEFAULT_FILLERS = [
 DEFAULTS: dict[str, Any] = {
     "general": {
         "language": "auto",  # whisper language code or "auto"
+        "copy_to_clipboard": False,  # upstream copyTranscriptionToClipboard
     },
     "hotkey": {
         # X11 keysym name. Modifier-only keys (Right_Control, Right_Alt,
@@ -33,6 +34,7 @@ DEFAULTS: dict[str, Any] = {
         "device": "",  # optional PipeWire target / PulseAudio device
         "max_seconds": 300,
         "skip_silent": False,  # skip obviously-silent recordings <= 4s
+        "first_pcm_timeout": 2.0,  # fail fast if the mic sends no audio (0 = off)
         "sample_rate": 16000,
     },
     "model": {
@@ -112,6 +114,8 @@ TEMPLATE = """\
 [general]
 # Whisper language code ("auto" detects, or "en", "de", ...)
 language = "auto"
+# Also copy every transcription to the clipboard
+copy_to_clipboard = false
 
 [hotkey]
 # X11 keysym name of the dictation hotkey. Examples:
@@ -135,6 +139,8 @@ device = ""
 max_seconds = 300
 # Skip recordings <= 4s that are pure silence
 skip_silent = false
+# Stop early when the microphone sends no audio at all (muted/wrong device)
+first_pcm_timeout = 2.0
 
 [model]
 # auto | faster-whisper | whisper-torch | whisper.cpp
@@ -229,9 +235,10 @@ def write_template(path: Path | None = None) -> Path:
 # ---------------------------------------------------------------------------
 
 _SAVE_WHITELIST: dict[str, list[str]] = {
-    "general": ["language"],
+    "general": ["language", "copy_to_clipboard"],
     "hotkey": ["key", "modifiers", "mode", "cancel_key"],
-    "recording": ["command", "device", "max_seconds", "skip_silent"],
+    "recording": ["command", "device", "max_seconds", "skip_silent",
+                  "first_pcm_timeout"],
     "model": ["backend", "name", "device", "compute", "whispercpp_model"],
     "processing": ["remove_filler_words", "filler_words", "punctuation_enabled",
                    "punctuation_prefix", "dictionary"],

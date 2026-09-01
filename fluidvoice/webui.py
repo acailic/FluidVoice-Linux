@@ -159,7 +159,7 @@ class WebUI:
     # Per-key coercion/validation so a garbled or hostile POST can't break the
     # dictation loop (e.g. max_seconds="abc" crashing float()).
     _VALIDATORS: dict[tuple[str, str], Any] = {
-        ("general", "language"): ("str", 32),
+        ("recording", "first_pcm_timeout"): ("float", (0.0, 60.0)),
         ("hotkey", "key"): ("str", 64),
         ("hotkey", "cancel_key"): ("str", 64),
         ("recording", "device"): ("str", 256),
@@ -185,7 +185,8 @@ class WebUI:
         ("insertion", "mode"): {"auto", "typed", "paste"},
         ("recording", "command"): {"auto", "pw-record", "parecord"},
     }
-    _BOOLS = {("processing", "remove_filler_words"), ("processing", "punctuation_enabled"),
+    _BOOLS = {("general", "copy_to_clipboard"),
+              ("processing", "remove_filler_words"), ("processing", "punctuation_enabled"),
               ("ai", "enabled"), ("sounds", "enabled"), ("notifications", "enabled"),
               ("history", "save"), ("history", "save_audio"), ("server", "enabled"),
               ("recording", "skip_silent")}
@@ -195,6 +196,11 @@ class WebUI:
             return (isinstance(value, bool), value)
         if (section, key) in self._ENUMS:
             return (isinstance(value, str) and value in self._ENUMS[(section, key)], value)
+        if (section, key) == ("general", "language"):
+            import re as _re
+            ok = isinstance(value, str) and bool(
+                _re.fullmatch(r"auto|[a-z]{2,3}(-[A-Za-z0-9]{2,8})?", value.strip()))
+            return (ok, value.strip() if ok else value)
         rule = self._VALIDATORS.get((section, key))
         if rule:
             kind, bound = rule
@@ -233,9 +239,10 @@ class WebUI:
     def api_config_post(self, body: dict) -> dict:
         """Whitelisted, validated merge; rejects unknown keys and bad types."""
         allowed = {
-            "general": {"language"},
+            "general": {"language", "copy_to_clipboard"},
             "hotkey": {"key", "modifiers", "mode", "cancel_key"},
-            "recording": {"command", "device", "max_seconds", "skip_silent"},
+            "recording": {"command", "device", "max_seconds", "skip_silent",
+                          "first_pcm_timeout"},
             "model": {"backend", "name", "device", "compute", "whispercpp_model"},
             "processing": {"remove_filler_words", "filler_words",
                            "punctuation_enabled", "punctuation_prefix", "dictionary"},
@@ -462,6 +469,7 @@ border-radius:8px;padding:10px 16px;display:none}
  <div class="row" style="margin-top:10px">
   <label style="margin:0 8px 0 0"><input type="checkbox" id="fillers"> remove filler words</label>
   <label style="margin:0 8px 0 0"><input type="checkbox" id="punct"> spoken punctuation</label>
+  <label style="margin:0 8px 0 0"><input type="checkbox" id="clip"> copy to clipboard</label>
   <label style="margin:0"><input type="checkbox" id="sounds"> sounds</label>
  </div>
  <div><label>Spoken-command prefix</label><input id="punctPrefix" placeholder="literal"></div>
@@ -516,14 +524,14 @@ async function load(){
  $('hkMode').value=c.hotkey.mode;$('lang').value=c.general.language;
  $('insMode').value=c.insertion.mode;$('fillers').checked=c.processing.remove_filler_words;
  $('punct').checked=c.processing.punctuation_enabled;$('punctPrefix').value=c.processing.punctuation_prefix;
- $('sounds').checked=c.sounds.enabled;
+ $('sounds').checked=c.sounds.enabled;$('clip').checked=!!c.general.copy_to_clipboard;
  const h=await api('/api/history');
  $('history').innerHTML=h.length?h.map(e=>
   `<div class="hist"><div class="t">${new Date((e.ts||0)*1000).toLocaleString()}${e.ai?' · AI':''}${e.app?' · '+esc(e.app):''}</div><div>${esc(e.text||'')}</div></div>`).join('')
   :'no transcriptions yet';
 }
 $('save').onclick=async()=>{
- const body={general:{language:$('lang').value.trim()||'auto'},
+ const body={general:{language:$('lang').value.trim()||'auto',copy_to_clipboard:$('clip').checked},
   hotkey:{key:$('hkKey').value.trim()||'Right_Control',mode:$('hkMode').value},
   ai:{enabled:$('aiEnabled').checked,base_url:$('aiUrl').value.trim(),
       model:$('aiModel').value.trim(),api_key_env:$('aiKeyEnv').value.trim(),

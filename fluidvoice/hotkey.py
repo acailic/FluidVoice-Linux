@@ -172,7 +172,9 @@ class HotkeyListener:
                 pass
 
     def _hold_cycle(self, d: Display, keycode: int) -> None:
-        """Push-to-talk: grab the keyboard until the hotkey is released (or Escape)."""
+        """Push-to-talk: grab the keyboard until the hotkey is released.
+        Escape aborts the hold and CANCELS the recording (upstream semantics:
+        a cancelled recording is discarded, not transcribed)."""
         root = d.screen().root
         try:
             root.grab_keyboard(False, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime)
@@ -180,6 +182,7 @@ class HotkeyListener:
             self._safe(self.on_toggle)  # degrade to a single toggle
             return
         self._safe(self.on_toggle)  # start
+        aborted = False
         try:
             while not self._stop_flag.is_set():
                 try:
@@ -191,13 +194,17 @@ class HotkeyListener:
                 if etype == X.KeyRelease and detail == keycode:
                     break
                 if etype == X.KeyPress and detail == self._escape_keycode:
-                    break  # aborts the hold; recording still stops below
+                    aborted = True
+                    break
         finally:
             try:
                 d.ungrab_keyboard(X.CurrentTime)
             except Exception:
                 pass
-        self._safe(self.on_toggle)  # stop
+        if aborted:
+            self._safe(self.on_cancel)
+        else:
+            self._safe(self.on_toggle)  # stop and transcribe
 
     def _safe(self, cb) -> None:
         if cb is None:

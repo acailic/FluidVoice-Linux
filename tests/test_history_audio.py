@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import struct
+import json
 import wave
 from pathlib import Path
 
@@ -94,3 +95,41 @@ class TestHistory:
         history._enforce_budget(adir, budget_gb=1000 / 1024 ** 3)  # ~1KB budget
         assert not old.exists()
         assert new.exists()
+
+
+class TestHistoryCapAndTail:
+    def _many(self, path, n):
+        with open(path, "a", encoding="utf-8") as fh:
+            for i in range(n):
+                fh.write(json.dumps({"ts": i, "text": f"e{i}"}) + "\n")
+
+    def test_entry_cap_trims_old(self, tmp_path, monkeypatch):
+        from fluidvoice import history
+        f = tmp_path / "h.jsonl"
+        monkeypatch.setattr(history.paths, "history_file", lambda: f)
+        monkeypatch.setattr(history, "MAX_ENTRIES", 50)
+        monkeypatch.setattr(history, "_TAIL_WINDOW", 256)  # let the cap logic run
+        for i in range(80):
+            history.append({"ts": i, "text": f"e{i}"})
+        lines = f.read_text().splitlines()
+        assert len(lines) == 50
+        assert json.loads(lines[0])["text"] == "e30"  # newest kept
+
+    def test_tail_reads_only_end_of_big_file(self, tmp_path, monkeypatch):
+        from fluidvoice import history
+        f = tmp_path / "h.jsonl"
+        monkeypatch.setattr(history.paths, "history_file", lambda: f)
+        self._many(f, 2000)
+        entries = history.tail(3)
+        assert [e["text"] for e in entries] == ["e1997", "e1998", "e1999"]
+
+    def test_tail_partial_first_line_dropped(self, tmp_path, monkeypatch):
+        from fluidvoice import history
+        f = tmp_path / "h.jsonl"
+        f.write_text("half-line-without-newline\n" + "\n".join(
+            json.dumps({"ts": i, "text": f"t{i}"}) for i in range(10)) + "\n")
+        monkeypatch.setattr(history.paths, "history_file", lambda: f)
+        # force the window path by making the file "big" relative to window
+        monkeypatch.setattr(history, "_TAIL_WINDOW", 64)
+        entries = history.tail(10)
+        assert entries and all(e["text"].startswith("t") for e in entries)

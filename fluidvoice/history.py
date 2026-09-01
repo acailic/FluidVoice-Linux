@@ -1,4 +1,5 @@
-"""Transcription history (JSONL) with optional audio retention + budget."""
+"""Transcription history (JSONL) with entry cap, audio budget and a tail read
+that never loads the whole file."""
 from __future__ import annotations
 
 import json
@@ -7,6 +8,9 @@ import time
 from pathlib import Path
 
 from . import paths
+
+MAX_ENTRIES = 5000
+_TAIL_WINDOW = 128 * 1024  # bytes read from the end for tail()
 
 
 def append(entry: dict, audio_src: Path | None = None, keep_audio: bool = False,
@@ -25,6 +29,20 @@ def append(entry: dict, audio_src: Path | None = None, keep_audio: bool = False,
         _enforce_budget(adir, budget_gb)
     with open(hpath, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    _enforce_entry_cap(hpath)
+
+
+def _enforce_entry_cap(hpath: Path) -> None:
+    try:
+        if hpath.stat().st_size < _TAIL_WINDOW:
+            return
+        lines = hpath.read_text(encoding="utf-8").splitlines()
+        if len(lines) > MAX_ENTRIES:
+            tmp = hpath.with_suffix(".jsonl.tmp")
+            tmp.write_text("\n".join(lines[-MAX_ENTRIES:]) + "\n", encoding="utf-8")
+            tmp.replace(hpath)
+    except OSError:
+        pass
 
 
 def _enforce_budget(adir: Path, budget_gb: float) -> None:
@@ -39,10 +57,18 @@ def _enforce_budget(adir: Path, budget_gb: float) -> None:
 
 
 def tail(n: int = 20) -> list[dict]:
+    """Last `n` entries, reading only the final 128 KB of the file."""
     hpath = paths.history_file()
-    if not hpath.exists():
+    try:
+        size = hpath.stat().st_size
+    except OSError:
         return []
-    lines = hpath.read_text(encoding="utf-8").splitlines()
+    with open(hpath, "rb") as fh:
+        fh.seek(max(0, size - _TAIL_WINDOW))
+        chunk = fh.read()
+    lines = chunk.decode("utf-8", errors="replace").splitlines()
+    if size > _TAIL_WINDOW and lines:
+        lines = lines[1:]  # first line is likely partial
     out = []
     for line in lines[-n:]:
         try:

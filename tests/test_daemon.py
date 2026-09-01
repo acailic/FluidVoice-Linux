@@ -330,3 +330,125 @@ class TestStaleTmpSweep:
                             lambda pattern: [str(old), str(new)] if "fluidvoice" in pattern else [])
         dm.Daemon._sweep_stale_tmp()
         assert not old.exists() and new.exists()
+
+
+class TestFirstPcmWatchdog:
+    class SilentRecorder(StubRecorder):
+        """Simulates a live-but-mute source: file never grows."""
+        def start(self, path):
+            self.path = path
+            path.write_bytes(b"\0" * 100)  # header only
+            self.started += 1
+
+    def test_silent_mic_stops_early(self, cfg, quiet_ui):
+        cfg["recording"]["first_pcm_timeout"] = 0.2
+        rec = self.SilentRecorder()
+        d = dm.Daemon(cfg, recorder=rec,
+                      backend_factory=lambda c: StubBackend("x"),
+                      use_hotkey=False, use_sounds=False)
+        d.toggle()
+        deadline = time.monotonic() + 3
+        while d.recording and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not d.recording
+        assert rec.stopped >= 1
+        assert any("no audio" in (t + b).lower() for t, b in quiet_ui["notify"])
+
+    def test_healthy_mic_not_stopped(self, cfg, quiet_ui):
+        cfg["recording"]["first_pcm_timeout"] = 0.2
+        rec = StubRecorder()  # writes a real 1s wav -> PCM is flowing
+        d = dm.Daemon(cfg, recorder=rec,
+                      backend_factory=lambda c: StubBackend("x"),
+                      use_hotkey=False, use_sounds=False)
+        d.toggle()
+        time.sleep(0.6)
+        assert d.recording  # watchdog did not fire
+        d.cancel()
+
+    def test_disabled_by_zero(self, cfg, quiet_ui):
+        cfg["recording"]["first_pcm_timeout"] = 0
+        rec = self.SilentRecorder()
+        d = dm.Daemon(cfg, recorder=rec,
+                      backend_factory=lambda c: StubBackend("x"),
+                      use_hotkey=False, use_sounds=False)
+        d.toggle()
+        time.sleep(0.4)
+        assert d.recording
+        d.cancel()
+
+
+class TestPasteLast:
+    def test_pastes_last_result(self, cfg, quiet_ui, monkeypatch):
+        pasted = []
+        monkeypatch.setattr(dm.insertion, "insert_text",
+                            lambda text, c: pasted.append(text) or "typed")
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: StubBackend("hello again"),
+                      use_hotkey=False, use_sounds=False)
+        d.backend = StubBackend("hello again")
+        d.toggle(); d.toggle()
+        assert self._wait(d)
+        resp = d.handle_request({"action": "paste-last"})
+        assert resp["ok"] and pasted == ["hello again"]
+
+    def test_nothing_to_paste(self, cfg, quiet_ui):
+        from fluidvoice import history
+        monkeypatch_hist = []
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: StubBackend("x"),
+                      use_hotkey=False, use_sounds=False)
+        d.backend = StubBackend("x")
+        import fluidvoice.history as h
+        orig_tail = h.tail
+        h.tail = lambda n=20: []
+        try:
+            resp = d.handle_request({"action": "paste-last"})
+        finally:
+            h.tail = orig_tail
+        assert not resp["ok"] and "nothing" in resp["error"]
+
+    @staticmethod
+    def _wait(d, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if d._process_thread is None or not d._process_thread.is_alive():
+                return not d.busy
+            time.sleep(0.02)
+        return False
+
+
+class TestCopyToClipboard:
+    def test_copies_when_enabled(self, tmp_path, cfg, quiet_ui, monkeypatch):
+        cfg["general"]["copy_to_clipboard"] = True
+        copied = []
+        monkeypatch.setattr(dm.insertion, "copy_to_clipboard", lambda t: copied.append(t))
+        pipe = dm.DictationPipeline(cfg, StubBackend("copy me"),
+                                    inserter=lambda t, c: "typed")
+        wav = make_wav(tmp_path / "c.wav")
+        assert pipe.run(wav, None)["text"] == "copy me"
+        assert copied == ["copy me"]
+
+    def test_no_copy_by_default(self, tmp_path, cfg, quiet_ui, monkeypatch):
+        copied = []
+        monkeypatch.setattr(dm.insertion, "copy_to_clipboard", lambda t: copied.append(t))
+        pipe = dm.DictationPipeline(cfg, StubBackend("do not copy"),
+                                    inserter=lambda t, c: "typed")
+        wav = make_wav(tmp_path / "n.wav")
+        pipe.run(wav, None)
+        assert copied == []
+
+
+class TestShortAudioPadding:
+    def test_half_second_padded(self, tmp_path, cfg, quiet_ui):
+        from fluidvoice.audio_utils import duration_seconds
+        wav = make_wav(tmp_path / "short.wav", seconds=0.5)
+        seen = {}
+
+        class CapBackend(StubBackend):
+            def transcribe(self, w, language=None):
+                seen["duration"] = duration_seconds(str(w))
+                return {"text": "ok"}
+
+        pipe = dm.DictationPipeline(cfg, CapBackend(), inserter=lambda t, c: "typed")
+        pipe.run(wav, None)
+        assert seen["duration"] >= 1.0

@@ -74,12 +74,15 @@ class DictationPipeline:
 
     def _insert(self, text: str) -> str:
         try:
-            return self.inserter(text, self.cfg)
+            strategy = self.inserter(text, self.cfg)
         except insertion.InsertError as e:
             self.log(f"insertion failed: {e}")
             self.notify("FluidVoice", f"Could not type text: {e}\n(copied to clipboard instead)")
             insertion.clipboard_fallback(text)
-            return "clipboard-fallback"
+            strategy = "clipboard-fallback"
+        if self.cfg.get("general", {}).get("copy_to_clipboard"):
+            insertion.copy_to_clipboard(text)  # upstream copyTranscriptionToClipboard
+        return strategy
 
     def _write_history(self, entry: dict, wav: Path) -> None:
         if not self.cfg["history"].get("save"):
@@ -97,12 +100,14 @@ class DictationPipeline:
 
     def run(self, wav: Path, app_hint: str | None) -> dict | None:
         """Returns the result dict (raw/text/ai/strategy) or None if nothing was typed."""
+        from .audio_utils import pad_wav
         started = time.monotonic()
         try:
             duration = duration_seconds(str(wav))
             if self._should_skip(wav, duration):
                 self.log("silent recording skipped")
                 return None
+            pad_wav(wav)  # whisper.cpp requires >= 1s (16000 samples) of audio
             try:
                 result = self._transcribe(wav)
             except Exception as e:
@@ -257,6 +262,9 @@ class Daemon:
         if action == "cancel":
             self.cancel()
             return {"ok": True, "recording": False, "cancelled": True}
+        if action == "paste-last":
+            ok, detail = self.paste_last()
+            return {"ok": ok, "error": detail if not ok else None}
         if action == "status":
             webui_port = self.webui.port if getattr(self, "webui", None) else None
             return {"ok": True, "recording": self.recording, "busy": self.busy,
@@ -297,6 +305,32 @@ class Daemon:
         self._watchdog = threading.Timer(max_s, self._auto_stop)
         self._watchdog.daemon = True
         self._watchdog.start()
+        # Upstream firstPCMTimeout (2s): a live-but-silent source (muted mic,
+        # wrong device, Bluetooth glitch) should fail fast, not record air
+        # until max_seconds.
+        pcm_timeout = float(self.cfg["recording"].get("first_pcm_timeout", 2.0))
+        if pcm_timeout > 0:
+            t = threading.Timer(pcm_timeout, self._check_first_pcm, args=(Path(tmp),))
+            t.daemon = True
+            t.start()
+
+    def _check_first_pcm(self, wav: Path) -> None:
+        with self._lock:
+            if not self.recording or self.recorder.path != wav:
+                return
+            try:
+                got_pcm = wav.exists() and wav.stat().st_size > 2048
+            except OSError:
+                got_pcm = False
+            if not got_pcm:
+                if self._watchdog:
+                    self._watchdog.cancel()
+                    self._watchdog = None
+                self.recorder.cancel()
+                self.recording = False
+                msg = "microphone produced no audio (muted or wrong device?) - stopped"
+                log(msg)
+                ui.notify("FluidVoice", msg, enabled=self.cfg["notifications"]["enabled"])
 
     def _auto_stop(self) -> None:
         # Re-check under the lock: cancel()/shutdown() may have finished in
@@ -337,6 +371,25 @@ class Daemon:
             self.recording = False
         log("cancelled")
         ui.notify("FluidVoice", "Cancelled", enabled=self.cfg["notifications"]["enabled"])
+
+    def paste_last(self) -> tuple[bool, str | None]:
+        """Re-type the most recent transcription (upstream paste-last hotkey)."""
+        if self.busy or self.recording:
+            return False, "busy"
+        text = (self.last_result or {}).get("text") or ""
+        if not text:
+            from . import history as history_mod
+            entries = history_mod.tail(1)
+            text = entries[0].get("text", "") if entries else ""
+        if not text:
+            return False, "nothing to paste"
+        try:
+            insertion.insert_text(text, self.cfg)
+            log(f"pasted last transcription ({len(text)} chars)")
+            return True, None
+        except insertion.InsertError as e:
+            log(f"paste-last failed: {e}")
+            return False, str(e)
 
     # -- pipeline ------------------------------------------------------------
 

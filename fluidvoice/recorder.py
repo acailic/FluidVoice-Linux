@@ -84,7 +84,7 @@ class Recorder:
 
         threading.Thread(target=_drain, args=(proc,), daemon=True).start()
 
-    def stop(self, timeout: float = 5.0) -> Path | None:
+    def stop(self, timeout: float = 2.5) -> Path | None:
         """Stop recording, finalize the WAV, return its path (None if nothing recorded)."""
         proc, path = self.proc, self._path
         self.proc, self._path = None, None
@@ -97,7 +97,7 @@ class Recorder:
         except subprocess.TimeoutExpired:
             proc.terminate()
             try:
-                proc.wait(timeout=2)
+                proc.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
                 proc.kill()
         return path

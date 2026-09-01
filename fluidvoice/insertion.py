@@ -110,6 +110,11 @@ def insert_text(text: str, cfg: dict) -> str:
 
 def clipboard_fallback(text: str) -> None:
     """Last resort when neither typing nor pasting worked: leave text on the clipboard."""
+    copy_to_clipboard(text)
+
+
+def copy_to_clipboard(text: str) -> None:
+    """Put text on the clipboard without typing (upstream copyTranscriptionToClipboard)."""
     if not shutil.which("xclip"):
         return
     try:
