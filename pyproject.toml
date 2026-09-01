@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fluidvoice-linux"
+version = "0.1.0"
+description = "FluidVoice for Linux - local voice dictation with AI polish (community port of altic-dev/FluidVoice behavior)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "FluidVoiceLinux contributors" }]
+keywords = ["speech-to-text", "dictation", "whisper", "voice", "linux"]
+classifiers = [
+    "Environment :: X11 Applications",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "python-xlib>=0.33",
+    "faster-whisper>=1.0",
+]
+
+[project.optional-dependencies]
+torch = ["openai-whisper"]          # only if you want the torch/CUDA backend
+dev = ["pytest>=8"]
+
+[project.scripts]
+fluidvoice = "fluidvoice.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["fluidvoice*"]
+
+[tool.setuptools.package-data]
+"fluidvoice" = ["assets/sfx/*"]
+
+[tool.pytest.ini_options]
+markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
