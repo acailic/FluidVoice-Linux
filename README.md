@@ -30,11 +30,33 @@ hotkey ─▶ pw-record 16k mono ─▶ faster-whisper (CUDA/int8) ─▶ filler
                                                   (OpenAI-compatible / Ollama)
 ```
 
-## Quick start (X11: Pop!_OS/Ubuntu/Debian)
+## Installation
+
+### Option A — .deb package (the "Mac app" experience)
+
+One command, then FluidVoice appears in your app launcher, autostarts at
+login, and needs no terminal:
 
 ```bash
 git clone https://github.com/acailic/FluidVoice-Linux.git -b linux
-cd FluidVoice
+cd FluidVoice-Linux
+./packaging/build-deb.sh                          # builds dist/fluidvoice-linux_*.deb
+sudo apt install ./dist/fluidvoice-linux_*.deb    # installs to /opt + launcher + autostart
+```
+
+What you get after install (log out/in once):
+- **App launcher entry "FluidVoice"** (opens the settings UI) with its own icon
+- **Daemon autostarts at login** (XDG autostart; a systemd user unit is also
+  provided: `systemctl --user enable --now fluidvoice`)
+- `fluidvoice` available everywhere in PATH (`fluidvoice doctor`, `toggle`,
+  `settings`, `history`, ...)
+- Removes cleanly with `sudo apt remove fluidvoice-linux`
+
+### Option B — from source (development)
+
+```bash
+git clone https://github.com/acailic/FluidVoice-Linux.git -b linux
+cd FluidVoice-Linux
 ./scripts/install.sh          # apt deps + venv (reuses your CUDA torch if present)
 
 # run it (foreground; systemd unit in systemd/)

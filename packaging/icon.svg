@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- FluidVoice Linux icon: microphone + sound wave on dark rounded square -->
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#0f1420" stroke="#3ac8c6" stroke-width="4"/>
+  <rect x="50" y="22" width="28" height="50" rx="14" fill="#3ac8c6"/>
+  <rect x="38" y="40" width="52" height="42" rx="16" fill="none" stroke="#e6ebf5" stroke-width="6"/>
+  <rect x="58" y="86" width="12" height="14" fill="#e6ebf5"/>
+  <rect x="46" y="98" width="36" height="8" rx="4" fill="#e6ebf5"/>
+  <!-- sound waves -->
+  <path d="M22 52c-4 8-4 16 0 24" stroke="#3ac8c6" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.85"/>
+  <path d="M106 52c4 8 4 16 0 24" stroke="#3ac8c6" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.85"/>
+</svg>

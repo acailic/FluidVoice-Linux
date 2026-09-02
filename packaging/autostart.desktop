@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=FluidVoice Daemon
+Comment=Start FluidVoice dictation daemon at login
+Comment[hr]=Pokreni FluidVoice diktaturu pri prijavi
+Exec=/usr/bin/fluidvoice daemon
+Icon=fluidvoice-linux
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel

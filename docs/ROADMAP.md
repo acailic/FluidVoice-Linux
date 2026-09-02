@@ -57,7 +57,7 @@ sources. Everything below is a known, classified gap — see
       (`fluidvoice settings`, 127.0.0.1 only, CSRF/DNS-rebinding hardened).
 - [ ] Local HTTP API (upstream exposes an OpenAI-style server on 127.0.0.1
       with /v1/transcribe, /v1/history, dictionary routes).
-- [ ] Packaging: AUR, nix, flatpak-less deb, pipx.
+- [ ] Packaging: AUR, nix, pipx (deb is DONE - packaging/build-deb.sh: launcher entry, login autostart, icon, systemd unit, bundled venv).
 
 ## Non-goals
 - Bundling a closed-source "Fluid Intelligence" equivalent — use any local
