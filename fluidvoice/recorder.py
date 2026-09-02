@@ -40,6 +40,7 @@ class Recorder:
         self.sample_rate = sample_rate
         self.proc: subprocess.Popen | None = None
         self._path: Path | None = None
+        self._raw_path: Path | None = None
         self._started_at = 0.0
 
     @property
@@ -50,17 +51,21 @@ class Recorder:
         if self.proc is not None:
             raise RecorderError("recorder already running")
         cmd, argv = pick_command(self.command)
+        # Record headerless raw PCM: the file stays readable while growing
+        # (live preview) and gets a proper WAV header at stop.
+        raw_path = path.with_suffix(".raw")
         if cmd == "pw-record":
             args = [cmd, "--rate", str(self.sample_rate), "--channels", "1", "--format", "s16"]
             if self.device:
                 args += ["--target", self.device]
         else:
             args = [cmd, f"--rate={self.sample_rate}", "--channels=1", "--format=s16le",
-                    "--file-format=wav"]
+                    "--raw"]
             if self.device:
                 args += ["--device", self.device]
-        args += [str(path)]
+        args += [str(raw_path)]
         self._path = path
+        self._raw_path = raw_path
         self._started_at = time.monotonic()
         self.proc = subprocess.Popen(
             args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
@@ -84,13 +89,16 @@ class Recorder:
 
         threading.Thread(target=_drain, args=(proc,), daemon=True).start()
 
+    @property
+    def raw_path(self) -> Path | None:
+        return self._raw_path
+
     def stop(self, timeout: float = 2.5) -> Path | None:
-        """Stop recording, finalize the WAV, return its path (None if nothing recorded)."""
-        proc, path = self.proc, self._path
-        self.proc, self._path = None, None
+        """Stop recording, wrap the raw PCM into a WAV, return its path."""
+        proc, path, raw = self.proc, self._path, self._raw_path
+        self.proc, self._path, self._raw_path = None, None, None
         if proc is None:
             return path
-        # SIGINT lets pw-record/parecord flush + write the WAV header cleanly.
         proc.send_signal(signal.SIGINT)
         try:
             proc.wait(timeout=timeout)
@@ -100,12 +108,20 @@ class Recorder:
                 proc.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
                 proc.kill()
+        if raw is not None and raw.exists():
+            from .audio_utils import raw_to_wav_file
+            try:
+                raw_to_wav_file(raw, path, self.sample_rate)
+            finally:
+                raw.unlink(missing_ok=True)
         return path
 
     def cancel(self) -> None:
         path = self.stop()
         if path and path.exists():
             path.unlink(missing_ok=True)
+        if self._raw_path is not None:
+            self._raw_path.unlink(missing_ok=True)
 
     def elapsed(self) -> float:
         return time.monotonic() - self._started_at if self.proc else 0.0

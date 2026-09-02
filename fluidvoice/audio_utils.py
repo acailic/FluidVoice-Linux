@@ -46,6 +46,27 @@ def duration_seconds(path: str) -> float:
         return wf.getnframes() / float(wf.getframerate() or 16000)
 
 
+def raw_to_wav_bytes(raw: bytes, rate: int = 16000, channels: int = 1,
+                     width: int = 2) -> bytes:
+    """Wrap headerless s16le PCM in a WAV container (in memory)."""
+    import io
+    import wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(width)
+        wf.setframerate(rate)
+        wf.writeframes(raw)
+    return buf.getvalue()
+
+
+def raw_to_wav_file(raw_path, wav_path, rate: int = 16000) -> None:
+    with open(raw_path, "rb") as fh:
+        data = fh.read()
+    with open(wav_path, "wb") as fh:
+        fh.write(raw_to_wav_bytes(data, rate))
+
+
 def pad_wav(path, rate: int = 16000, frame_width: int = 2) -> None:
     """Zero-pad sub-1s audio to exactly `rate` samples (16000). Upstream does
     this unconditionally - whisper.cpp asserts on <1s inputs."""

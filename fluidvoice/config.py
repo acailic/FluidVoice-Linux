@@ -28,6 +28,7 @@ DEFAULTS: dict[str, Any] = {
         "modifiers": [],  # any of: ctrl, alt, shift, super
         "mode": "toggle",  # toggle | hold (hold needs a non-modifier key)
         "cancel_key": "",  # optional extra keysym that cancels recording
+        "rewrite_key": "",  # optional keysym for Rewrite mode (needs [ai])
     },
     "recording": {
         "command": "auto",  # auto | pw-record | parecord
@@ -36,6 +37,15 @@ DEFAULTS: dict[str, Any] = {
         "skip_silent": False,  # skip obviously-silent recordings <= 4s
         "first_pcm_timeout": 2.0,  # fail fast if the mic sends no audio (0 = off)
         "sample_rate": 16000,
+        # Spoken-send: a trailing phrase strips and presses Enter after typing
+        "spoken_send_enabled": False,
+        "spoken_send_phrase": "send it",
+        "spoken_send_key": "enter",  # enter | shift+enter | ctrl+enter
+        # Live transcription preview while recording
+        "preview_enabled": True,
+        "preview_mode": "notify",  # notify | overlay (X11 window)
+        "preview_interval": 1.2,   # seconds between partial passes
+        "preview_min_audio": 1.0,  # seconds before the first partial
     },
     "model": {
         "backend": "auto",  # auto | faster-whisper | whisper-torch | whisper.cpp
@@ -50,6 +60,10 @@ DEFAULTS: dict[str, Any] = {
         "punctuation_enabled": True,
         "punctuation_prefix": "literal",  # spoken prefix, e.g. "literal comma"
         "dictionary": [],  # [{ triggers = ["miro board"], replacement = "Miro board" }]
+        # GAAV: casual/search-field formatting of the final text
+        "gaav_enabled": False,
+        "gaav_lowercase_first": True,
+        "gaav_remove_trailing_period": True,
     },
     "ai": {
         # OpenAI-compatible chat endpoint (OpenAI, Groq, Ollama /v1, LM Studio, llama.cpp server...)
@@ -236,12 +250,15 @@ def write_template(path: Path | None = None) -> Path:
 
 _SAVE_WHITELIST: dict[str, list[str]] = {
     "general": ["language", "copy_to_clipboard"],
-    "hotkey": ["key", "modifiers", "mode", "cancel_key"],
+    "hotkey": ["key", "modifiers", "mode", "cancel_key", "rewrite_key"],
     "recording": ["command", "device", "max_seconds", "skip_silent",
-                  "first_pcm_timeout"],
+                  "first_pcm_timeout", "spoken_send_enabled", "spoken_send_phrase",
+                  "spoken_send_key", "preview_enabled", "preview_mode",
+                  "preview_interval", "preview_min_audio"],
     "model": ["backend", "name", "device", "compute", "whispercpp_model"],
     "processing": ["remove_filler_words", "filler_words", "punctuation_enabled",
-                   "punctuation_prefix", "dictionary"],
+                   "punctuation_prefix", "dictionary", "gaav_enabled",
+                   "gaav_lowercase_first", "gaav_remove_trailing_period"],
     "ai": ["enabled", "base_url", "model", "api_key", "api_key_env", "temperature",
            "timeout_seconds", "max_retries"],
     "insertion": ["mode", "type_delay_ms", "paste_threshold_chars"],

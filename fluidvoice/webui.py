@@ -160,6 +160,8 @@ class WebUI:
     # dictation loop (e.g. max_seconds="abc" crashing float()).
     _VALIDATORS: dict[tuple[str, str], Any] = {
         ("recording", "first_pcm_timeout"): ("float", (0.0, 60.0)),
+        ("recording", "preview_interval"): ("float", (0.3, 10.0)),
+        ("recording", "preview_min_audio"): ("float", (0.3, 10.0)),
         ("hotkey", "key"): ("str", 64),
         ("hotkey", "cancel_key"): ("str", 64),
         ("recording", "device"): ("str", 256),
@@ -177,7 +179,7 @@ class WebUI:
         ("history", "audio_budget_gb"): ("float", (0.0, 1024.0)),
         ("server", "port"): ("int", (1024, 65535)),
     }
-    _ENUMS = {
+    _ENUMS = {("recording", "preview_mode"): {"notify", "overlay"},
         ("hotkey", "mode"): {"toggle", "hold"},
         ("model", "backend"): {"auto", "faster-whisper", "whisper-torch", "whisper.cpp"},
         ("model", "device"): {"auto", "cuda", "cpu"},
@@ -185,7 +187,7 @@ class WebUI:
         ("insertion", "mode"): {"auto", "typed", "paste"},
         ("recording", "command"): {"auto", "pw-record", "parecord"},
     }
-    _BOOLS = {("general", "copy_to_clipboard"),
+    _BOOLS = {("general", "copy_to_clipboard"), ("recording", "preview_enabled"),
               ("processing", "remove_filler_words"), ("processing", "punctuation_enabled"),
               ("ai", "enabled"), ("sounds", "enabled"), ("notifications", "enabled"),
               ("history", "save"), ("history", "save_audio"), ("server", "enabled"),
@@ -242,7 +244,8 @@ class WebUI:
             "general": {"language", "copy_to_clipboard"},
             "hotkey": {"key", "modifiers", "mode", "cancel_key"},
             "recording": {"command", "device", "max_seconds", "skip_silent",
-                          "first_pcm_timeout"},
+                          "first_pcm_timeout", "preview_enabled", "preview_mode",
+                          "preview_interval", "preview_min_audio"},
             "model": {"backend", "name", "device", "compute", "whispercpp_model"},
             "processing": {"remove_filler_words", "filler_words",
                            "punctuation_enabled", "punctuation_prefix", "dictionary"},

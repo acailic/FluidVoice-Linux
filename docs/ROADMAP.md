@@ -5,23 +5,27 @@ sources. Everything below is a known, classified gap — see
 [BEHAVIOR-SPEC.md](BEHAVIOR-SPEC.md) for the upstream references.
 
 ## v0.2 — daily-driver polish
-- [ ] Live streaming preview (rolling faster-whisper on a sliding buffer) shown
-      in a small always-on-top overlay window (X11 override-redirect).
-- [ ] Rewrite/Write mode: X11 selection capture (Ctrl+C snapshot via xclip,
-      restore), `fluidvoice rewrite` + dedicated hotkey, edit-mode prompt with
-      selected-text context (already ported verbatim).
-- [ ] First-PCM timeout (2s) + capture-health watchdog — fail fast when the
-      mic is live-but-silent (wrong device, Bluetooth HFP).
+- [x] Live streaming preview — DONE: raw-PCM recording + rolling
+      faster-whisper passes + X11 overlay window (or replaceable
+      notifications); verified end-to-end with pixel-level screenshot proof.
+- [x] Rewrite/Write mode — DONE: `hotkey.rewrite_key` captures the selection
+      (clipboard snapshot + restore), dictates the instruction, runs it
+      through the verbatim edit prompts (temperature 0.7, context block,
+      follow-up history), types the result over the selection.
+- [x] First-PCM timeout (2s) — DONE: live-but-silent mics stop early with a
+      notification (probes the raw stream, not the finalized WAV).
 - [ ] Hold-mode key passthrough: stop swallowing the keyboard during
       push-to-talk; other keys interrupt the trigger instead (upstream
       clean-tap state machine).
-- [ ] Escape as default cancel key (cancel, not stop-and-transcribe).
-- [ ] Spoken-send: trailing phrase ("send it") auto-stop + Enter, with the
-      1.5s settle countdown + voice-activity cancel.
-- [ ] Paste-last-transcription hotkey.
+- [x] Escape cancels aborted hold recordings (not stop-and-transcribe).
+- [x] Spoken-send — DONE (final-transcript variant): trailing phrase strips
+      and presses enter/shift+enter/ctrl+enter after typing; "literal send
+      it" escape honored. Immediate-stop countdown needs streaming VAD.
+- [x] Paste-last-transcription — DONE: `fluidvoice paste-last` + socket action.
 - [ ] Per-app prompt sets and user-editable prompt profiles (upstream has
       per-slot gating; we have one global toggle).
-- [ ] Always-copy-to-clipboard option; sub-1s zero-padding for whisper.cpp.
+- [x] Always-copy-to-clipboard option; sub-1s zero-padding — DONE.
+- [x] GAAV mode (lowercase-first / strip trailing period) — DONE.
 
 ## v0.3 — Wayland parity
 - [ ] Insertion via ydotool/wtype + wlr virtual-keyboard protocol.

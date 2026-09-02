@@ -113,6 +113,13 @@ def clipboard_fallback(text: str) -> None:
     copy_to_clipboard(text)
 
 
+def press_key(spec: str) -> None:
+    """Press a key combo (e.g. 'enter', 'shift+enter') in the focused window."""
+    proc = _run(["xdotool", "key", "--clearmodifiers", spec], timeout=5)
+    if proc.returncode != 0:
+        raise InsertError(f"key press failed: {proc.stderr.decode()[:200]}")
+
+
 def copy_to_clipboard(text: str) -> None:
     """Put text on the clipboard without typing (upstream copyTranscriptionToClipboard)."""
     if not shutil.which("xclip"):

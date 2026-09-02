@@ -31,6 +31,17 @@ with file:line evidence) · [ROADMAP.md](ROADMAP.md) (the forward plan) ·
 - Stop/start SFX (the original GPLv3 upstream sounds), desktop notifications,
   history JSONL (5000-entry cap, efficient tail, optional audio retention
   with GB budget), `paste-last`, optional copy-to-clipboard.
+- **Live streaming preview** (upstream's headline UX): raw-PCM capture is
+  transcribed on a rolling basis while you speak (~1.2 s cadence) and shown
+  in an X11 overlay window (override-redirect, no focus stealing) or a
+  replaceable notification; the model is pre-warmed at daemon start.
+- **Rewrite/Write mode** (`hotkey.rewrite_key`): captures the selection,
+  dictates the instruction, runs the verbatim upstream edit prompts
+  (context block, follow-up history, temperature 0.7), types the result.
+- **Spoken-send**: trailing "send it" strips and presses Enter afterwards
+  ("literal send it" escape honored); configurable phrase/key-combo.
+- **GAAV mode**: optional lowercase-first + trailing-period strip for
+  search-box/casual dictation.
 
 ### Text processing (upstream-faithful, audit-verified)
 - Filler removal — upstream split/trim semantics, default word list identical.

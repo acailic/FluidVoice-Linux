@@ -42,13 +42,18 @@ class DictationPipeline:
                  inserter: Inserter = insertion.insert_text,
                  polisher: Callable[[str], str] | None = None,
                  history_writer: Callable[[dict, Path | None], None] | None = None,
+                 key_presser: Callable[[str], None] | None = None,
+                 rewriter: Callable[[str, str | None], str] | None = None,
                  logger: Callable[[str], None] = log):
         self.cfg = cfg
         self.backend = backend
         self.inserter = inserter
         self.polisher = polisher  # None -> build AIClient lazily when enabled
         self.history_writer = history_writer  # None -> history_mod.append
+        self.key_presser = key_presser or self._press_send_key
+        self.rewriter = rewriter
         self.log = logger
+        self._pending_send_key: str | None = None
         self.notify = lambda title, body="": ui.notify(title, body, enabled=cfg["notifications"]["enabled"])
 
     # -- steps ------------------------------------------------------------
@@ -71,6 +76,48 @@ class DictationPipeline:
         except AIError as e:
             self.log(f"AI polish failed ({e}); using raw transcription")
             return text, False
+
+    def _rewrite(self, instruction: str, context: str | None, raw: str,
+                 duration: float, wav: Path) -> dict | None:
+        from . import rewrite as rewrite_mod
+        try:
+            rewriter = self.rewriter or rewrite_mod.run_rewrite
+            rewritten = rewriter(instruction, context)
+        except rewrite_mod.RewriteError as e:
+            self.log(f"rewrite failed: {e}")
+            self.notify("FluidVoice", f"Rewrite failed: {e}")
+            return None
+        strategy = self._insert(rewritten)
+        out = {"raw": raw, "text": rewritten, "ai": True,
+               "strategy": strategy, "mode": "rewrite"}
+        self.log(f"rewrote ({strategy}, {len(rewritten)} chars): {rewritten[:120]}")
+        self._write_history(
+            {"ts": time.time(), "duration_s": round(duration, 2), "raw": raw,
+             "text": rewritten, "ai": True, "backend": self.backend.name,
+             "app": None, "mode": "rewrite"}, wav)
+        return out
+
+    def _after_ai_formatting(self, text: str) -> str:
+        """GAAV + spoken-send stripping (upstream post-AI steps)."""
+        from .processing.extra_formats import apply_gaav, parse_spoken_send
+        p = self.cfg.get("processing", {})
+        if p.get("gaav_enabled"):
+            text = apply_gaav(text,
+                             lowercase_first=p.get("gaav_lowercase_first", True),
+                             remove_trailing_period=p.get("gaav_remove_trailing_period", True))
+        if self.cfg["recording"].get("spoken_send_enabled"):
+            result = parse_spoken_send(text,
+                                       self.cfg["recording"].get("spoken_send_phrase", "send it"))
+            self._pending_send_key = (self.cfg["recording"].get("spoken_send_key", "enter")
+                                      if result.should_send else None)
+            return result.text
+        return text
+
+    def _press_send_key(self, spec: str) -> None:
+        try:
+            insertion.press_key(spec)
+        except insertion.InsertError as e:
+            self.log(f"send-key failed: {e}")
 
     def _insert(self, text: str) -> str:
         try:
@@ -98,7 +145,8 @@ class DictationPipeline:
 
     # -- orchestration ------------------------------------------------------
 
-    def run(self, wav: Path, app_hint: str | None) -> dict | None:
+    def run(self, wav: Path, app_hint: str | None,
+            mode: str = "dictate", rewrite_context: str | None = None) -> dict | None:
         """Returns the result dict (raw/text/ai/strategy) or None if nothing was typed."""
         from .audio_utils import pad_wav
         started = time.monotonic()
@@ -119,8 +167,15 @@ class DictationPipeline:
                 self.log("empty transcription")
                 return None
             text = post_process(raw, self.cfg, app_hint=app_hint)
+            if mode == "rewrite":
+                return self._rewrite(text, rewrite_context, raw, duration, wav)
             polished, ai_used = self._polish(text)
+            polished = self._after_ai_formatting(polished)
             strategy = self._insert(polished)
+            if self._pending_send_key:
+                spec, self._pending_send_key = self._pending_send_key, None
+                self.key_presser(spec)
+                strategy += f"+{spec}"
             out = {"raw": raw, "text": polished, "ai": ai_used, "strategy": strategy}
             self.log(f"typed ({strategy}, {len(polished)} chars, {duration:.1f}s audio, "
                      f"{time.monotonic() - started:.1f}s total): {polished[:120]}")
@@ -153,9 +208,13 @@ class Daemon:
         self.busy = False  # transcription/insertion in flight
         self.last_result: dict = {}
         self._app_hint: str | None = None
+        self._rewrite_context: str | None = None
+        self._rewrite_mode = False
         self._watchdog: threading.Timer | None = None
+        self._preview: Any = None
         self._lock = threading.Lock()
         self._hotkey = None
+        self._rewrite_hotkey = None
         self._srv: Any = None
         self.webui: Any = None
         self._process_thread: threading.Thread | None = None
@@ -170,6 +229,20 @@ class Daemon:
         except Exception as e:
             log(f"WARN speech backend not ready yet ({e}); will retry on first use")
             self.backend = None
+        else:
+            # Eagerly load the model in the background so the live preview
+            # works from the very first dictation (the model is lazy otherwise).
+            backend_ref = self.backend
+
+            def _warm():
+                try:
+                    backend_ref.warmup()
+                    log("speech model loaded (preview ready)")
+                except Exception as e:
+                    log(f"WARN model warmup failed: {e}")
+
+            threading.Thread(target=_warm, name="fluidvoice-warmup",
+                             daemon=True).start()
 
         if self.use_hotkey:
             self._start_hotkey()
@@ -210,6 +283,8 @@ class Daemon:
             self._watchdog.cancel()
         if self._hotkey:
             self._hotkey.stop()
+        if self._rewrite_hotkey:
+            self._rewrite_hotkey.stop()
         if self._srv:
             try:
                 self._srv.close()
@@ -251,6 +326,17 @@ class Daemon:
             ui.notify("FluidVoice", f"Hotkey unavailable: {e}\n"
                       "Bind a DE shortcut to `fluidvoice toggle` instead.",
                       timeout_ms=8000, enabled=self.cfg["notifications"]["enabled"])
+        rewrite_key = (hk.get("rewrite_key") or "").strip()
+        if rewrite_key:
+            try:
+                self._rewrite_hotkey = HotkeyListener(
+                    key=rewrite_key, modifiers=[], mode="toggle",
+                    on_toggle=self.start_rewrite)
+                self._rewrite_hotkey.start()
+                for line in self._rewrite_hotkey.summary:
+                    log(line)
+            except HotkeyError as e:
+                log(f"WARN rewrite hotkey unavailable: {e}")
 
     # -- control protocol ----------------------------------------------------
 
@@ -273,6 +359,22 @@ class Daemon:
         return {"ok": False, "error": f"unknown action {action!r}"}
 
     # -- dictation -----------------------------------------------------------
+
+    def start_rewrite(self) -> None:
+        """Rewrite hotkey: capture the selection, then record the instruction."""
+        from . import rewrite as rewrite_mod
+        with self._lock:
+            if self.recording or self.busy:
+                return
+            try:
+                context = rewrite_mod.capture_selection()
+            except Exception as e:
+                log(f"selection capture failed: {e}")
+                context = ""
+            self._rewrite_mode = True
+            self._rewrite_context = context or None
+            log(f"rewrite mode (context: {len(context or '')} chars)")
+            self._start_recording_locked()
 
     def toggle(self) -> bool:
         with self._lock:
@@ -308,18 +410,57 @@ class Daemon:
         # Upstream firstPCMTimeout (2s): a live-but-silent source (muted mic,
         # wrong device, Bluetooth glitch) should fail fast, not record air
         # until max_seconds.
+        self._start_preview(getattr(self.recorder, "raw_path", None))
         pcm_timeout = float(self.cfg["recording"].get("first_pcm_timeout", 2.0))
         if pcm_timeout > 0:
             t = threading.Timer(pcm_timeout, self._check_first_pcm, args=(Path(tmp),))
             t.daemon = True
             t.start()
 
+    def _start_preview(self, raw_path) -> None:
+        """Live transcription preview while recording (best-effort)."""
+        rcfg = self.cfg["recording"]
+        if not rcfg.get("preview_enabled", True) or raw_path is None:
+            return
+        try:
+            from .preview import (NotifyPreview, PreviewEngine, X11OverlayPreview,
+                                  faster_whisper_transcriber)
+            backend = self.backend
+            model = getattr(backend, "_model", None)
+            if backend is None or model is None:
+                return  # not a ready faster-whisper backend
+            mode = rcfg.get("preview_mode", "notify")
+            display = X11OverlayPreview() if mode == "overlay" else NotifyPreview()
+            engine = PreviewEngine(
+                Path(raw_path),
+                faster_whisper_transcriber(model, self.cfg["general"]["language"]),
+                display.show,
+                interval=float(rcfg.get("preview_interval", 1.2)),
+                min_audio=float(rcfg.get("preview_min_audio", 1.0)))
+            engine.start()
+            self._preview = (engine, display)
+            log(f"preview started ({mode})")
+        except Exception as e:
+            log(f"WARN preview unavailable: {e}")
+
+    def _stop_preview(self) -> None:
+        preview, self._preview = self._preview, None
+        if preview is None:
+            return
+        engine, display = preview
+        engine.stop()
+        display.close()
+
     def _check_first_pcm(self, wav: Path) -> None:
         with self._lock:
             if not self.recording or self.recorder.path != wav:
                 return
+            # audio streams into the RAW file during recording (the WAV is
+            # only written at stop); fall back to the wav for stub recorders
+            probe = getattr(self.recorder, "raw_path", None) or wav
             try:
-                got_pcm = wav.exists() and wav.stat().st_size > 2048
+                got_pcm = probe is not None and probe.exists() \
+                    and probe.stat().st_size > 2048
             except OSError:
                 got_pcm = False
             if not got_pcm:
@@ -345,6 +486,7 @@ class Daemon:
         if self._watchdog:
             self._watchdog.cancel()
             self._watchdog = None
+        self._stop_preview()
         # Stop cue fires at capture stop (upstream behavior), before waiting
         # for the recorder process to flush and exit.
         ui.play_sound("stop", self.cfg["sounds"]["volume"],
@@ -356,8 +498,13 @@ class Daemon:
             if wav:
                 Path(wav).unlink(missing_ok=True)
             return
+        mode = "rewrite" if self._rewrite_mode else "dictate"
+        context = self._rewrite_context
+        self._rewrite_mode = False
+        self._rewrite_context = None
         self._process_thread = threading.Thread(
-            target=self._process, args=(Path(wav), self._app_hint), daemon=True)
+            target=self._process,
+            args=(Path(wav), self._app_hint, mode, context), daemon=True)
         self._process_thread.start()
 
     def cancel(self) -> None:
@@ -367,6 +514,7 @@ class Daemon:
             if self._watchdog:
                 self._watchdog.cancel()
                 self._watchdog = None
+            self._stop_preview()
             self.recorder.cancel()
             self.recording = False
         log("cancelled")
@@ -399,7 +547,8 @@ class Daemon:
             log(f"speech backend: {self.backend.name}")
         return self.backend
 
-    def _process(self, wav: Path, app_hint: str | None) -> None:
+    def _process(self, wav: Path, app_hint: str | None,
+                 mode: str = "dictate", rewrite_context: str | None = None) -> None:
         self.busy = True
         try:
             try:
@@ -411,6 +560,7 @@ class Daemon:
                 wav.unlink(missing_ok=True)
                 return
             pipeline = self._pipeline_factory(self.cfg, backend)
-            self.last_result = pipeline.run(wav, app_hint) or {}
+            self.last_result = pipeline.run(wav, app_hint, mode=mode,
+                                            rewrite_context=rewrite_context) or {}
         finally:
             self.busy = False

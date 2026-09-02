@@ -123,10 +123,6 @@ class AIClient:
         prompt = (system_prompt or self.system_prompt).strip()
         user_message = render_dictation_user_message(prompt, transcript)
         content = self.chat(user_message)
-        if not content.strip():
-            # upstream raises AIProcessingError.emptyResponse; the daemon
-            # catches it and falls back to the raw transcript
-            raise AIError("empty response from model")
         cleaned = strip_thinking(content)
         # Divergence (intentional): upstream falls back to the raw content when
         # cleaning empties it; we prefer the transcript over typed <think> junk.
@@ -134,20 +130,27 @@ class AIClient:
 
     # -- request building ------------------------------------------------------
 
-    def _build_body(self, user_message: str, responses_api: bool) -> bytes:
+    def _build_body(self, messages_or_text, responses_api: bool,
+                    temperature: float | None = None) -> bytes:
         extras = _reasoning_extras(self.model)
+        temp = self.temperature if temperature is None else temperature
         if responses_api:
-            body: dict = {"model": self.model, "input": user_message, "store": False}
+            if isinstance(messages_or_text, str):
+                prompt_text = messages_or_text
+            else:  # flatten a message list for the Responses API
+                prompt_text = "\n\n".join(
+                    f"[{m['role']}]\n{m['content']}" for m in messages_or_text)
+            body: dict = {"model": self.model, "input": prompt_text, "store": False}
             if extras.get("reasoning_effort"):
                 body["reasoning"] = {"effort": extras["reasoning_effort"]}
             extras.pop("reasoning_effort", None)
             body.update(extras)
         else:
-            body = {"model": self.model,
-                    "messages": [{"role": "user", "content": user_message}],
-                    "stream": False}
+            messages = ([{"role": "user", "content": messages_or_text}]
+                        if isinstance(messages_or_text, str) else messages_or_text)
+            body = {"model": self.model, "messages": messages, "stream": False}
             if not is_temperature_unsupported(self.model):
-                body["temperature"] = self.temperature
+                body["temperature"] = temp
             body.update(extras)
         return json.dumps(body).encode()
 
@@ -162,9 +165,15 @@ class AIClient:
                     parts.append(content["text"])
         return "".join(parts)
 
-    def chat(self, user_message: str) -> str:
+    def chat(self, user_message: str, temperature: float | None = None) -> str:
+        return self.chat_messages([{"role": "user", "content": user_message}],
+                                  temperature=temperature)
+
+    def chat_messages(self, messages: list[dict],
+                      temperature: float | None = None) -> str:
+        """Full message list (system/user/assistant) through the same transport."""
         responses_api = _use_responses_api(self.base_url, self.model)
-        payload = self._build_body(user_message, responses_api)
+        payload = self._build_body(messages, responses_api, temperature=temperature)
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -175,7 +184,10 @@ class AIClient:
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     data = json.loads(resp.read().decode())
-                return self._parse_response(data)
+                content = self._parse_response(data)
+                if not content.strip():
+                    raise AIError("empty response from model")
+                return content
             except urllib.error.HTTPError as e:
                 detail = ""
                 try:
