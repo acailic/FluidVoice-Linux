@@ -18,6 +18,9 @@ language = "en"
 [hotkey]
 key = "F9"
 
+[model]
+eager_warmup = false
+
 [recording]
 preview_enabled = false
 skip_silent = false
@@ -99,6 +102,38 @@ def daemon_with_hotkey(isolated_env, tmp_path):
     proc = _spawn_and_wait(tmp_path, ["--no-sounds"])
     yield proc
     _stop_daemon(proc, tmp_path)
+
+
+def gpu_free_mb() -> int:
+    """Free VRAM in MiB, or -1 when it cannot be determined."""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5)
+        return int(out.stdout.strip().splitlines()[0])
+    except Exception:
+        return -1
+
+
+def skip_if_gpu_busy(min_free_mb: int = 1500) -> None:
+    free = gpu_free_mb()
+    if 0 <= free < min_free_mb:
+        pytest.skip(f"GPU busy ({free} MiB free) - real-model transcription "
+                    "is covered by the CPU E2E test")
+
+
+@pytest.fixture(scope="session")
+def shared_backend():
+    """One loaded whisper model for the whole integration session (an 8 GB
+    GPU cannot hold several concurrent instances alongside the user's own
+    daemon). Skips cleanly when the GPU is nearly full."""
+    skip_if_gpu_busy()
+    from fluidvoice import backends
+    from fluidvoice.config import load_config
+    backend = backends.load_backend(load_config())
+    backend.warmup()
+    return backend
 
 
 @pytest.fixture(scope="session")

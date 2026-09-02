@@ -28,7 +28,10 @@ def jfk(tmp_path_factory) -> Path:
 @pytest.fixture(scope="module")
 def backend():
     cfg = dict(DEFAULTS)
-    cfg["model"] = dict(DEFAULTS["model"], name="tiny")  # smallest download
+    # smallest download; CPU int8 keeps this test independent of whatever
+    # other model instances currently hold the GPU (daemon, integration suite)
+    cfg["model"] = dict(DEFAULTS["model"], name="tiny", device="cpu",
+                        compute="int8")
     return backends.load_backend(cfg)
 
 

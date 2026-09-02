@@ -41,13 +41,13 @@ class TestRealRecorder:
 
 
 class TestRealTranscription:
-    def test_gpu_transcription_of_jfk(self, jfk_wav):
-        backend = backends.load_backend(load_config())
+    def test_gpu_transcription_of_jfk(self, jfk_wav, shared_backend):
+        backend = shared_backend
         result = backend.transcribe(jfk_wav, language="en")
         text = result["text"].lower()
         assert "fellow americans" in text or "my fellow" in text
 
-    def test_raw_pipeline_transcription(self, jfk_wav, tmp_path):
+    def test_raw_pipeline_transcription(self, jfk_wav, tmp_path, shared_backend):
         # flac->wav->raw->wav mirrors exactly what the recorder produces
         raw = tmp_path / "j.raw"
         import wave
@@ -56,18 +56,17 @@ class TestRealTranscription:
         raw.write_bytes(data)
         wrapped = tmp_path / "j.wav"
         raw_to_wav_file(raw, wrapped, 16000)
-        backend = backends.load_backend(load_config())
+        backend = shared_backend
         result = backend.transcribe(wrapped, language="en")
         assert "americans" in result["text"].lower()
 
 
 class TestRealPreviewEngine:
-    def test_streaming_partials_with_real_model(self, jfk_wav, tmp_path):
+    def test_streaming_partials_with_real_model(self, jfk_wav, tmp_path, shared_backend):
         import wave
         with wave.open(str(jfk_wav)) as wf:
             pcm = wf.readframes(wf.getnframes())
-        backend = backends.load_backend(load_config())
-        backend.warmup()  # _model is lazy; the preview needs it loaded
+        backend = shared_backend
         assert backend._model is not None
         engine = PreviewEngine(
             tmp_path / "live.raw",

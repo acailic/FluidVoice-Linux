@@ -47,6 +47,8 @@ class TestCli:
         assert 'key = "F9"' in out.stdout
 
     def test_transcribe_one_shot(self, isolated_env, jfk_wav):
+        from tests.integration.conftest import skip_if_gpu_busy
+        skip_if_gpu_busy()
         out = run_cli(["transcribe", str(jfk_wav)])
         assert out.returncode == 0
         assert "americans" in out.stdout.lower()
