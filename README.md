@@ -134,7 +134,7 @@ providers set `api_key_env = "FLUIDVOICE_API_KEY"` and export the variable
 | Command mode (voice → terminal agent) | ✅ | 🚧 roadmap |
 | Per-app prompt sets | ✅ | 🚧 roadmap (app hint is already captured) |
 | Settings UI with model picker | ✅ | ✅ local web UI (`fluidvoice settings`) |
-| Notch overlay / menu bar | ✅ | ➖ N/A on Linux; notifications today |
+| Notch overlay / menu bar | ✅ | ✅ tray/panel icon (StatusNotifierItem): click = dictate, state badge, tooltip with hotkey |
 
 See [docs/STATUS.md](docs/STATUS.md) for the full done/left ledger (verified
 by a 5-agent audit against the upstream Swift sources),

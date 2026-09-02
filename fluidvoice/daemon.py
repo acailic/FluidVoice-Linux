@@ -213,6 +213,7 @@ class Daemon:
         self._watchdog: threading.Timer | None = None
         self._preview: Any = None
         self._closing_display: Any = None
+        self._tray: Any = None
         self._lock = threading.Lock()
         self._hotkey = None
         self._rewrite_hotkey = None
@@ -261,6 +262,8 @@ class Daemon:
             except Exception as e:
                 log(f"WARN settings UI unavailable: {e}")
 
+        self._start_tray()
+
         ready = threading.Event()
         self._srv = control.serve(self.handle_request, ready=ready)
         ready.wait(timeout=5)
@@ -280,6 +283,53 @@ class Daemon:
         finally:
             self.shutdown()
 
+    def _start_tray(self) -> None:
+        """Panel/tray icon (StatusNotifierItem): click toggles dictation,
+        right-click opens settings, tooltip shows state + hotkey."""
+        if not self.cfg["general"].get("tray_enabled", True):
+            return
+        try:
+            from .tray import TrayIcon
+            tray = TrayIcon(on_activate=self.toggle,
+                            on_secondary=self._open_settings,
+                            tooltip=self._tray_tooltip, log=log)
+            if tray.start():
+                self._tray = tray
+                log("tray icon active (click = dictate, right-click = settings)")
+            else:
+                log("tray unavailable on this desktop - running headless")
+        except Exception as e:
+            log(f"WARN tray unavailable: {e}")
+
+    def _tray_recording(self, recording: bool) -> None:
+        if self._tray is not None:
+            self._tray.set_recording(recording)
+
+    def _tray_tooltip(self) -> str:
+        with self._lock:
+            if self.recording:
+                state = "Recording… click to stop"
+            elif self.busy:
+                state = "Processing…"
+            else:
+                state = "Ready"
+        hk = self.cfg["hotkey"].get("key", "")
+        hint = f" — {hk} or click to dictate" if hk else ""
+        return f"FluidVoice: {state}{hint}"
+
+    def _open_settings(self) -> None:
+        port = self.webui.port if getattr(self, "webui", None) else None
+        if not port:
+            log("tray: settings UI not running")
+            return
+        import subprocess
+        try:
+            subprocess.Popen(["xdg-open", f"http://127.0.0.1:{port}"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log("tray: opened settings")
+        except Exception as e:
+            log(f"tray: could not open settings: {e}")
+
     def shutdown(self) -> None:
         log("shutting down")
         if self.recording:
@@ -289,6 +339,8 @@ class Daemon:
             self._watchdog.cancel()
         self._stop_preview()
         self._close_closing_display()
+        if self._tray:
+            self._tray.stop()
         if self._hotkey:
             self._hotkey.stop()
         if self._rewrite_hotkey:
@@ -408,6 +460,7 @@ class Daemon:
             Path(tmp).unlink(missing_ok=True)
             return
         self.recording = True
+        self._tray_recording(True)
         ui.play_sound("start", self.cfg["sounds"]["volume"],
                       self.use_sounds and self.cfg["sounds"]["enabled"])
         log(f"recording (app={self._app_hint or '?'})")
@@ -497,6 +550,7 @@ class Daemon:
                     self._watchdog = None
                 self.recorder.cancel()
                 self.recording = False
+                self._tray_recording(False)
                 msg = "microphone produced no audio (muted or wrong device?) - stopped"
                 log(msg)
                 ui.notify("FluidVoice", msg, enabled=self.cfg["notifications"]["enabled"])
@@ -521,6 +575,7 @@ class Daemon:
                       self.use_sounds and self.cfg["sounds"]["enabled"])
         wav = self.recorder.stop()
         self.recording = False
+        self._tray_recording(False)
         if wav is None or not Path(wav).exists() or Path(wav).stat().st_size < 200:
             log("no audio captured")
             self._close_closing_display()
@@ -546,6 +601,7 @@ class Daemon:
             self._stop_preview()
             self.recorder.cancel()
             self.recording = False
+            self._tray_recording(False)
         log("cancelled")
         ui.notify("FluidVoice", "Cancelled", enabled=self.cfg["notifications"]["enabled"])
 

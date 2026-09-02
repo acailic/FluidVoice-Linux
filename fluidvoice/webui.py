@@ -187,7 +187,8 @@ class WebUI:
         ("insertion", "mode"): {"auto", "typed", "paste"},
         ("recording", "command"): {"auto", "pw-record", "parecord"},
     }
-    _BOOLS = {("general", "copy_to_clipboard"), ("recording", "preview_enabled"),
+    _BOOLS = {("general", "copy_to_clipboard"), ("general", "tray_enabled"),
+              ("recording", "preview_enabled"),
               ("processing", "remove_filler_words"), ("processing", "punctuation_enabled"),
               ("ai", "enabled"), ("sounds", "enabled"), ("notifications", "enabled"),
               ("history", "save"), ("history", "save_audio"), ("server", "enabled"),

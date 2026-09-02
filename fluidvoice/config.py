@@ -20,6 +20,7 @@ DEFAULTS: dict[str, Any] = {
     "general": {
         "language": "auto",  # whisper language code or "auto"
         "copy_to_clipboard": False,  # upstream copyTranscriptionToClipboard
+        "tray_enabled": True,  # panel/tray icon while the daemon runs
     },
     "hotkey": {
         # X11 keysym name. Modifier-only keys (Right_Control, Right_Alt,
@@ -249,7 +250,7 @@ def write_template(path: Path | None = None) -> Path:
 # ---------------------------------------------------------------------------
 
 _SAVE_WHITELIST: dict[str, list[str]] = {
-    "general": ["language", "copy_to_clipboard"],
+    "general": ["language", "copy_to_clipboard", "tray_enabled"],
     "hotkey": ["key", "modifiers", "mode", "cancel_key", "rewrite_key"],
     "recording": ["command", "device", "max_seconds", "skip_silent",
                   "first_pcm_timeout", "spoken_send_enabled", "spoken_send_phrase",
