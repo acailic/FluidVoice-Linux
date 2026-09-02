@@ -34,15 +34,16 @@ hotkey ─▶ pw-record 16k mono ─▶ faster-whisper (CUDA/int8) ─▶ filler
 
 ### Option A — .deb package (the "Mac app" experience)
 
-One command, then FluidVoice appears in your app launcher, autostarts at
-login, and needs no terminal:
+One download + one command, then FluidVoice appears in your app launcher,
+autostarts at login, and needs no terminal:
 
 ```bash
-git clone https://github.com/acailic/FluidVoice-Linux.git -b linux
-cd FluidVoice-Linux
-./packaging/build-deb.sh                          # builds dist/fluidvoice-linux_*.deb
-sudo apt install ./dist/fluidvoice-linux_*.deb    # installs to /opt + launcher + autostart
+curl -LO https://github.com/acailic/FluidVoice-Linux/releases/download/v0.1.0/fluidvoice-linux_0.1.0-1_amd64.deb
+sudo apt install ./fluidvoice-linux_amd64.deb
 ```
+
+Grab a specific version from the [releases page](https://github.com/acailic/FluidVoice-Linux/releases).
+Building it yourself instead: `git clone … -b linux && ./packaging/build-deb.sh`.
 
 What you get after install (log out/in once):
 - **App launcher entry "FluidVoice"** (opens the settings UI) with its own icon
