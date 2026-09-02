@@ -129,8 +129,8 @@ providers set `api_key_env = "FLUIDVOICE_API_KEY"` and export the variable
 | Spoken punctuation ("literal comma") | ✅ full rule table | ✅ ported (dot/slash/at-sign contexts included) |
 | AI polish with the original prompt | ✅ (local Fluid Intelligence or cloud) | ✅ (any OpenAI-compatible endpoint; no bundled local LLM yet) |
 | Start/stop sounds | ✅ | ✅ (same GPLv3 SFX) |
-| Live streaming preview overlay | ✅ | 🚧 roadmap |
-| Write/Rewrite selected text | ✅ (⌥R) | 🚧 roadmap (X11 selection via xclip) |
+| Live streaming preview overlay | ✅ | ✅ X11 overlay (notch styling N/A) |
+| Write/Rewrite selected text | ✅ (⌥R) | ✅ dedicated rewrite hotkey |
 | Command mode (voice → terminal agent) | ✅ | 🚧 roadmap |
 | Per-app prompt sets | ✅ | 🚧 roadmap (app hint is already captured) |
 | Settings UI with model picker | ✅ | ✅ local web UI (`fluidvoice settings`) |
@@ -139,8 +139,11 @@ providers set `api_key_env = "FLUIDVOICE_API_KEY"` and export the variable
 See [docs/STATUS.md](docs/STATUS.md) for the full done/left ledger (verified
 by a 5-agent audit against the upstream Swift sources),
 [docs/COMPARISON.md](docs/COMPARISON.md) for how this relates to other Linux
-dictation tools (Handy, Vocalinux, nerd-dictation, …) and
-[docs/ROADMAP.md](docs/ROADMAP.md) for the forward plan.
+dictation tools (Handy, Vocalinux, nerd-dictation, …),
+[docs/ROADMAP.md](docs/ROADMAP.md) for the forward plan, and
+[docs/UPSTREAM-TRACKING.md](docs/UPSTREAM-TRACKING.md) for the
+macOS-vs-Linux capability matrix and the upstream changelog we track
+(refresh it with `scripts/upstream-diff.sh`).
 
 ## Requirements
 

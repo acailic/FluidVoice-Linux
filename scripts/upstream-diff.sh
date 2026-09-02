@@ -29,7 +29,8 @@ echo "== upstream moved: ${base_sha:0:7}..${tip:0:7} — $(git rev-list --count 
 
 echo
 echo "-- new tags since baseline --"
-git for-each-ref --sort=creatordate --format='%(refname:short)|%(creatordate:short)' refs/tags \
+git for-each-ref --merged upstream/main --sort=creatordate \
+    --format='%(refname:short)|%(creatordate:short)' refs/tags \
     | awk -F'|' -v d="$base_date" '$2 > d {print "  " $1 " (" $2 ")"}'
 
 echo

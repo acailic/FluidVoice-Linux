@@ -6,7 +6,9 @@ Last updated: 2026-09-02 · v0.1.0 · **235 automated tests** (233 offline + 2 E
 
 Companion docs: [BEHAVIOR-SPEC.md](BEHAVIOR-SPEC.md) (what upstream does,
 with file:line evidence) · [ROADMAP.md](ROADMAP.md) (the forward plan) ·
-[COMPARISON.md](COMPARISON.md) (vs. other Linux dictation tools).
+[COMPARISON.md](COMPARISON.md) (vs. other Linux dictation tools) ·
+[UPSTREAM-TRACKING.md](UPSTREAM-TRACKING.md) (macOS-vs-Linux capability
+matrix + upstream changelog with its refresh loop).
 
 ---
 
