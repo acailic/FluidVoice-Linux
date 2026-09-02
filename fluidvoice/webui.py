@@ -168,6 +168,45 @@ class WebUI:
         removed = history_mod.clear()
         return {"ok": True, "removed": removed}
 
+    # -- onboarding (first run) -------------------------------------------------
+
+    def api_onboard(self) -> dict:
+        """One clean pass, like the Mac: mic, model, hotkey, AI, tryout."""
+        from .tray import list_microphones
+        cfg = self.cfg
+        mics = list_microphones()
+        default_mic = next((m["description"] for m in mics if m["default"]),
+                           mics[0]["description"] if mics else None)
+        ai = cfg.get("ai", {})
+        try:
+            active = self.api_status().get("active_model")
+        except Exception:
+            active = None
+        return {
+            "has_dictated": bool(history_mod.tail(1)),
+            "mic_default": default_mic,
+            "mic_count": len(mics),
+            "model": active,
+            "hotkey": cfg.get("hotkey", {}).get("key", ""),
+            "cancel_key": cfg.get("hotkey", {}).get("cancel_key", "Escape"),
+            "ai_enabled": bool(ai.get("enabled")),
+            "ai_configured": bool(ai.get("api_key") or ai.get("base_url")),
+        }
+
+    def api_onboard_done(self) -> dict:
+        marker = paths.data_dir() / ".onboarded"
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("done\n")
+        except OSError:
+            pass
+        return {"ok": True}
+
+    def api_test_dictation(self, body: dict) -> dict:
+        if self.daemon is None:
+            return {"ok": False, "error": "daemon not attached"}
+        return self.daemon.test_dictation(float(body.get("seconds", 3.0)))
+
     def api_config_get(self) -> dict:
         safe = json.loads(json.dumps(self.cfg))  # plain copy
         key = safe.get("ai", {}).get("api_key", "")
@@ -383,6 +422,13 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+        elif self.path == "/onboard":
+            data = ONBOARD_PAGE.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
         elif self.path == "/api/status":
             self._json(w.api_status())
         elif self.path == "/api/models":
@@ -397,6 +443,8 @@ class _Handler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             self._json(w.api_history(qs.get("q", [""])[0],
                                      int(qs.get("limit", ["100"])[0])))
+        elif self.path == "/api/onboard":
+            self._json(w.api_onboard())
         else:
             self._json({"error": "not found"}, 404)
 
@@ -446,6 +494,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(w.api_history_delete(body))
         elif self.path == "/api/history/clear":
             self._json(w.api_history_clear())
+        elif self.path == "/api/onboard/done":
+            self._json(w.api_onboard_done())
+        elif self.path == "/api/test-dictation":
+            self._json(w.api_test_dictation(body))
         elif self.path == "/api/toggle":
             if w.daemon is not None:
                 self._json(w.daemon.handle_request({"action": "toggle"}))
@@ -725,6 +777,110 @@ async function clearAll(){
   load();
 }
 document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')load();});
+load();
+</script></body></html>
+"""
+
+
+ONBOARD_PAGE = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>FluidVoice Setup</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0f1420;--card:#171e2e;--line:#253048;--text:#e6ebf5;--mut:#8b96ad;
+--acc:#3ac8c6;--ok:#4cc38a;--warn:#f2a33c;--err:#e5534b}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 system-ui,sans-serif;
+background:var(--bg);color:var(--text)}
+.wrap{max-width:680px;margin:0 auto;padding:32px 20px 60px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--mut);margin-bottom:22px}
+.step{background:var(--card);border:1px solid var(--line);border-radius:10px;
+padding:16px 18px;margin-bottom:12px}
+.step h3{margin:0 0 6px;font-size:15px;display:flex;align-items:center;gap:8px}
+.step .d{color:var(--mut);font-size:13px;margin-bottom:10px}
+.badge{font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid}
+.badge.ok{color:var(--ok);border-color:var(--ok)}
+.badge.todo{color:var(--warn);border-color:var(--warn)}
+button{background:var(--acc);border:0;color:#04211f;font-weight:600;border-radius:7px;
+padding:8px 16px;font:inherit;cursor:pointer}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+button:disabled{opacity:.5;cursor:default}
+.kbd{background:#0c111c;border:1px solid var(--line);border-radius:5px;padding:1px 7px;
+font-family:ui-monospace,monospace;font-size:12px}
+.result{margin-top:10px;padding:12px;border-radius:8px;background:#0c111c;
+border:1px solid var(--line);white-space:pre-wrap;display:none}
+.ok{color:var(--ok)}.err{color:var(--err)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px}
+</style></head><body><div class="wrap">
+<h1>Welcome to FluidVoice</h1>
+<div class="sub">A one-pass setup, same as on the Mac: check your mic, pick the
+engine, then try a real dictation. Nothing here gets typed anywhere.</div>
+
+<div class="step"><h3>1 · Microphone <span class="badge" id="bMic">…</span></h3>
+<div class="d" id="micInfo">checking…</div></div>
+
+<div class="step"><h3>2 · Speech engine <span class="badge" id="bModel">…</span></h3>
+<div class="d" id="modelInfo">checking…</div>
+<div class="d">Model downloads and the engine picker live in
+<a href="/" style="color:var(--acc)">Settings</a>.</div></div>
+
+<div class="step"><h3>3 · Hotkeys <span class="badge" id="bHotkey">…</span></h3>
+<div class="d" id="hotkeyInfo">checking…</div></div>
+
+<div class="step"><h3>4 · Try it <span class="badge" id="bTry">optional</span></h3>
+<div class="d">Speak a sentence after clicking - it is transcribed locally and
+shown here only. Nothing is typed into your apps.</div>
+<button id="tryBtn" onclick="tryDictation()">Record 3 seconds</button>
+<div class="result" id="tryOut"></div></div>
+
+<div class="step"><h3>5 · AI polish <span class="badge" id="bAi">…</span></h3>
+<div class="d" id="aiInfo">checking…</div></div>
+
+<div class="row">
+<button onclick="finish()">Start dictating</button>
+<a href="/"><button class="ghost" type="button">Open Settings</button></a>
+<a href="/history"><button class="ghost" type="button">History</button></a>
+</div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function badge(id,ok,text){const b=$(id);b.className='badge '+(ok?'ok':'todo');b.textContent=text;}
+async function load(){
+ const s=await fetch('/api/onboard').then(r=>r.json());
+ badge('bMic',s.mic_count>0,s.mic_count>0?'ready':'none');
+ $('micInfo').innerHTML=s.mic_default
+   ?`Using <b>${esc(s.mic_default)}</b>${s.mic_count>1?` (${s.mic_count} inputs available - switch from the tray menu)`:''}.`
+   :'No microphone found. Connect one, or check the default input in your sound settings.';
+ badge('bModel',!!s.model,s.model?'ready':'setup');
+ $('modelInfo').innerHTML=s.model
+   ?`<b>${esc(s.model)}</b> loaded${''}.`
+   :'No model yet - open Settings to download one (tiny is ~75 MB).';
+ badge('bHotkey',!!s.hotkey,s.hotkey?'ready':'setup');
+ $('hotkeyInfo').innerHTML=s.hotkey
+   ?`Dictate: <span class="kbd">${esc(s.hotkey)}</span> · cancel: <span class="kbd">${esc(s.cancel_key||'Esc')}</span> (Escape works while the pill is up).`
+   :'No hotkey configured - set one in Settings.';
+ badge('bAi',s.ai_configured,s.ai_configured?(s.ai_enabled?'active':'configured'):'optional');
+ $('aiInfo').innerHTML=s.ai_configured
+   ?`AI polish ${s.ai_enabled?'is on':'is configured but off'} - fine-tune it in Settings.`
+   :'Optional: add an OpenAI-compatible endpoint in Settings to get smart formatting and rewrite mode.';
+}
+async function tryDictation(){
+ $('tryBtn').disabled=true;$('tryOut').style.display='block';
+ $('tryOut').className='result';$('tryOut').textContent='recording… speak now';
+ try{
+  const r=await fetch('/api/test-dictation',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>r.json());
+  if(r.ok){$('tryOut').innerHTML=`<span class="ok">heard you (${r.duration_s}s):</span>\n${esc(r.text)||'(silence - nothing transcribed)'}`;
+   badge('bTry',true,'done');}
+  else{$('tryOut').innerHTML=`<span class="err">${esc(r.error)}</span>`;}
+ }catch(e){$('tryOut').innerHTML='<span class="err">request failed</span>';}
+ $('tryBtn').disabled=false;
+}
+async function finish(){
+ await fetch('/api/onboard/done',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+ location.href='/';
+}
 load();
 </script></body></html>
 """

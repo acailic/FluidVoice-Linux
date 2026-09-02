@@ -281,6 +281,44 @@ class TestDaemon:
         assert self.wait_done(d)
         assert calls == [True, False]
 
+    def test_dictation_tryout(self, cfg, quiet_ui):
+        """Onboarding tryout: records + transcribes, never types anywhere."""
+        rec = StubRecorder()
+        d = self.make(cfg, rec, StubBackend("tryout text"))
+        result = d.test_dictation(seconds=1.0)
+        assert result["ok"] and result["text"] == "tryout text"
+        assert result["duration_s"] >= 0.5
+        assert d.busy is False  # released even on success
+        assert rec.stopped == 1
+
+    def test_dictation_tryout_guarded_while_recording(self, cfg, quiet_ui):
+        rec = StubRecorder()
+        d = self.make(cfg, rec)
+        d.toggle()
+        result = d.test_dictation(seconds=1.0)
+        assert not result["ok"] and "recording" in result["error"]
+        d.cancel()
+        assert d.busy is False
+
+    def test_dictation_tryout_silence_reports_error(self, cfg, quiet_ui,
+                                                    tmp_path):
+        import wave as wave_mod
+
+        class SilentRecorder(StubRecorder):
+            def start(self, path):
+                self.path = path
+                with wave_mod.open(str(path), "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
+                    wf.writeframes(b"\x00\x00" * 16000)
+                self.started += 1
+
+        d = self.make(cfg, SilentRecorder())
+        result = d.test_dictation(seconds=1.0)
+        assert not result["ok"] and "silent" in result["error"]
+        assert d.busy is False
+
     def test_busy_guard_ignores_toggle(self, cfg, quiet_ui):
         rec = StubRecorder()
         d = self.make(cfg, rec)

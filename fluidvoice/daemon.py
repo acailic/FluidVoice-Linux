@@ -263,6 +263,7 @@ class Daemon:
                 log(f"WARN settings UI unavailable: {e}")
 
         self._start_tray()
+        self._maybe_first_run_onboard()
 
         ready = threading.Event()
         self._srv = control.serve(self.handle_request, ready=ready)
@@ -524,6 +525,8 @@ class Daemon:
             device = str(req.get("device", ""))
             self._set_device(device)
             return {"ok": True, "device": device}
+        if action == "test-dictation":
+            return self.test_dictation(float(req.get("seconds", 3.0)))
         return {"ok": False, "error": f"unknown action {action!r}"}
 
     # -- dictation -----------------------------------------------------------
@@ -715,6 +718,64 @@ class Daemon:
             self._tray_recording(False)
         log("cancelled")
         ui.notify("FluidVoice", "Cancelled", enabled=self.cfg["notifications"]["enabled"])
+
+    def _maybe_first_run_onboard(self) -> None:
+        """Open the setup page once on first launch (macOS parity: the app
+        opens onboarding before the first dictation)."""
+        try:
+            marker = paths.data_dir() / ".onboarded"
+            if marker.exists() or history_mod.tail(1):
+                return
+            port = self.webui.port if getattr(self, "webui", None) else None
+            if not port:
+                return
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("opened\n")  # once only, even if skipped
+            import subprocess
+            subprocess.Popen(["xdg-open", f"http://127.0.0.1:{port}/onboard"],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+            log("first run detected - opened the setup page")
+        except Exception as e:
+            log(f"WARN onboarding open failed: {e}")
+
+    def test_dictation(self, seconds: float = 3.0) -> dict:
+        """Onboarding tryout (upstream's real-dictation step): record a few
+        seconds and transcribe them WITHOUT typing anywhere."""
+        with self._lock:
+            if self.recording:
+                return {"ok": False, "error": "currently recording"}
+            if self.busy:
+                return {"ok": False, "error": "busy"}
+            self.busy = True
+        fd, tmp = tempfile.mkstemp(prefix="fluidvoice-onboard-", suffix=".wav")
+        os.close(fd)
+        try:
+            try:
+                self.recorder.start(Path(tmp))
+            except RecorderError as e:
+                return {"ok": False, "error": f"recorder error: {e}"}
+            time.sleep(max(1.0, min(seconds, 8.0)))
+            wav = self.recorder.stop()
+            if wav is None or not Path(wav).exists() \
+                    or Path(wav).stat().st_size < 200:
+                return {"ok": False,
+                        "error": "no audio captured (muted or wrong mic?)"}
+            duration = duration_seconds(Path(wav))
+            if is_silent(Path(wav)):
+                return {"ok": False, "duration_s": duration,
+                        "error": "audio was silent - is the mic muted?"}
+            backend = self._ensure_backend()
+            result = backend.transcribe(Path(wav),
+                                        self.cfg["general"]["language"]) or {}
+            return {"ok": True, "duration_s": round(duration, 1),
+                    "text": result.get("text", "")}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+            with self._lock:
+                self.busy = False
 
     def paste_last(self) -> tuple[bool, str | None]:
         """Re-type the most recent transcription (upstream paste-last hotkey)."""

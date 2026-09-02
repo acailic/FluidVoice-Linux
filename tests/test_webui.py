@@ -220,6 +220,39 @@ class TestWebUIAPI:
         resp = post(port, "/api/toggle", {})
         assert resp["ok"] and w.daemon.toggled == 1
 
+    def test_onboard_page_and_status(self, server, monkeypatch, tmp_path):
+        from fluidvoice import history
+        from fluidvoice.tray import list_microphones
+
+        monkeypatch.setattr(webui.paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr("fluidvoice.tray.list_microphones",
+                            lambda: [{"name": "a", "description": "Mic A",
+                                      "default": True}])
+        history.append({"ts": 1, "text": "already used"})
+        w, port = server
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/onboard",
+                                    timeout=5) as r:
+            assert "Welcome to FluidVoice" in r.read().decode()
+        s = get(port, "/api/onboard")
+        assert s["has_dictated"] is True
+        assert s["mic_default"] == "Mic A"
+        assert s["hotkey"] == "Right_Control"
+        assert "cancel_key" in s
+        post(port, "/api/onboard/done", {})
+        assert (tmp_path / ".onboarded").exists()
+
+    def test_test_dictation_passes_to_daemon(self, server):
+        w, port = server
+        calls = []
+
+        def fake_test(seconds=3.0):
+            calls.append(seconds)
+            return {"ok": True, "text": "hello", "duration_s": 1.0}
+
+        w.daemon.test_dictation = fake_test
+        resp = post(port, "/api/test-dictation", {"seconds": 2})
+        assert resp["ok"] and resp["text"] == "hello" and calls == [2.0]
+
     def test_unknown_route_404(self, server):
         w, port = server
         try:
