@@ -107,9 +107,11 @@ providers set `api_key_env = "FLUIDVOICE_API_KEY"` and export the variable
 | Settings UI with model picker | ✅ | ✅ local web UI (`fluidvoice settings`) |
 | Notch overlay / menu bar | ✅ | ➖ N/A on Linux; notifications today |
 
-See [docs/COMPARISON.md](docs/COMPARISON.md) for how this relates to other Linux
+See [docs/STATUS.md](docs/STATUS.md) for the full done/left ledger (verified
+by a 5-agent audit against the upstream Swift sources),
+[docs/COMPARISON.md](docs/COMPARISON.md) for how this relates to other Linux
 dictation tools (Handy, Vocalinux, nerd-dictation, …) and
-[docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
+[docs/ROADMAP.md](docs/ROADMAP.md) for the forward plan.
 
 ## Requirements
 
