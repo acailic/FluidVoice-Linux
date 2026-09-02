@@ -37,5 +37,8 @@ def audio_dir() -> Path:
 
 
 def socket_path() -> Path:
+    override = os.environ.get("FLUIDVOICE_SOCKET")
+    if override:
+        return Path(override)
     runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
     return Path(runtime) / "fluidvoice.sock"

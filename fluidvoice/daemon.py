@@ -262,8 +262,10 @@ class Daemon:
             except Exception as e:
                 log(f"WARN settings UI unavailable: {e}")
 
+        import os as _os
+        cfg_shown = _os.environ.get("FLUIDVOICE_CONFIG") or paths.config_file()
         log("ready - press the hotkey to dictate "
-            f"(or run `fluidvoice toggle`; config: {paths.config_file()})")
+            f"(or run `fluidvoice toggle`; config: {cfg_shown})")
 
         stop = threading.Event()
         signal.signal(signal.SIGTERM, lambda *_: stop.set())

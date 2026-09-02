@@ -177,12 +177,25 @@ dictionary = [ { triggers = ["miro board"], replacement = "Miro board" } ]
 mode = "auto"               # typed | paste | auto (paste for long texts)
 ```
 
-## Development
+## Development & testing
 
 ```bash
-.venv/bin/python -m pytest -m "not slow"   # unit tests (no network)
-.venv/bin/python -m pytest -m slow         # E2E: downloads tiny model + JFK sample
+.venv/bin/python -m pytest -m "not slow and not integration"  # unit: offline, fast
+.venv/bin/python -m pytest -m integration                     # real subsystems
+.venv/bin/python -m pytest                                    # everything (281 tests, ~40s)
 ```
+
+The test pyramid:
+
+| Layer | What it exercises | Count |
+|---|---|---|
+| Unit | processing engines, AI client (mocked transport), daemon state machine (stubs), insertion command construction, web UI API + security matrix | ~268 |
+| E2E (slow) | real whisper model transcribing the JFK sample | 2 |
+| Integration | real `pw-record` capture + raw→WAV, GPU transcription, streaming preview with the loaded model, a real daemon **subprocess** (socket control, settings web UI over HTTP incl. the CSRF-403 guard, toggle/cancel, clean shutdown), .deb extract + relocated-venv import, one-shot installer DRY_RUN download | 13 |
+
+Integration tests run against your real PipeWire/X11/CUDA environment and are
+isolated through `FLUIDVOICE_CONFIG` / `FLUIDVOICE_SOCKET` / `XDG_DATA_HOME`
+env overrides (the same overrides work for running multiple daemons).
 
 Layout: `fluidvoice/backends/` (speech engines) · `processing/` (fillers,
 dictionary, spoken punctuation) · `ai/` (prompts + OpenAI-compatible client) ·

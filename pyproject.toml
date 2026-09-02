@@ -37,4 +37,4 @@ include = ["fluidvoice*"]
 "fluidvoice" = ["assets/sfx/*"]
 
 [tool.pytest.ini_options]
-markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
+markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')", "integration: real-subsystem tests (mic, GPU, daemon process, network)"]
