@@ -254,6 +254,33 @@ class TestDaemon:
         d.cancel()
         assert rec.cancelled == 0
 
+    def test_hotkey_informed_of_recording_state(self, cfg, quiet_ui):
+        """Escape-cancel needs the grab only while recording; the daemon
+        must tell the hotkey listener when dictation starts and stops."""
+        rec = StubRecorder()
+        d = self.make(cfg, rec)
+        calls = []
+
+        class FakeHotkey:
+            def set_recording(self, active):
+                calls.append(active)
+
+        d._hotkey = FakeHotkey()
+        d.toggle()
+        d.cancel()
+        assert calls == [True, False]
+
+    def test_hotkey_informed_on_normal_stop(self, cfg, quiet_ui):
+        rec = StubRecorder()
+        d = self.make(cfg, rec)
+        calls = []
+        d._hotkey = type("H", (), {"set_recording":
+                                   staticmethod(lambda a: calls.append(a))})()
+        d.toggle()
+        d.toggle()
+        assert self.wait_done(d)
+        assert calls == [True, False]
+
     def test_busy_guard_ignores_toggle(self, cfg, quiet_ui):
         rec = StubRecorder()
         d = self.make(cfg, rec)

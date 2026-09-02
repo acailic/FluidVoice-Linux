@@ -466,8 +466,25 @@ class FluidOverlay:
                     break  # display died; future show() goes to notifications
                 delay = interval - (time.monotonic() - t0)
                 self._stop.wait(max(0.002, delay))
+            self._fade_out()  # Mac dismissal: quick fade, then unmap
         finally:
             self._teardown_display()
+
+    def _fade_out(self) -> None:
+        """Animate opacity down before unmapping (upstream scales+fades
+        the overlay away over ~0.2 s)."""
+        if self._win is None or self._renderer is None:
+            return
+        for alpha in (0.7, 0.45, 0.2, 0.0):
+            img, (w, h) = self._renderer.render(
+                self._levels.levels(), self._text,
+                processing=(self._state == "processing"),
+                phase=self._phase, alpha=alpha)
+            try:
+                self._blit(img, w, h, self._text)
+            except Exception:
+                break
+            time.sleep(1.0 / self.FPS)  # bounded ~130 ms; not stop-gated
 
     # -- per-frame ------------------------------------------------------------
 
@@ -490,7 +507,11 @@ class FluidOverlay:
 
         if self._win is None or self._win_size != (w, h):
             self._create_window(w, h)
+        self._blit(img, w, h, text)
 
+    def _blit(self, img, w: int, h: int, text: str | None) -> None:
+        """Push one frame into the (existing, correctly sized) window."""
+        X = self._X
         data = img.tobytes("raw", "BGRA")
         if len(data) > MAX_FRAME_BYTES:
             scale = math.sqrt(MAX_FRAME_BYTES / len(data))

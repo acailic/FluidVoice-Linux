@@ -304,6 +304,11 @@ class Daemon:
     def _tray_recording(self, recording: bool) -> None:
         if self._tray is not None:
             self._tray.set_recording(recording)
+        if self._hotkey is not None:
+            try:
+                self._hotkey.set_recording(recording)  # Escape grab while up
+            except Exception:
+                pass
 
     def _tray_tooltip(self) -> str:
         with self._lock:
@@ -376,7 +381,7 @@ class Daemon:
                 mode=hk.get("mode", "toggle"),
                 on_toggle=self.toggle,
                 on_cancel=self.cancel,
-                cancel_key=hk.get("cancel_key", ""),
+                cancel_key=hk.get("cancel_key", "Escape"),
             )
             self._hotkey.start()
             for line in self._hotkey.summary:

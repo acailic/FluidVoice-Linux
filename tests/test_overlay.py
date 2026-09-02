@@ -95,6 +95,18 @@ class TestPillPainting:
         assert out.endswith("words ")
         assert d.textlength(out, font=r._text_font) <= 300
 
+    def test_fade_alpha_darkens_frame(self):
+        r = PillRenderer()
+        full, _ = r.render([BAR_MIN_H] * BAR_COUNT, None, alpha=1.0)
+        half, _ = r.render([BAR_MIN_H] * BAR_COUNT, None, alpha=0.4)
+        m = PillRenderer.MARGIN
+        pw, ph, _ = r.inner_size(None)
+        region = (m, m, m + pw, m + ph)
+        max_alpha = lambda img: max(  # noqa: E731
+            img.getchannel("A").crop(region).getdata())
+        assert max_alpha(full) >= 250
+        assert max_alpha(half) <= 0.6 * max_alpha(full)
+
 
 class TestAudioLevels:
     def test_silence_stays_at_minimum(self):

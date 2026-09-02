@@ -32,6 +32,11 @@ MODIFIER_ONLY_KEYSYMS = {
     getattr(XK, "XK_ISO_Level5_Shift", None),
 } - {None}
 
+# Upstream macOS: the cancel shortcut (Escape) only acts while the overlay
+# is up - i.e. dictation in progress. Same here: the cancel key is grabbed
+# only while recording, so an idle daemon never swallows Escape.
+DEFAULT_CANCEL_KEY = "Escape"
+
 
 class HotkeyError(RuntimeError):
     pass
@@ -68,13 +73,13 @@ class HotkeyListener:
     """Grabs the hotkey and invokes callbacks from its own thread."""
 
     def __init__(self, key: str, modifiers: list[str], mode: str,
-                 on_toggle, on_cancel=None, cancel_key: str = "",
+                 on_toggle, on_cancel=None, cancel_key: str | None = None,
                  display_name: str | None = None):
         self.key = key
         self.mode = mode
         self.on_toggle = on_toggle
         self.on_cancel = on_cancel
-        self.cancel_key = (cancel_key or "").strip()
+        self.cancel_key = cancel_key
         self.display_name = display_name
         self._mods = sum(MODIFIER_MASKS.get(m, 0) for m in modifiers)
         self._thread: threading.Thread | None = None
@@ -83,6 +88,8 @@ class HotkeyListener:
         self._keycode = 0
         self._cancel_keycode: int | None = None
         self._escape_keycode: int | None = None
+        self._want_cancel = False   # recording active -> grab the cancel key
+        self._cancel_grabbed = False
         self._summary: list[str] = []
 
     # -- setup ---------------------------------------------------------------
@@ -108,14 +115,17 @@ class HotkeyListener:
         if not self._keycode:
             raise HotkeyError(f"key '{self.key}' has no keycode on this keymap")
         self._grab(self._keycode)
-        if self.cancel_key:
-            self._cancel_keycode = self._keycode_for(resolve_keysym(self.cancel_key))
-            if self._cancel_keycode:
-                self._grab(self._cancel_keycode)
+        # cancel_key: None/omitted -> macOS default (Escape); "" -> disabled
+        cancel = DEFAULT_CANCEL_KEY if self.cancel_key is None \
+            else self.cancel_key.strip()
+        self._cancel_keycode = self._keycode_for(resolve_keysym(cancel)) \
+            if cancel else None
+        self._cancel_grabbed = False
         self._escape_keycode = self._keycode_for(XK.XK_Escape)
         self._display.sync()
         self._summary = [f"hotkey {self.key} = keycode {self._keycode}, "
-                         f"modifiers {self._mods:#x}, mode {self.mode}"]
+                         f"modifiers {self._mods:#x}, mode {self.mode}, "
+                         f"cancel {cancel} while recording"]
         return self._summary
 
     # -- loop ----------------------------------------------------------------
@@ -147,6 +157,10 @@ class HotkeyListener:
             self.mode = "toggle"  # push-to-talk needs a non-modifier key
         try:
             while not self._stop_flag.is_set():
+                self._sync_cancel_grab()
+                if d.pending_events() == 0:
+                    self._stop_flag.wait(0.01)  # poll: responsive to grabs/stop
+                    continue
                 try:
                     event = d.next_event()
                 except Exception:
@@ -170,6 +184,28 @@ class HotkeyListener:
                 d.close()
             except Exception:
                 pass
+
+    def set_recording(self, active: bool) -> None:
+        """Tell the listener dictation started/stopped; the cancel key is
+        grabbed only while recording (macOS parity: Escape dismisses the
+        overlay and discards, and does nothing when idle)."""
+        self._want_cancel = bool(active)
+
+    def _sync_cancel_grab(self) -> None:
+        if self._display is None or not self._cancel_keycode:
+            return
+        if self._want_cancel == self._cancel_grabbed:
+            return
+        root = self._display.screen().root
+        try:
+            if self._want_cancel:
+                self._grab(self._cancel_keycode)
+            else:
+                root.ungrab_key(self._cancel_keycode, X.AnyModifier)
+            self._display.sync()
+            self._cancel_grabbed = self._want_cancel
+        except Exception:
+            pass  # best-effort; cancel via CLI still works
 
     def _hold_cycle(self, d: Display, keycode: int) -> None:
         """Push-to-talk: grab the keyboard until the hotkey is released.

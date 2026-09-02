@@ -123,9 +123,26 @@ class TestHotkeyListenerConstruction:
         listener = HotkeyListener("F9", [], "toggle", on_toggle=lambda: None,
                                   on_cancel=lambda: None, cancel_key="Escape")
         assert listener.cancel_key == "Escape"
-        assert HotkeyListener("F9", [], "toggle", on_toggle=lambda: None).cancel_key == ""
+        # omitted -> macOS default (Escape); "" -> explicitly disabled
+        assert HotkeyListener("F9", [], "toggle", on_toggle=lambda: None).cancel_key is None
+        assert HotkeyListener("F9", [], "toggle", on_toggle=lambda: None,
+                              cancel_key="").cancel_key == ""
 
     def test_modifier_mask_summed(self):
         from fluidvoice.hotkey import HotkeyListener, MODIFIER_MASKS
         listener = HotkeyListener("space", ["ctrl", "shift"], "hold", on_toggle=lambda: None)
         assert listener._mods == MODIFIER_MASKS["ctrl"] | MODIFIER_MASKS["shift"]
+
+    def test_set_recording_toggles_cancel_grab_state(self):
+        from fluidvoice.hotkey import HotkeyListener
+        listener = HotkeyListener("F9", [], "toggle", on_toggle=lambda: None,
+                                  cancel_key="Escape")
+        assert listener._want_cancel is False
+        listener.set_recording(True)
+        assert listener._want_cancel is True
+        listener.set_recording(False)
+        assert listener._want_cancel is False
+
+    def test_config_cancel_key_defaults_to_escape(self):
+        from fluidvoice.config import DEFAULTS
+        assert DEFAULTS["hotkey"]["cancel_key"] == "Escape"

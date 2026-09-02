@@ -46,6 +46,34 @@ class TestHotkeyLive:
         control.request("cancel")
         assert control.request("status")["recording"] is False
 
+    def test_escape_cancels_recording(self, daemon_with_hotkey):
+        # macOS parity: Escape while dictating discards it (the grab exists
+        # only during recording, so idle Escape is never swallowed).
+        # Retry like above: a previous test daemon may still hold the grab.
+        recording = False
+        for _ in range(3):
+            subprocess.run(["xdotool", "key", "F9"], check=True, timeout=5)
+            deadline = time.monotonic() + 1.2
+            while time.monotonic() < deadline:
+                if control.request("status")["recording"]:
+                    recording = True
+                    break
+                time.sleep(0.15)
+            if recording:
+                break
+        assert recording, "F9 grab did not fire within 3 attempts"
+        time.sleep(0.3)  # let the poll loop establish the Escape grab
+        subprocess.run(["xdotool", "key", "Escape"], check=True, timeout=5)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            status = control.request("status")
+            if not status["recording"]:
+                break
+            time.sleep(0.15)
+        status = control.request("status")
+        assert status["recording"] is False
+        assert status["ok"] is True  # daemon healthy after the cancel
+
     def test_daemon_survives_rapid_toggles(self, daemon_process):
         for _ in range(5):
             control.request("toggle")
