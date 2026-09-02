@@ -7,3 +7,8 @@ build/
 .pytest_cache/
 *.wav
 *.flac
+
+# sssf runtime
+adws/adw_data/sessions/
+adws/adw_data/sssf.db*
+.env
