@@ -1,0 +1,8 @@
+# Upstream FluidVoice (macOS) baseline — machine-readable pin.
+# Consumed by scripts/upstream-diff.sh; the human ledger is docs/UPSTREAM-TRACKING.md.
+# Update both together (see the "Tracking loop" section of the tracking doc).
+sha=b60a302197a2018a388a5d4416c78039dfe85647
+short=b60a302
+date=2026-09-01
+tag=v1.6.9
+checked=2026-09-02
