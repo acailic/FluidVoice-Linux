@@ -188,7 +188,9 @@ class WebUI:
             "mic_count": len(mics),
             "model": active,
             "hotkey": cfg.get("hotkey", {}).get("key", ""),
-            "cancel_key": cfg.get("hotkey", {}).get("cancel_key", "Escape"),
+            # resolved like the hotkey layer: "" (old templates) = Escape
+            "cancel_key": cfg.get("hotkey", {}).get("cancel_key", "")
+            or "Escape",
             "ai_enabled": bool(ai.get("enabled")),
             "ai_configured": bool(ai.get("api_key") or ai.get("base_url")),
         }
