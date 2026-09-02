@@ -285,21 +285,114 @@ class Daemon:
 
     def _start_tray(self) -> None:
         """Panel/tray icon (StatusNotifierItem): click toggles dictation,
-        right-click opens settings, tooltip shows state + hotkey."""
+        right-click opens the dropdown menu, tooltip shows state + hotkey."""
         if not self.cfg["general"].get("tray_enabled", True):
             return
         try:
             from .tray import TrayIcon
             tray = TrayIcon(on_activate=self.toggle,
                             on_secondary=self._open_settings,
-                            tooltip=self._tray_tooltip, log=log)
+                            tooltip=self._tray_tooltip,
+                            build_menu=self._build_tray_menu,
+                            log=log)
             if tray.start():
                 self._tray = tray
-                log("tray icon active (click = dictate, right-click = settings)")
+                log("tray icon active (click = dictate, right-click = menu)")
             else:
                 log("tray unavailable on this desktop - running headless")
         except Exception as e:
             log(f"WARN tray unavailable: {e}")
+
+    def _build_tray_menu(self) -> list:
+        """Native dropdown model, mirroring the macOS menu bar menu:
+        status, cancel, copy last transcript, settings, microphone, quit."""
+        with self._lock:
+            recording, busy = self.recording, self.busy
+        hk = self.cfg["hotkey"].get("key", "")
+        state = ("Recording…" if recording else
+                 "Processing…" if busy else "Ready to Record")
+        status = f"{state} ({hk})" if hk else state
+        text = (self.last_result or {}).get("text") or ""
+        if not text:
+            try:
+                entries = history_mod.tail(1)
+                text = entries[0].get("text", "") if entries else ""
+            except Exception:
+                text = ""
+        device = self.cfg["recording"].get("device", "")
+        mics = [{"kind": "check", "label": "Auto (system default)",
+                 "checked": not device,
+                 "action": lambda: self._set_device("")}]
+        from .tray import list_microphones
+        for m in list_microphones():
+            mics.append({"kind": "check", "label": m["description"],
+                         "checked": device == m["name"],
+                         "action": lambda n=m["name"]: self._set_device(n)})
+        return [
+            {"kind": "item", "label": status, "enabled": False},
+            {"kind": "item", "label": "Cancel Dictation (Esc)",
+             "enabled": recording, "action": self.cancel},
+            {"kind": "item", "label": "Copy Last Transcript",
+             "enabled": bool(text), "action": self._copy_last_transcript},
+            {"kind": "separator"},
+            {"kind": "item", "label": "Settings…", "action": self._open_settings},
+            {"kind": "item", "label": "Microphone", "children": mics},
+            {"kind": "separator"},
+            {"kind": "item", "label": "Quit Fluid Voice",
+             "action": self._quit_gracefully},
+        ]
+
+    def _copy_last_transcript(self) -> None:
+        text = (self.last_result or {}).get("text") or ""
+        if not text:
+            from . import history as history_mod
+            entries = history_mod.tail(1)
+            text = entries[0].get("text", "") if entries else ""
+        if not text:
+            ui.notify("FluidVoice", "Nothing to copy",
+                      enabled=self.cfg["notifications"]["enabled"])
+            return
+        import shutil
+        import subprocess
+        tool = next((t for t in ("xclip", "xsel", "wl-copy")
+                     if shutil.which(t)), None)
+        if not tool:
+            ui.notify("FluidVoice", "No clipboard tool found (install xclip)",
+                      enabled=self.cfg["notifications"]["enabled"])
+            return
+        args = ([tool, "-selection", "clipboard"] if tool == "xclip"
+                else [tool, "-clipboard", "-in"] if tool == "xsel"
+                else [tool])
+        try:
+            subprocess.run(args, input=text.encode(), check=True, timeout=3,
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            log(f"copied last transcript ({len(text)} chars)")
+        except Exception as e:
+            log(f"copy failed: {e}")
+
+    def _set_device(self, device: str) -> None:
+        with self._lock:
+            if self.recording or self.busy:
+                log("cannot switch microphone while dictating")
+                return
+            self.cfg["recording"]["device"] = device
+            try:
+                from .config import save_config
+                save_config(self.cfg)
+            except Exception as e:
+                log(f"WARN could not save microphone choice: {e}")
+            rcfg = self.cfg["recording"]
+            self.recorder = Recorder(command=rcfg.get("command", "auto"),
+                                     device=device,
+                                     sample_rate=rcfg.get("sample_rate", 16000))
+            log(f"microphone set to {device or 'auto'}")
+
+    def _quit_gracefully(self) -> None:
+        log("quit requested from menu")
+        import os
+        threading.Timer(0.1, lambda: os.kill(os.getpid(),
+                                             signal.SIGTERM)).start()
 
     def _tray_recording(self, recording: bool) -> None:
         if self._tray is not None:
@@ -421,6 +514,13 @@ class Daemon:
             return {"ok": True, "recording": self.recording, "busy": self.busy,
                     "backend": self.backend.name if self.backend else None,
                     "version": __version__, "webui_port": webui_port}
+        if action == "shutdown":
+            self._quit_gracefully()
+            return {"ok": True}
+        if action == "set-device":
+            device = str(req.get("device", ""))
+            self._set_device(device)
+            return {"ok": True, "device": device}
         return {"ok": False, "error": f"unknown action {action!r}"}
 
     # -- dictation -----------------------------------------------------------
@@ -500,7 +600,9 @@ class Daemon:
             if mode in ("auto", "overlay"):
                 # FluidOverlay itself falls back to notifications when the
                 # display/pill stack is unavailable.
-                display = FluidOverlay(raw_path=Path(raw_path))
+                display = FluidOverlay(
+                    raw_path=Path(raw_path),
+                    bottom_offset=int(rcfg.get("preview_bottom_offset", 64)))
                 actual = "overlay" if display.using_overlay else "notify"
             else:
                 display = NotifyPreview()

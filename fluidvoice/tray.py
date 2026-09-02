@@ -1,11 +1,12 @@
 """System tray icon (StatusNotifierItem / AppIndicator) - the Linux
-equivalent of the macOS menu bar icon.
+equivalent of the macOS menu bar icon, dropdown menu included.
 
 While the daemon runs, the FluidVoice icon sits in the panel (GNOME with
 the AppIndicator extension, KDE, XFCE, Budgie, ...). The tooltip reflects
 state and the configured hotkey; while recording the icon gets a red
-badge and the tooltip says so - an always-visible "the app is running"
-signal. Left click toggles dictation, right click opens the settings UI.
+badge. Left click toggles dictation; right click opens a native dropdown
+menu (com.canonical.dbusmenu) mirroring the macOS menu bar menu: status,
+cancel, copy last transcript, settings, microphone picker, quit.
 
 Everything is best-effort: without D-Bus, python-dbus, or a tray host the
 daemon just runs headless as before.
@@ -13,19 +14,73 @@ daemon just runs headless as before.
 from __future__ import annotations
 
 import os
+import re
+import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
 WATCHER = "org.kde.StatusNotifierWatcher"
 SNI = "org.kde.StatusNotifierItem"
 PROPS = "org.freedesktop.DBus.Properties"
+DBUSMENU = "com.canonical.dbusmenu"
 ITEM_PATH = "/StatusNotifierItem"
+MENU_PATH = "/MenuBar"
 
 SNI_ID = "fluidvoice"
 SNI_TITLE = "FluidVoice"
 
 TRAY_SIZE = 64  # px; hosts scale down to their panel size
+
+# menu item kinds understood by build_menu() models
+KIND_ITEM = "item"
+KIND_SEPARATOR = "separator"
+KIND_CHECK = "check"
+
+_MIC_CACHE_TTL = 5.0
+_mic_cache: tuple[float, list[dict]] = (0.0, [])
+
+
+def list_microphones(refresh: bool = False) -> list[dict]:
+    """Input sources via pactl (PipeWire/PulseAudio): [{"name",
+    "description", "default": bool}]. Monitor sources are excluded.
+    Cached briefly - it is called at menu-open time."""
+    global _mic_cache
+    now = time.monotonic()
+    if not refresh and _mic_cache[0] and now - _mic_cache[0] < _MIC_CACHE_TTL:
+        return _mic_cache[1]
+    mics: list[dict] = []
+    try:
+        out = subprocess.run(["pactl", "list", "sources"],
+                             capture_output=True, text=True, timeout=3).stdout
+        block: dict = {}
+        for line in out.splitlines():
+            line = line.strip()
+            if m := re.match(r"Source #\d+", line):
+                if block.get("name") and not block["name"].endswith(".monitor"):
+                    mics.append(block)
+                block = {}
+            elif line.startswith("Name: "):
+                block["name"] = line[6:]
+            elif line.startswith("Description: "):
+                block["description"] = line[13:]
+        if block.get("name") and not block["name"].endswith(".monitor"):
+            mics.append(block)
+        default = ""
+        try:
+            default = subprocess.run(["pactl", "get-default-source"],
+                                     capture_output=True, text=True,
+                                     timeout=3).stdout.strip()
+        except Exception:
+            pass
+        for m in mics:
+            m["default"] = m["name"] == default
+            m.setdefault("description", m["name"])
+    except Exception:
+        mics = []
+    _mic_cache = (now, mics)
+    return mics
 
 
 def _bus_name() -> str:
@@ -188,10 +243,127 @@ def _build_item_class(dbus, owner: "TrayIcon"):
                 "OverlayIconPixmap": empty,
                 "ToolTip": tip,
                 "ItemIsMenu": dbus.Boolean(False),
-                "Menu": dbus.ObjectPath("/"),
+                "Menu": dbus.ObjectPath(MENU_PATH),
             }
 
     return Item
+
+
+def _build_menu_class(dbus, owner: "TrayIcon"):
+    """Native dropdown menu (com.canonical.dbusmenu) mirroring the macOS
+    menu bar menu. The model is rebuilt on every GetLayout/AboutToShow, so
+    it always reflects live state; ids are stable within a layout only."""
+    import dbus.service
+
+    class Menu(dbus.service.Object):
+        def __init__(self, bus, owner: TrayIcon):
+            self._dbus = dbus
+            self._owner = owner
+            self._revision = 1
+            self._id_counter = 0
+            self._actions: dict[int, Callable] = {}
+            super().__init__(bus, MENU_PATH)
+
+        # -- model building -----------------------------------------------
+
+        def _node(self, item: dict):
+            self._id_counter += 1
+            iid = self._id_counter
+            kind = item.get("kind", KIND_ITEM)
+            props: dict = {}
+            if kind == KIND_SEPARATOR:
+                props["type"] = dbus.String("separator")
+                props["visible"] = dbus.Boolean(item.get("visible", True))
+            else:
+                props["label"] = dbus.String(item.get("label", ""))
+                props["visible"] = dbus.Boolean(item.get("visible", True))
+                props["enabled"] = dbus.Boolean(item.get("enabled", True))
+                if item.get("checked"):
+                    props["toggle-type"] = dbus.String("checkmark")
+                    props["toggle-state"] = dbus.Int32(1)
+                elif kind == KIND_CHECK:
+                    props["toggle-type"] = dbus.String("checkmark")
+                    props["toggle-state"] = dbus.Int32(0)
+            if item.get("action"):
+                self._actions[iid] = item["action"]
+            children = item.get("children") or []
+            kids = dbus.Array([self._node(c) for c in children], signature="v")
+            return dbus.Struct(
+                (dbus.Int32(iid), dbus.Dictionary(props, signature="sv"), kids),
+                signature="(ia{sv}av)")
+
+        def _root(self) -> tuple:
+            self._id_counter = 0
+            self._actions = {}
+            root_props = dbus.Dictionary(
+                {"children-display": dbus.String("submenu")}, signature="sv")
+            kids = dbus.Array([self._node(it) for it in self._owner.build_menu()],
+                              signature="v")
+            return dbus.Struct((dbus.Int32(0), root_props, kids),
+                               signature="(ia{sv}av)")
+
+        # -- com.canonical.dbusmenu ------------------------------------------
+
+        @dbus.service.method(DBUSMENU, in_signature="iias",
+                             out_signature="u(ia{sv}av)")
+        def GetLayout(self, parent_id, recursion_depth, property_list):
+            try:
+                return (dbus.UInt32(self._revision), self._root())
+            except Exception as e:  # always answer; a silent failure hangs hosts
+                self._owner._log(f"menu layout error: {e.__class__.__name__}: {e}")
+                raise dbus.DBusException(f"layout error: {e}")
+
+        @dbus.service.method(DBUSMENU, in_signature="i", out_signature="b")
+        def AboutToShow(self, item_id):
+            return True  # always re-pull: fresh state at every open
+
+        @dbus.service.method(DBUSMENU, in_signature="isvu", out_signature="")
+        def Event(self, item_id, event_id, data, timestamp):
+            if event_id != "clicked":
+                return
+            action = self._actions.get(int(item_id))
+            if action:
+                def _run():
+                    action()
+                    return False  # one-shot idle callback
+                self._owner._glib.idle_add(_run)
+
+        @dbus.service.method(DBUSMENU, in_signature="a(isvu)", out_signature="i")
+        def EventGroup(self, events):
+            for item_id, event_id, data, ts in events:
+                self.Event(item_id, event_id, data, ts)
+            return dbus.Int32(len(events))
+
+        @dbus.service.method(DBUSMENU, in_signature="aias", out_signature="a(ia{sv})")
+        def GetGroupProperties(self, ids, property_names):
+            # hosts only need this for push-updated sections; we always
+            # serve a fresh full layout instead
+            return dbus.Array([], signature="(ia{sv})")
+
+        @dbus.service.method(DBUSMENU, in_signature="is", out_signature="v")
+        def GetProperty(self, item_id, name):
+            return dbus.String("")
+
+        @dbus.service.method(PROPS, in_signature="ss", out_signature="v")
+        def Get(self, interface, prop):
+            if prop == "Version":
+                return dbus.UInt32(3)
+            raise dbus.DBusException(f"no such property {prop}",
+                                     name=f"{PROPS}.Error.InvalidArgs")
+
+        @dbus.service.method(PROPS, in_signature="s", out_signature="a{sv}")
+        def GetAll(self, interface):
+            return {"Version": dbus.UInt32(3)}
+
+        @dbus.service.signal(DBUSMENU, signature="ui")
+        def LayoutUpdated(self, revision, parent_id):
+            pass
+
+        def changed(self) -> None:
+            self._revision += 1
+            self.LayoutUpdated(self._revision, 0)
+
+    return Menu
 
 
 class TrayIcon:
@@ -201,16 +373,19 @@ class TrayIcon:
     def __init__(self, on_activate: Callable[[], None] | None = None,
                  on_secondary: Callable[[], None] | None = None,
                  tooltip: Callable[[], str] | None = None,
+                 build_menu: Callable[[], list] | None = None,
                  log: Callable[[str], None] = (lambda m: None)):
         self.on_activate = on_activate or (lambda: None)
         self.on_secondary = on_secondary or (lambda: None)
         self.tooltip = tooltip or (lambda: SNI_TITLE)
+        self.build_menu = build_menu or (lambda: [])
         self._log = log
         self.active = False
         self._recording = False
         self._lock = threading.Lock()
         self._loop = None
         self._item = None
+        self._menu = None
         self._bus = None
         self._pixmaps = render_pixmaps()
 
@@ -245,6 +420,8 @@ class TrayIcon:
             bus.request_name(_bus_name())
             item_cls = _build_item_class(dbus, self)
             self._item = item_cls(bus, self)
+            menu_cls = _build_menu_class(dbus, self)
+            self._menu = menu_cls(bus, self)
             # register with the host; re-register whenever a (new) watcher
             # appears - the shell may reload and drop us at any time
             self._register()
@@ -304,4 +481,6 @@ class TrayIcon:
             recording = self._recording
         if self._item is not None:
             self._item.refresh(recording, self.tooltip())
+        if self._menu is not None:
+            self._menu.changed()  # status line follows recording state
         return False

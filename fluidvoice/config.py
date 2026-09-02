@@ -49,6 +49,7 @@ DEFAULTS: dict[str, Any] = {
         "preview_mode": "auto",   # auto (pill, falls back) | overlay | notify
         "preview_interval": 1.2,   # seconds between partial passes
         "preview_min_audio": 1.0,  # seconds before the first partial
+        "preview_bottom_offset": 64,  # pill px above the screen bottom edge
     },
     "model": {
         "backend": "auto",  # auto | faster-whisper | whisper-torch | whisper.cpp
@@ -257,7 +258,8 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
     "recording": ["command", "device", "max_seconds", "skip_silent",
                   "first_pcm_timeout", "spoken_send_enabled", "spoken_send_phrase",
                   "spoken_send_key", "preview_enabled", "preview_mode",
-                  "preview_interval", "preview_min_audio"],
+                  "preview_interval", "preview_min_audio",
+                  "preview_bottom_offset"],
     "model": ["backend", "name", "device", "compute", "whispercpp_model"],
     "processing": ["remove_filler_words", "filler_words", "punctuation_enabled",
                    "punctuation_prefix", "dictionary", "gaav_enabled",

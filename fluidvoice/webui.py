@@ -162,6 +162,7 @@ class WebUI:
         ("recording", "first_pcm_timeout"): ("float", (0.0, 60.0)),
         ("recording", "preview_interval"): ("float", (0.3, 10.0)),
         ("recording", "preview_min_audio"): ("float", (0.3, 10.0)),
+        ("recording", "preview_bottom_offset"): ("int", (0, 400)),
         ("hotkey", "key"): ("str", 64),
         ("hotkey", "cancel_key"): ("str", 64),
         ("recording", "device"): ("str", 256),

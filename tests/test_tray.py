@@ -1,7 +1,8 @@
 """Tray icon tests (headless - no D-Bus session needed)."""
 from __future__ import annotations
 
-from fluidvoice.tray import TRAY_SIZE, TrayIcon, render_pixmaps
+from fluidvoice.tray import (TRAY_SIZE, KIND_CHECK, KIND_SEPARATOR,
+                             TrayIcon, list_microphones, render_pixmaps)
 
 
 class TestPixmaps:
@@ -30,6 +31,102 @@ class TestPixmaps:
         assert data[i] > 200  # opaque glyph at the center
 
 
+FAKE_PACTL_SOURCES = """\
+Source #41
+\tState: RUNNING
+\tName: alsa_input.usb-Cam.mono-fallback
+\tDescription: USB Cam Mono
+\tMonitor of Sink: n/a
+Source #42
+\tState: SUSPENDED
+\tName: alsa_output.monitor
+\tDescription: Monitor of Built-in Audio
+\tMonitor of Sink: alsa_output
+Source #43
+\tState: SUSPENDED
+\tName: alsa_input.pci.analog-stereo
+\tDescription: Built-in Analog
+"""
+
+
+class TestMicrophoneListing:
+    def test_parses_sources_and_skips_monitors(self, monkeypatch):
+        import subprocess as sp
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:2] == ["pactl", "list"]:
+                return type("R", (), {"stdout": FAKE_PACTL_SOURCES})()
+            if cmd[:2] == ["pactl", "get-default-source"]:
+                return type("R", (), {"stdout": "alsa_input.usb-Cam.mono-fallback\n"})()
+            raise FileNotFoundError(cmd)
+
+        monkeypatch.setattr(sp, "run", fake_run)
+        mics = list_microphones(refresh=True)
+        names = [m["name"] for m in mics]
+        assert names == ["alsa_input.usb-Cam.mono-fallback",
+                         "alsa_input.pci.analog-stereo"]
+        assert mics[0]["description"] == "USB Cam Mono"
+        assert mics[0]["default"] is True
+        assert mics[1]["default"] is False
+
+    def test_no_pactl_returns_empty(self, monkeypatch):
+        import subprocess as sp
+
+        def boom(*a, **k):
+            raise FileNotFoundError("pactl")
+
+        monkeypatch.setattr(sp, "run", boom)
+        assert list_microphones(refresh=True) == []
+
+
+class TestMenuModel:
+    def test_menu_model_shape(self):
+        """Status line + cancel (state-dependent) + copy-last + settings +
+        microphone submenu + quit, mirroring the macOS menu bar menu."""
+        import copy
+
+        import fluidvoice.daemon as dm
+        from fluidvoice.config import DEFAULTS
+        from tests.test_daemon import StubRecorder
+
+        d = dm.Daemon(copy.deepcopy(DEFAULTS), recorder=StubRecorder(),
+                      backend_factory=lambda c: None,
+                      use_hotkey=False, use_sounds=False)
+        menu = d._build_tray_menu()
+        labels = [i.get("label") for i in menu]
+        assert "Ready to Record (Right_Control)" in labels
+        cancel = next(i for i in menu if "Cancel Dictation" in i.get("label", ""))
+        assert cancel["enabled"] is False  # idle
+        mic = next(i for i in menu if i.get("label") == "Microphone")
+        assert mic["children"][0]["label"] == "Auto (system default)"
+        assert mic["children"][0]["kind"] == KIND_CHECK
+        assert any(i.get("kind") == KIND_SEPARATOR for i in menu)
+        assert "Quit Fluid Voice" in labels
+
+    def test_set_device_updates_config_and_recorder(self, monkeypatch):
+        import copy
+
+        import fluidvoice.config as config_mod
+        import fluidvoice.daemon as dm
+        from fluidvoice.config import DEFAULTS
+        from tests.test_daemon import StubRecorder
+
+        saved = {}
+        monkeypatch.setattr(config_mod, "save_config",
+                            lambda c, path=None: saved.update(c["recording"]))
+        d = dm.Daemon(copy.deepcopy(DEFAULTS), recorder=StubRecorder(),
+                      backend_factory=lambda c: None,
+                      use_hotkey=False, use_sounds=False)
+        d._set_device("alsa_input.usb-Cam.mono-fallback")
+        assert saved["device"] == "alsa_input.usb-Cam.mono-fallback"
+        assert d.recorder.device == "alsa_input.usb-Cam.mono-fallback"
+        assert "Auto (system default)" in [c["label"] for c in
+                                           next(i for i in d._build_tray_menu()
+                                                if i.get("label") == "Microphone")["children"]]
+        d._set_device("")
+        assert d.recorder.device == ""
+
+
 class TestFallback:
     def test_start_fails_cleanly_without_dbus(self, monkeypatch):
         import builtins
@@ -49,3 +146,4 @@ class TestFallback:
     def test_config_default_enabled(self):
         from fluidvoice.config import DEFAULTS
         assert DEFAULTS["general"]["tray_enabled"] is True
+        assert DEFAULTS["recording"]["preview_bottom_offset"] == 64
