@@ -1,5 +1,5 @@
-"""Model catalog + download cache probe (shared by the web UI today and
-the native GTK app; neutral home so webui.py can be deleted)."""
+"""Model catalog + download cache probe (shared by the native GTK app,
+CLI, and daemon)."""
 from __future__ import annotations
 
 from . import backends, paths

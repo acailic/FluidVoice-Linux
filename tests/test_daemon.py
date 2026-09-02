@@ -693,3 +693,46 @@ class TestSocketConfigActions:
         resp = d.handle_request({"action": "status"})
         assert "warmup" in resp and resp["warmup"]["running"] is False
         assert "active_model" in resp
+
+    def test_mics_action(self, cfg, quiet_ui, monkeypatch):
+        # daemon imports list_microphones inside the handler, so patch the source
+        monkeypatch.setattr("fluidvoice.tray.list_microphones",
+                            lambda: ["Default", "USB Mic"])
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: None,
+                      use_hotkey=False, use_sounds=False)
+        resp = d.handle_request({"action": "mics"})
+        assert resp == {"ok": True, "mics": ["Default", "USB Mic"]}
+
+    def test_select_model_failure_rolls_back(self, cfg, quiet_ui, tmp_path,
+                                             monkeypatch):
+        import time as _time
+
+        class FakeBroken:
+            name = "faster-whisper"
+
+            def __init__(self, c):
+                pass
+
+            def warmup(self):
+                raise RuntimeError("download exploded")
+
+        import fluidvoice.backends as backends_mod
+        monkeypatch.setattr(backends_mod, "load_backend", lambda c: FakeBroken(c))
+        import fluidvoice.config as config_mod
+        monkeypatch.setattr(config_mod, "save_config",
+                            lambda c, path=None: tmp_path / "c.toml")
+        cfg["model"]["name"] = "small"
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: None,
+                      use_hotkey=False, use_sounds=False)
+        keep = d.backend = StubBackend("x")
+        resp = d.handle_request({"action": "select-model", "name": "turbo"})
+        assert resp["ok"] and resp["model"] == "large-v3-turbo"
+        deadline = _time.monotonic() + 5
+        while d.warmup["running"] and _time.monotonic() < deadline:
+            _time.sleep(0.05)
+        assert d.warmup["running"] is False
+        assert d.warmup["error"]  # failure surfaced to the UI
+        assert d.cfg["model"]["name"] == "small"  # rolled back
+        assert d.backend is keep  # running backend untouched

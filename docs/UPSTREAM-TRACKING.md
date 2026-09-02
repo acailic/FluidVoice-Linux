@@ -89,7 +89,7 @@ new that Linux doesn't have" a one-command answer.
 | Upstream change | Linux | Notes |
 |---|---|---|
 | Overlay "custom cleanup styles" + streamlined dictation controls (6 commits) | ⏳ | our overlay exists; per-style labels/limits not ported |
-| Settings: split AI providers / cleanup styles; side-panel nav; simplified welcome | 🚧 | native Settings window (Preferences pages) covers the same knobs; richer provider profiles on the roadmap |
+| Settings: split AI providers / cleanup styles; side-panel nav; simplified welcome | ✅ | native Settings window (Adw Preferences pages) covers the same knobs — v1.1 adds dictionary/filler editors + language picker; richer upstream provider profiles remain on the roadmap |
 | Honor "Send Custom Prompt Only" for dictation-shortcut prompt overrides | ⏳ | shortcut prompt overrides not ported at all yet |
 | File transcription: chunked API uploads, `.opus`/`.oga` input | ⏳ | `fluidvoice transcribe` handles WAV; opus/oga + chunking not |
 | Spoken-send commands, quiet-countdown completion, terminal blocklist | ✅ / ⏳ | spoken-send shipped in our `a1390f5`; terminal blocklist ⏳ |
@@ -167,7 +167,7 @@ new that Linux doesn't have" a one-command answer.
 | Rebuilt Parakeet ("pretty much zero delay") | 🚧 | v0.4 model work |
 | Fluid Intelligence local AI | ➖ | substitute: any OpenAI-compatible endpoint ✅ |
 | Adaptive theming + compact toolbar switcher | ✅ | native GTK app (AdaptiveDialog-free PreferencesWindow, follows system theme) |
-| Refreshed onboarding (engine setup, tryout) | ✅ | `/onboard` web page opens once on first launch: mic/engine/hotkey checks + real 3s dictation tryout (nothing typed) |
+| Refreshed onboarding (engine setup, tryout) | ✅ | native onboarding window (`fluidvoice app --onboard`) opens once on first launch: mic/engine/hotkey checks + real 3s dictation tryout (nothing typed) |
 
 ---
 

@@ -432,6 +432,9 @@ class SettingsWindow(Adw.PreferencesWindow):
         else:
             self.warmup_spinner.stop()
             self.warmup_row.set_subtitle(f"active: {active or '—'}")
+        if st:  # about rows (daemon offline keeps the placeholder em-dash)
+            self.about_backend_row.set_subtitle(st.get("backend") or "—")
+            self.about_gpu_row.set_subtitle("yes" if st.get("cuda") else "no")
 
     def _active_model(self) -> str:
         name = str(self.cfg.get("model", {}).get("name", "auto"))
@@ -833,8 +836,12 @@ class SettingsWindow(Adw.PreferencesWindow):
         page = Adw.PreferencesPage(name="about", icon_name="help-about-symbolic", title="About")
         grp = Adw.PreferencesGroup(title="About")
         from .. import paths
+        grp.add(Adw.ActionRow(title="Version", subtitle=APP_VERSION))
+        self.about_backend_row = Adw.ActionRow(title="Backend", subtitle="—")
+        self.about_gpu_row = Adw.ActionRow(title="GPU (CUDA)", subtitle="—")
+        grp.add(self.about_backend_row)
+        grp.add(self.about_gpu_row)
         for title, value in (
-                ("Version", APP_VERSION),
                 ("Config file", str(paths.config_file())),
                 ("Control socket", str(paths.socket_path())),
                 ("History", str(paths.data_dir() / "history.jsonl"))):

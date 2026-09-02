@@ -1,6 +1,6 @@
 # FluidVoiceLinux — Status Ledger
 
-Last updated: 2026-09-02 · v0.1.0 · **235 automated tests** (233 offline + 2 E2E)
+Last updated: 2026-09-02 · v0.1.0 · **359 automated tests** (331 offline + 28 integration)
 · verified against upstream `altic-dev/FluidVoice` by a 5-agent audit
 (prompts/AI, punctuation rules, daemon pipeline, models, security).
 
@@ -115,12 +115,9 @@ matrix + upstream changelog with its refresh loop).
 ## 🚧 Left (see ROADMAP.md for details and upstream references)
 
 ### Near term — daily-driver polish (v0.2)
-- [ ] **Live streaming preview** overlay (rolling transcription while speaking).
 - [ ] **Rewrite/Write mode** — selection capture, edit prompts (already
       ported verbatim), dedicated hotkey.
 - [ ] Hold-mode key passthrough (other keys interrupt, not swallow).
-- [ ] Spoken-send ("send it" auto-stop + Enter with VAD countdown).
-- [ ] Per-app prompt sets and user-editable prompt profiles.
 - [ ] Per-model language selection (one global language today).
 
 ### Wayland parity (v0.3)
@@ -158,7 +155,7 @@ matrix + upstream changelog with its refresh loop).
 | Processing engines (punctuation/fillers/dictionary) | 60+ unit tests incl. upstream-fidelity cases |
 | AI client (params/endpoints/think-strip/retries) | unit tests with mocked transport + live Ollama session |
 | Daemon state machine & pipeline | stub-based tests (toggle/cancel/busy/watchdogs/races) |
-| Web UI API + security | endpoint tests + CSRF/rebinding/validation matrix + live curl checks |
+| Socket config actions (get/set-config, select-model) + apply_settings | unit (fake backend factory) + real-daemon socket integration |
 | Recorder / insertion / history / backends | stub or subprocess-mock tests |
 | End-to-end speech | JFK sample through GPU transcription (pytest `-m slow`) |
 | Live hardware loop | mic→GPU transcription via speaker playback; hotkey grab on X11; acoustic JFK transcription verified verbatim |

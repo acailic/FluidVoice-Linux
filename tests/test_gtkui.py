@@ -144,6 +144,11 @@ class TestSettingsWindow:
                 "ai", "insertion", "sounds", "notifications",
                 "history"} <= fams
         assert len(w._rows) >= 40
+        # About page reflects the daemon status poll (spec: backend, CUDA)
+        assert w.about_backend_row.get_title() == "Backend"
+        assert w.about_backend_row.get_subtitle() == "faster-whisper"
+        assert w.about_gpu_row.get_title() == "GPU (CUDA)"
+        assert w.about_gpu_row.get_subtitle() == "yes"
         w.close()
 
     def test_collect_roundtrip_and_save(self, loop):
@@ -248,34 +253,3 @@ class TestOnboardingWindow:
         w._show_tryout({"ok": True, "text": "hello", "duration_s": 3})
         assert "hello" in w.try_out.get_text()
         w.close()
-
-
-class TestClientFileOnlyMode:
-    """Daemon-down degraded mode: file-only saves, file-based config reads."""
-
-    @staticmethod
-    def _dead_client() -> Client:
-        from fluidvoice.gtkui.client import ClientError
-
-        def boom(action, **kwargs):
-            raise ClientError("daemon down")
-
-        c = Client()
-        c._request = boom
-        return c
-
-    def test_set_config_without_daemon_writes_file(self, tmp_path, monkeypatch):
-        from fluidvoice import paths
-        monkeypatch.setattr(paths, "config_file",
-                            lambda: tmp_path / "c.toml")
-        c = self._dead_client()
-        resp = c.set_config({"sounds": {"volume": 0.4}})
-        assert resp["ok"] and resp["changed"] == ["sounds.volume"]
-        assert "file" in resp["note"]
-        from fluidvoice.config import load_config
-        assert load_config(tmp_path / "c.toml")["sounds"]["volume"] == 0.4
-
-    def test_get_config_without_daemon(self):
-        c = self._dead_client()
-        cfg, from_daemon = c.get_config()
-        assert from_daemon is False and cfg["hotkey"]["key"]

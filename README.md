@@ -104,11 +104,9 @@ With the daemon stopped, History still works and Settings saves to the
 config file directly (applies on next daemon start).
 
 Everything it saves goes to the same `config.toml` (with a strict whitelist;
-API keys are never exposed through the UI — use the env var). The page is
-hardened against cross-site requests (Host/Origin checks, JSON-only POSTs,
-64 KB body cap) and the stored key is only ever attached to the endpoint host
-you saved — a website can't use it as an exfiltration relay. The config file
-is written with 0600 permissions.
+API keys are never exposed through the UI — use the env var). Settings talk
+to the daemon over the user-owned unix control socket — no network listener
+exists. The config file is written with 0600 permissions.
 
 ### Enable AI polish (optional)
 
