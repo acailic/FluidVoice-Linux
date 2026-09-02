@@ -49,6 +49,10 @@ class StubClient(Client):
         cfg = copy.deepcopy(DEFAULTS)
         cfg["ai"]["per_app_prompts"] = [
             {"apps": ["zed"], "instructions": "keep it terse"}]
+        cfg["processing"]["dictionary"] = [
+            {"triggers": ["miro board"], "replacement": "Miro board"}]
+        cfg["processing"]["filler_words"] = ["um", "uh", "eh"]
+        cfg["general"]["language"] = "sl"
         return cfg, True
 
     def set_config(self, body):
@@ -149,7 +153,7 @@ class TestSettingsWindow:
         w.present()
         pump(loop)
         body = w._collect()
-        assert body["general"]["language"] == DEFAULTS["general"]["language"]
+        assert body["general"]["language"] == "sl"  # from the stub cfg
         assert body["sounds"]["volume"] == 1.0
         assert body["hotkey"]["modifiers"] == []
         assert body["ai"]["per_app_prompts"] == [
@@ -176,6 +180,52 @@ class TestSettingsWindow:
         rules = w._collect_rules()
         assert {"apps": ["zed", "code"], "instructions": "be terse"} in rules
         assert {"apps": ["firefox"], "instructions": "bullets"} in rules
+        w.close()
+
+    def test_dictionary_and_filler_editing(self, loop):
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        c = StubClient()
+        w = SettingsWindow(client=c)
+        w.present()
+        pump(loop)
+        # loaded from cfg
+        assert len(w._dict_rows) == 1
+        body = w._collect()
+        assert body["processing"]["dictionary"] == [
+            {"triggers": ["miro board"], "replacement": "Miro board"}]
+        assert body["processing"]["filler_words"] == ["um", "uh", "eh"]
+        assert body["general"]["language"] == "sl"
+        # edit: add a word, change the filler list
+        w._add_dict_word({"triggers": ["k8s"], "replacement": "Kubernetes"})
+        w._dict_rows[0]["trig"].set_text("miro board, miro")
+        w._dict_rows[0]["repl"].set_text("Miro board")
+        w._rows[("processing", "filler_words")].row.set_text("um, ehm")
+        body = w._collect()
+        assert {"triggers": ["miro board", "miro"],
+                "replacement": "Miro board"} in body["processing"]["dictionary"]
+        assert {"triggers": ["k8s"], "replacement": "Kubernetes"} in \
+            body["processing"]["dictionary"]
+        assert body["processing"]["filler_words"] == ["um", "ehm"]
+        # removal prunes the edited (first) entry, keeps the rest
+        w._remove_dict_word(None, w._dict_rows[0])
+        remaining = w._collect()["processing"]["dictionary"]
+        assert {"triggers": ["miro board", "miro"],
+                "replacement": "Miro board"} not in remaining
+        assert remaining == [{"triggers": ["k8s"],
+                              "replacement": "Kubernetes"}]
+        w.close()
+
+    def test_unknown_language_stays_selectable(self, loop):
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        c = StubClient()
+        c.get_config = lambda: (dict(copy.deepcopy(DEFAULTS), general={
+            **copy.deepcopy(DEFAULTS)["general"], "language": "zz"}), True)
+        w = SettingsWindow(client=c)
+        w.present()
+        pump(loop)
+        values = w._combo_values[("general", "language")]
+        assert "zz" in values and "auto" in values
+        assert w._collect()["general"]["language"] == "zz"
         w.close()
 
     def test_key_capture_maps_to_config_names(self):

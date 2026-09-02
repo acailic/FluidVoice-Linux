@@ -24,6 +24,12 @@ _KEY_REMAP = {"Control_L": "Left_Control", "Control_R": "Right_Control",
               "Shift_L": "Left_Shift", "Shift_R": "Right_Shift",
               "Super_L": "Left_Super", "Super_R": "Right_Super"}
 
+# Whisper language codes offered in the picker (validation accepts any code;
+# a saved code not in this list is appended as an extra option on load)
+LANGUAGES = ["en", "de", "es", "fr", "it", "nl", "pl", "pt", "ru", "uk",
+             "sl", "sr", "hr", "bs", "cs", "sk", "sv", "da", "fi", "no",
+             "hu", "ro", "bg", "el", "tr", "zh", "ja", "ko", "ar", "hi"]
+
 
 class _SwitchProxy:
     """Adapter so plain Gtk.Switch rows (inside expanders) load/collect like
@@ -39,6 +45,20 @@ class _SwitchProxy:
 
     def get_active(self) -> bool:
         return self.switch.get_active()
+
+
+class _ListProxy:
+    """EntryRow-backed list<string> (comma-separated) for the field registry."""
+
+    def __init__(self, row: Adw.EntryRow):
+        self.row = row
+
+    def set_value(self, values) -> None:
+        self.row.set_text(", ".join(values or []))
+
+    def get_value(self) -> list:
+        return [v.strip() for v in self.row.get_text().split(",")
+                if v.strip()]
 
 
 class _InstructionRow(Adw.PreferencesRow):
@@ -67,6 +87,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._rows: dict[tuple[str, str], object] = {}
         self._combo_values: dict[tuple[str, str], list] = {}
         self._rule_rows: list[dict] = []  # per-app prompt editors
+        self._dict_rows: list[dict] = []  # custom-dictionary editors
         self._save_groups: list[Adw.PreferencesGroup] = []
         self._save_rows: list[Adw.ActionRow] = []
         self._model_rows: list[Adw.ActionRow] = []
@@ -154,6 +175,14 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._combo_values[(section, key)] = [v for _l, v in values]
         return row
 
+    def _refill_combo(self, section: str, key: str, values) -> None:
+        """Rebuild a combo's options (e.g. to append a saved unknown value)."""
+        model = Gtk.StringList()
+        for label, _v in values:
+            model.append(label)
+        self._rows[(section, key)].set_model(model)
+        self._combo_values[(section, key)] = [v for _l, v in values]
+
     def _spin(self, section, key, title, lo, hi, step, digits=0,
               subtitle="") -> Adw.SpinRow:
         adj = Gtk.Adjustment(value=lo, lower=lo, upper=hi, step_increment=step)
@@ -183,12 +212,21 @@ class SettingsWindow(Adw.PreferencesWindow):
                           "Daemon offline — file-only mode; changes apply on "
                           "next daemon start", 6)
         self._fill_mics()
+        lang = str(self.cfg.get("general", {}).get("language", "auto"))
+        if lang != "auto" and lang not in LANGUAGES:
+            # a saved code outside the common list stays selectable
+            self._refill_combo("general", "language",
+                               [("auto (detect)", "auto")]
+                               + [(c, c) for c in LANGUAGES]
+                               + [(f"{lang} (saved)", lang)])
         for (sec, key), row in self._rows.items():
             val = self.cfg.get(sec, {}).get(key, _default(sec, key))
             if isinstance(row, _SwitchProxy):
                 row.set_active(bool(val))
             elif isinstance(row, Adw.SwitchRow):
                 row.set_active(bool(val))
+            elif isinstance(row, _ListProxy):
+                row.set_value(val)
             elif isinstance(row, Adw.EntryRow):
                 row.set_text("" if val is None else str(val))
             elif isinstance(row, Adw.ComboRow):
@@ -201,6 +239,8 @@ class SettingsWindow(Adw.PreferencesWindow):
             tb.set_active(mod in (self.cfg.get("hotkey", {})
                                   .get("modifiers") or []))
         self._load_rules(self.cfg.get("ai", {}).get("per_app_prompts") or [])
+        self._load_dictionary(self.cfg.get("processing", {}).get("dictionary")
+                              or [])
         self._dirty = False
         self._loading = False
         self._sync_save_rows()
@@ -215,6 +255,8 @@ class SettingsWindow(Adw.PreferencesWindow):
                 val = row.get_active()
             elif isinstance(row, Adw.SwitchRow):
                 val = row.get_active()
+            elif isinstance(row, _ListProxy):
+                val = row.get_value()
             elif isinstance(row, Adw.EntryRow):
                 val = row.get_text().strip()
                 if not val:
@@ -232,6 +274,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         rules = self._collect_rules()
         if rules is not None:
             body.setdefault("ai", {})["per_app_prompts"] = rules
+        body.setdefault("processing", {})["dictionary"] = \
+            self._collect_dictionary()
         return body
 
     def save(self) -> bool:
@@ -300,7 +344,12 @@ class SettingsWindow(Adw.PreferencesWindow):
         page = Adw.PreferencesPage(name="general", icon_name="preferences-system-symbolic",
                                    title="General")
         grp = Adw.PreferencesGroup(title="General")
-        grp.add(self._entry("general", "language", "Language — auto, en, de, sl…"))
+        lang = self._combo("general", "language", "Language",
+                           [("auto (detect)", "auto")]
+                           + [(c, c) for c in LANGUAGES],
+                           subtitle="Whisper code the recognizer locks to")
+        self.lang_row = lang
+        grp.add(lang)
         grp.add(self._switch("general", "copy_to_clipboard",
                              "Copy transcriptions to clipboard",
                              "Every dictation also lands in the clipboard"))
@@ -528,6 +577,59 @@ class SettingsWindow(Adw.PreferencesWindow):
                            "and instructions)")
         return rules
 
+    # -- custom dictionary (upstream Custom Dictionary) ---------------------------
+
+    def _load_dictionary(self, entries: list) -> None:
+        for r in list(self._dict_rows):
+            self.dict_group.remove(r["exp"])
+        self._dict_rows = []
+        for entry in entries:
+            self._add_dict_word(entry)
+
+    def _add_dict_word(self, entry: dict) -> None:
+        exp = Adw.ExpanderRow(
+            title=", ".join(entry.get("triggers", [])) or "New word")
+        trig = Adw.EntryRow(title="Triggers (comma-separated)")
+        trig.set_text(", ".join(entry.get("triggers", [])))
+        repl = Adw.EntryRow(title="Replacement")
+        repl.set_text(str(entry.get("replacement", "")))
+        rm = Gtk.Button(icon_name="user-trash-symbolic",
+                        css_classes=["flat", "destructive-action"],
+                        tooltip_text="Remove this word")
+        exp.add_suffix(rm)
+        exp.add_row(trig)
+        exp.add_row(repl)
+        ref = {"exp": exp, "trig": trig, "repl": repl}
+        rm.connect("clicked", self._remove_dict_word, ref)
+
+        def sync_title(*_):
+            exp.set_title(trig.get_text().strip() or "New word")
+            self._touch()
+        trig.connect("changed", sync_title)
+        repl.connect("changed", lambda *_: self._touch())
+        self._dict_rows.append(ref)
+        self.dict_group.add(exp)
+        exp.set_expanded(not entry.get("triggers"))
+
+    def _remove_dict_word(self, _btn, ref: dict) -> None:
+        self.dict_group.remove(ref["exp"])
+        self._dict_rows.remove(ref)
+        self._touch()
+
+    def _collect_dictionary(self) -> list:
+        entries = []
+        for r in self._dict_rows:
+            triggers = [t.strip() for t in r["trig"].get_text().split(",")
+                        if t.strip()]
+            replacement = r["repl"].get_text().strip()
+            if triggers and replacement:
+                entries.append({"triggers": triggers,
+                                "replacement": replacement})
+            elif triggers or replacement:
+                self.toast("Incomplete dictionary word skipped (needs "
+                           "triggers and a replacement)")
+        return entries
+
     # -- dictation page -----------------------------------------------------------------
 
     def _build_dictation(self) -> None:
@@ -603,6 +705,10 @@ class SettingsWindow(Adw.PreferencesWindow):
         polish.add(self._switch("processing", "remove_filler_words",
                                 "Remove filler words",
                                 "um, uh, hmm… before punctuation"))
+        fillers = Adw.EntryRow(title="Filler words (comma-separated)")
+        fillers.connect("changed", lambda *_: self._touch())
+        self._rows[("processing", "filler_words")] = _ListProxy(fillers)
+        polish.add(fillers)
         polish.add(self._switch("processing", "punctuation_enabled",
                                 "Spoken punctuation", '"literal comma" → ,'))
         polish.add(self._entry("processing", "punctuation_prefix",
@@ -631,6 +737,16 @@ class SettingsWindow(Adw.PreferencesWindow):
                                   ("ctrl+enter", "ctrl+enter")]))
         polish.add(send)
         page.add(polish)
+
+        self.dict_group = Adw.PreferencesGroup(
+            title="Custom dictionary",
+            description='Phrases replaced on insert — "miro board" → "Miro board"')
+        add_w = Adw.ActionRow(title="Add word")
+        add_w_btn = Gtk.Button(icon_name="list-add-symbolic", css_classes=["flat"])
+        add_w_btn.connect("clicked", lambda *_: self._add_dict_word({}))
+        add_w.add_suffix(add_w_btn)
+        self.dict_group.add(add_w)
+        page.add(self.dict_group)
 
         ins = Adw.PreferencesGroup(title="Insertion",
                                    description="How typed text reaches your apps")
