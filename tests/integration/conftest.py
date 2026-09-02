@@ -34,10 +34,6 @@ enabled = false
 
 [history]
 save = true
-
-[server]
-enabled = true
-port = 0
 """
 
 
@@ -53,6 +49,8 @@ def isolated_env(tmp_path, monkeypatch):
     # control socket through its own override instead
     monkeypatch.setenv("FLUIDVOICE_SOCKET", str(tmp_path / "run" / "fluidvoice.sock"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    # test daemons must never launch the GUI (onboarding/tray app spawns)
+    monkeypatch.setenv("FLUIDVOICE_NO_APP_SPAWN", "1")
     return cfg
 
 

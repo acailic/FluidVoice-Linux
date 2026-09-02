@@ -7,13 +7,15 @@ import shutil
 from . import __version__, backends, paths
 
 
-def _daemon_webui_port() -> int | None:
+def _gtk_available() -> bool:
     try:
-        from . import control
-        resp = control.request("status")
-        return resp.get("webui_port")
-    except Exception:
-        return None
+        import gi
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Adw", "1")
+        from gi.repository import Adw, Gtk  # noqa: F401
+        return True
+    except (ImportError, ValueError):
+        return False
 
 
 def run() -> int:
@@ -62,9 +64,12 @@ def run() -> int:
 
     print(f"\ncontrol socket: {paths.socket_path()} "
           f"({'alive' if paths.socket_path().exists() else 'daemon not running'})")
-    print(f"settings UI: http://127.0.0.1:{port} (`fluidvoice settings`)"
-          if (port := _daemon_webui_port()) else
-          "settings UI: daemon not running or server.enabled=false")
+    if _gtk_available():
+        print("settings app: GTK 4 + libadwaita OK (`fluidvoice app`)")
+    else:
+        print("settings app: GTK 4 / libadwaita missing - install with\n"
+              "  apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1")
+        ok = False
 
     print("\nresult:", "ready" if ok else "see warnings above")
     return 0 if ok else 1

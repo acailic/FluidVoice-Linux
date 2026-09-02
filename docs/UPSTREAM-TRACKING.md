@@ -73,7 +73,7 @@ new that Linux doesn't have" a one-command answer.
 | Menu bar + notch overlay | ✅ (equivalent) | tray/panel icon via StatusNotifierItem (`tray.py`): click = toggle, right-click = settings, recording badge, tooltip w/ hotkey; notch ➖ N/A |
 | Audio history (budget, retention) | ✅ | history JSONL + GB budget; searchable History page w/ inline replay, delete, clear; ZIP export ⏳ |
 | Today-usage stats | ⏳ | not started |
-| Adaptive light/dark theming | ➖ | settings web UI is plain by design |
+| Adaptive light/dark theming | ✅ | native GTK window follows the system theme |
 | Auto-updates + beta channel | ⏳ | today: .deb / GitHub releases; AUR/nix on roadmap |
 | Mic priority list, Bluetooth auto-switch | ⏳ | roadmap: input-device monitoring |
 | Speaker labeling (diarization) for file transcription | ⏳ | not started; timestamps/JSON export would come with it |
@@ -89,7 +89,7 @@ new that Linux doesn't have" a one-command answer.
 | Upstream change | Linux | Notes |
 |---|---|---|
 | Overlay "custom cleanup styles" + streamlined dictation controls (6 commits) | ⏳ | our overlay exists; per-style labels/limits not ported |
-| Settings: split AI providers / cleanup styles; side-panel nav; simplified welcome | ➖ | macOS settings chrome; our web UI covers the same knobs |
+| Settings: split AI providers / cleanup styles; side-panel nav; simplified welcome | 🚧 | native Settings window (Preferences pages) covers the same knobs; richer provider profiles on the roadmap |
 | Honor "Send Custom Prompt Only" for dictation-shortcut prompt overrides | ⏳ | shortcut prompt overrides not ported at all yet |
 | File transcription: chunked API uploads, `.opus`/`.oga` input | ⏳ | `fluidvoice transcribe` handles WAV; opus/oga + chunking not |
 | Spoken-send commands, quiet-countdown completion, terminal blocklist | ✅ / ⏳ | spoken-send shipped in our `a1390f5`; terminal blocklist ⏳ |
@@ -166,7 +166,7 @@ new that Linux doesn't have" a one-command answer.
 |---|---|---|
 | Rebuilt Parakeet ("pretty much zero delay") | 🚧 | v0.4 model work |
 | Fluid Intelligence local AI | ➖ | substitute: any OpenAI-compatible endpoint ✅ |
-| Adaptive theming + compact toolbar switcher | ➖ | N/A for the web settings UI |
+| Adaptive theming + compact toolbar switcher | ✅ | native GTK app (AdaptiveDialog-free PreferencesWindow, follows system theme) |
 | Refreshed onboarding (engine setup, tryout) | ✅ | `/onboard` web page opens once on first launch: mic/engine/hotkey checks + real 3s dictation tryout (nothing typed) |
 
 ---

@@ -44,7 +44,13 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("config", help="show/init the config file")
     p.add_argument("action", nargs="?", default="path", choices=["path", "init", "print"])
 
-    p = sub.add_parser("settings", help="open the settings web UI in a browser")
+    p = sub.add_parser("settings",
+                       help="open the native Settings window (alias of `app --open settings`)")
+    p = sub.add_parser("app", help="open the native GTK app (History/Settings)")
+    p.add_argument("--open", choices=["history", "settings"], default="history",
+                   help="window to raise (default: history)")
+    p.add_argument("--onboard", action="store_true",
+                   help="run the first-run onboarding flow")
     sub.add_parser("doctor", help="environment check")
 
     args = parser.parse_args(argv)
@@ -110,26 +116,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "settings":
-        from . import control
-        import shutil
-        import subprocess
-        try:
-            resp = control.request("status")
-            port = resp.get("webui_port")
-        except control.ControlError as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 1
-        if not port:
-            print("settings UI is disabled (server.enabled=false) or the daemon "
-                  "failed to start it", file=sys.stderr)
-            return 1
-        url = f"http://127.0.0.1:{port}"
-        print(url)
-        opener = shutil.which("xdg-open")
-        if opener:
-            subprocess.Popen([opener, url], stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
-        return 0
+        # Kept for the .desktop entry (Exec=fluidvoice settings): opens the
+        # native window now that the web UI is retired.
+        from .gtkui.application import run as run_app
+        return run_app(["--open", "settings"])
+
+    if args.cmd == "app":
+        from .gtkui.application import run as run_app
+        return run_app(["--open", args.open] + (["--onboard"] if args.onboard else []))
 
     if args.cmd == "doctor":
         return doctor_mod.run()

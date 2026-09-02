@@ -517,3 +517,179 @@ class TestShortAudioPadding:
         pipe = dm.DictationPipeline(cfg, CapBackend(), inserter=lambda t, c: "typed")
         pipe.run(wav, None)
         assert seen["duration"] >= 1.0
+
+
+class TestApplyConfig:
+    """Settings saves reach the running daemon: hotkeys re-grabbed, recorder
+    rebuilt, tray toggled - failures surface as UI errors, not crashes."""
+
+    def _daemon(self):
+        return dm.Daemon(cfg=copy.deepcopy(DEFAULTS), recorder=StubRecorder(),
+                         use_hotkey=False, use_sounds=False)
+
+    def test_hotkey_restart_stops_old_and_restarts(self, monkeypatch):
+        d = self._daemon()
+        d.use_hotkey = True
+        stopped = []
+
+        class FakeListener:
+            def stop(self):
+                stopped.append(1)
+
+        d._hotkey = FakeListener()
+        d._rewrite_hotkey = FakeListener()
+        started = []
+        monkeypatch.setattr(d, "_start_hotkey", lambda: started.append(1) or None)
+        out = d.apply_config(["hotkey.key", "hotkey.cancel_key"])
+        assert stopped == [1, 1] and started == [1]
+        assert out == {"applied": ["hotkeys"], "errors": []}
+
+    def test_hotkey_restart_surfaces_failure(self, monkeypatch):
+        d = self._daemon()
+        d.use_hotkey = True
+        monkeypatch.setattr(d, "_start_hotkey",
+                            lambda: "unknown key name 'zz'")
+        out = d.apply_config(["hotkey.key"])
+        assert out["applied"] == []
+        assert "re-bind failed" in out["errors"][0]
+
+    def test_hotkey_noop_when_hotkeys_disabled(self):
+        d = self._daemon()
+        out = d.apply_config(["hotkey.key"])  # use_hotkey=False -> early return
+        assert out == {"applied": ["hotkeys"], "errors": []}
+
+    def test_recorder_rebuilt_on_command_change(self):
+        d = self._daemon()
+        old = d.recorder
+        d.cfg["recording"]["command"] = "parecord"
+        out = d.apply_config(["recording.command"])
+        assert out["applied"] == ["recorder"]
+        assert d.recorder is not old
+        assert d.recorder.command == "parecord"
+
+    def test_device_change_refused_while_dictating(self):
+        d = self._daemon()
+        d.cfg["recording"]["device"] = "alsa_input.pci"
+        d.recording = True
+        out = d.apply_config(["recording.device"])
+        assert out["applied"] == []
+        assert "dictating" in out["errors"][0]
+
+    def test_tray_start_when_enabled(self, monkeypatch):
+        d = self._daemon()
+        d.cfg["general"]["tray_enabled"] = True
+        calls = []
+        monkeypatch.setattr(d, "_start_tray", lambda: calls.append(1))
+        out = d.apply_config(["general.tray_enabled"])
+        assert out["applied"] == ["tray"] and calls == [1]
+
+    def test_tray_stop_when_disabled(self):
+        d = self._daemon()
+        d.cfg["general"]["tray_enabled"] = False
+        stopped = []
+
+        class FakeTray:
+            def stop(self):
+                stopped.append(1)
+
+        d._tray = FakeTray()
+        out = d.apply_config(["general.tray_enabled"])
+        assert out["applied"] == ["tray"] and stopped == [1]
+        assert d._tray is None
+
+
+class TestSocketConfigActions:
+    """Native-app spec: get/set-config + select-model over the control
+    socket (validated by config.apply_settings - one source of truth)."""
+
+    def make(self2, cfg, recorder):  # noqa: N805 - reuse TestDaemon.make style
+        pass
+
+    def test_get_config_masks_api_key(self, cfg, quiet_ui):
+        cfg["ai"]["api_key"] = "super-secret"
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: None,
+                      use_hotkey=False, use_sounds=False)
+        resp = d.handle_request({"action": "get-config"})
+        assert resp["ok"]
+        assert resp["config"]["ai"]["api_key"] is True  # bool, never the value
+
+    def test_set_config_validates_and_applies(self, cfg, quiet_ui, tmp_path,
+                                              monkeypatch):
+        import fluidvoice.config as config_mod
+        monkeypatch.setattr(config_mod, "save_config",
+                            lambda c, path=None: tmp_path / "c.toml")
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: None,
+                      use_hotkey=False, use_sounds=False)
+        resp = d.handle_request({"action": "set-config", "config": {
+            "general": {"language": "de"},
+            "recording": {"max_seconds": "not-a-number"},
+            "bogus": {"x": 1},
+        }})
+        assert resp["ok"] is False
+        assert "general.language" in resp["changed"]
+        assert "recording.max_seconds" in resp["rejected"]
+        assert d.cfg["general"]["language"] == "de"
+        assert "bogus" not in resp["changed"] + resp["rejected"]  # silently ignored section
+
+    def test_set_config_restart_note(self, cfg, quiet_ui, tmp_path, monkeypatch):
+        import fluidvoice.config as config_mod
+        monkeypatch.setattr(config_mod, "save_config",
+                            lambda c, path=None: tmp_path / "c.toml")
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: None,
+                      use_hotkey=False, use_sounds=False)
+        resp = d.handle_request({"action": "set-config", "config": {
+            "model": {"eager_warmup": False}}})
+        assert "model.eager_warmup" in resp["restart_required"]
+        assert "restart" in resp["note"]
+
+    def test_select_model_unknown_rejected(self, cfg, quiet_ui):
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: None,
+                      use_hotkey=False, use_sounds=False)
+        resp = d.handle_request({"action": "select-model", "name": "gpt-5"})
+        assert resp["ok"] is False and "unknown model" in resp["error"]
+
+    def test_select_model_warms_and_hot_swaps(self, cfg, quiet_ui, tmp_path,
+                                              monkeypatch):
+        import time as _time
+
+        made = []
+
+        class FakeWarmable:
+            name = "faster-whisper"
+
+            def __init__(self, c):
+                made.append(c["model"]["name"])
+
+            def warmup(self):
+                pass
+
+        import fluidvoice.backends as backends_mod
+        monkeypatch.setattr(backends_mod, "load_backend", lambda c: FakeWarmable(c))
+        import fluidvoice.config as config_mod
+        monkeypatch.setattr(config_mod, "save_config",
+                            lambda c, path=None: tmp_path / "c.toml")
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: None,
+                      use_hotkey=False, use_sounds=False)
+        resp = d.handle_request({"action": "select-model", "name": "turbo"})
+        assert resp["ok"] and resp["model"] == "large-v3-turbo"
+        deadline = _time.monotonic() + 5
+        while d.warmup["running"] and _time.monotonic() < deadline:
+            _time.sleep(0.05)
+        assert d.warmup["error"] is None
+        assert made == ["large-v3-turbo"]
+        assert d.cfg["model"]["name"] == "large-v3-turbo"
+        assert d.backend.name == "faster-whisper"  # swapped instance
+
+    def test_status_includes_warmup(self, cfg, quiet_ui):
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: None,
+                      use_hotkey=False, use_sounds=False)
+        d.backend = StubBackend("x")
+        resp = d.handle_request({"action": "status"})
+        assert "warmup" in resp and resp["warmup"]["running"] is False
+        assert "active_model" in resp

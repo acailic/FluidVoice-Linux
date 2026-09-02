@@ -9,5 +9,5 @@ Icon=fluidvoice-linux
 Terminal=false
 Categories=Utility;Accessibility;
 Keywords=voice;dictation;speech;whisper;asr;stt;
-StartupNotify=false
+StartupNotify=true
 X-GNOMEUsesNotifications=true

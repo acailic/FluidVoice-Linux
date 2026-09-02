@@ -57,8 +57,9 @@ sources. Everything below is a known, classified gap — see
 - [ ] Custom-dictionary auto-learning from post-insertion corrections.
 - [ ] Audio-history ZIP export; local usage stats.
 - [ ] Auto-updater (or packaged releases); onboarding.
-- [x] Settings UI — done as a local web page served by the daemon
-      (`fluidvoice settings`, 127.0.0.1 only, CSRF/DNS-rebinding hardened).
+- [x] Settings UI — done as a native GTK 4 + libadwaita app
+      (`fluidvoice app`; History/Settings/onboarding windows over the
+      control socket; the former web page was retired with it).
 - [ ] Local HTTP API (upstream exposes an OpenAI-style server on 127.0.0.1
       with /v1/transcribe, /v1/history, dictionary routes).
 - [ ] Packaging: AUR, nix, pipx (deb is DONE - packaging/build-deb.sh: launcher entry, login autostart, icon, systemd unit, bundled venv).

@@ -82,14 +82,14 @@ Version: $VERSION-$PKGVER
 Section: sound
 Priority: optional
 Architecture: $ARCH
-Depends: python3 (>= 3.11), pipewire-audio-utils | pulseaudio-utils, xdotool, xclip, libnotify-bin
+Depends: python3 (>= 3.11), pipewire-audio-utils | pulseaudio-utils, xdotool, xclip, libnotify-bin, python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1
 Recommends: pulseaudio-utils
 Maintainer: FluidVoiceLinux contributors
 Description: FluidVoice for Linux - local voice dictation with AI polish
  Community port of altic-dev/FluidVoice behavior to Linux: global hotkey,
  on-device Whisper transcription (CUDA when available), spoken punctuation
  commands, optional AI polish via any OpenAI-compatible endpoint, text
- typed into the focused app. Ships a settings UI at 127.0.0.1:47735.
+ typed into the focused app. Native GTK settings/history app (fluidvoice app).
 CONTROL
 
 cat > "$STAGE/DEBIAN/postinst" <<'POST'

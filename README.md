@@ -52,7 +52,7 @@ Grab a specific version from the [releases page](https://github.com/acailic/Flui
 Building it yourself instead: `git clone … -b linux && ./packaging/build-deb.sh`.
 
 What you get after install (log out/in once):
-- **App launcher entry "FluidVoice"** (opens the settings UI) with its own icon
+- **App launcher entry "FluidVoice"** (opens the native app) with its own icon
 - **Daemon autostarts at login** (XDG autostart; a systemd user unit is also
   provided: `systemctl --user enable --now fluidvoice`)
 - `fluidvoice` available everywhere in PATH (`fluidvoice doctor`, `toggle`,
@@ -75,7 +75,8 @@ Press **Right Ctrl**, speak, press **Right Ctrl** again. Done.
 Useful commands:
 
 ```bash
-fluidvoice settings          # open the settings web UI (model picker, AI config...)
+fluidvoice app               # native GTK app: History, Settings, onboarding
+fluidvoice settings          # same app, Settings window (alias)
 fluidvoice doctor            # environment check
 fluidvoice toggle            # CLI trigger (bind to a DE shortcut on Wayland)
 fluidvoice cancel            # abort a recording
@@ -85,18 +86,22 @@ fluidvoice history -n 10
 fluidvoice config init       # write ~/.config/fluidvoice/config.toml
 ```
 
-### Settings UI
+### Native app
 
-`fluidvoice settings` opens a local web page (127.0.0.1 only, served by the
-daemon) that mirrors the macOS app's settings window:
+`fluidvoice app` opens a native GTK 4 / libadwaita app (single instance;
+follows your system theme) that mirrors the macOS app's windows:
 
-- **Speech models** — cards for tiny → large-v3-turbo with sizes and download
-  state; one click switches (and downloads) the active model.
-- **AI polish** — enable/configure any OpenAI-compatible endpoint with a
-  live "Test connection" button.
-- **Dictation** — hotkey, mode, language, insertion strategy, filler/punctuation
-  toggles.
-- **History** — searchable in the web UI (`fluidvoice settings` → History): filter by text/app, replay retained audio, copy, delete.
+- **History** (main window) — live status header, search, copy/delete,
+  inline audio replay for retained recordings.
+- **Settings** — General / Models (one-click switch + download) / AI polish
+  (any OpenAI-compatible endpoint, live Test connection, per-app prompts) /
+  Dictation (hotkeys with press-to-capture, mic picker, live-preview sizes,
+  spoken send) / History. Saving hot-applies what the daemon can take live
+  (hotkey re-grab, recorder/tray/model rebuild) and says what needs a restart.
+- **Onboarding** — opens once on first launch with a real 3-second tryout.
+
+With the daemon stopped, History still works and Settings saves to the
+config file directly (applies on next daemon start).
 
 Everything it saves goes to the same `config.toml` (with a strict whitelist;
 API keys are never exposed through the UI — use the env var). The page is
@@ -133,8 +138,8 @@ providers set `api_key_env = "FLUIDVOICE_API_KEY"` and export the variable
 | Write/Rewrite selected text | ✅ (⌥R) | ✅ dedicated rewrite hotkey |
 | Command mode (voice → terminal agent) | ✅ | 🚧 roadmap |
 | Per-app prompt sets | ✅ | 🚧 roadmap (app hint is already captured) |
-| Settings UI with model picker | ✅ | ✅ local web UI (`fluidvoice settings`) + History page |
-| Onboarding (setup + tryout) | ✅ | ✅ opens once on first launch (`/onboard`) |
+| Settings UI with model picker | ✅ | ✅ native GTK app (`fluidvoice app`): Settings + History windows |
+| Onboarding (setup + tryout) | ✅ | ✅ opens once on first launch (`fluidvoice app --onboard`) |
 | Overlay sizes (pill/small/medium/large) | ✅ | ✅ `recording.preview_overlay_size` |
 | Notch overlay / menu bar | ✅ | ✅ tray/panel icon (StatusNotifierItem): click = dictate, state badge, tooltip with hotkey |
 
@@ -200,9 +205,9 @@ The test pyramid:
 
 | Layer | What it exercises | Count |
 |---|---|---|
-| Unit | processing engines, AI client (mocked transport), daemon state machine (stubs), insertion command construction, web UI API + security matrix | ~268 |
+| Unit | processing engines, AI client (mocked transport), daemon state machine (stubs), insertion command construction, config validation (apply_settings), GTK app offscreen smoke tests | ~268 |
 | E2E (slow) | real whisper model transcribing the JFK sample | 2 |
-| Integration | real `pw-record` capture + raw→WAV, GPU transcription, streaming preview with the loaded model, a real daemon **subprocess** (socket control, settings web UI over HTTP incl. the CSRF-403 guard, toggle/cancel, clean shutdown), live X11 hotkey grab + overlay pixel proof, real CLI invocations (doctor/transcribe/history/config), live AI polish + rewrite against local Ollama (skipped when absent), .deb extract + relocated-venv import, one-shot installer DRY_RUN download | 27 |
+| Integration | real `pw-record` capture + raw→WAV, GPU transcription, streaming preview with the loaded model, a real daemon **subprocess** (socket control incl. get/set-config + select-model, toggle/cancel, clean shutdown), live X11 hotkey grab + overlay pixel proof, real CLI invocations (doctor/transcribe/history/config), live AI polish + rewrite against local Ollama (skipped when absent), .deb extract + relocated-venv import, one-shot installer DRY_RUN download | 27 |
 
 Integration tests run against your real PipeWire/X11/CUDA environment and are
 isolated through `FLUIDVOICE_CONFIG` / `FLUIDVOICE_SOCKET` / `XDG_DATA_HOME`

@@ -21,9 +21,12 @@ from . import __version__, backends, control, insertion, ui
 from . import history as history_mod
 from . import paths
 from .ai.client import AIClient, AIError
+from .ai.prompts import default_dictation_prompt
 from .audio_utils import duration_seconds, is_silent
 from .config import load_config
+from .media import MediaController
 from .processing import post_process
+from .processing.per_app import match_app_prompt, system_prompt_for
 from .recorder import Recorder, RecorderError
 
 
@@ -66,12 +69,20 @@ class DictationPipeline:
     def _transcribe(self, wav: Path) -> dict:
         return self.backend.transcribe(wav, language=self.cfg["general"]["language"])
 
-    def _polish(self, text: str) -> tuple[str, bool]:
-        """Returns (text, ai_used) - falls back to the raw text on AI errors."""
+    def _polish(self, text: str, app_hint: str | None = None) -> tuple[str, bool]:
+        """Returns (text, ai_used) - falls back to the raw text on AI errors.
+        Per-app prompt rules (upstream per-app prompt sets) extend the
+        dictation prompt when the target app matches."""
         if not self.cfg["ai"].get("enabled"):
             return text, False
         polisher = self.polisher or AIClient(self.cfg).polish
+        instructions = match_app_prompt(
+            self.cfg["ai"].get("per_app_prompts", []), app_hint)
         try:
+            if instructions and self.polisher is None:
+                prompt = system_prompt_for(default_dictation_prompt(),
+                                           instructions)
+                return polisher(text, system_prompt=prompt), True
             return polisher(text), True
         except AIError as e:
             self.log(f"AI polish failed ({e}); using raw transcription")
@@ -169,7 +180,7 @@ class DictationPipeline:
             text = post_process(raw, self.cfg, app_hint=app_hint)
             if mode == "rewrite":
                 return self._rewrite(text, rewrite_context, raw, duration, wav)
-            polished, ai_used = self._polish(text)
+            polished, ai_used = self._polish(text, app_hint=app_hint)
             polished = self._after_ai_formatting(polished)
             strategy = self._insert(polished)
             if self._pending_send_key:
@@ -214,11 +225,13 @@ class Daemon:
         self._preview: Any = None
         self._closing_display: Any = None
         self._tray: Any = None
+        self._media = MediaController(log=log)
+        self.warmup: dict = {"running": False, "error": None, "model": None}
+        self._warmup_lock = threading.Lock()
         self._lock = threading.Lock()
         self._hotkey = None
         self._rewrite_hotkey = None
         self._srv: Any = None
-        self.webui: Any = None
         self._process_thread: threading.Thread | None = None
 
     # -- lifecycle -----------------------------------------------------------
@@ -251,16 +264,6 @@ class Daemon:
 
         if self.use_hotkey:
             self._start_hotkey()
-
-        self.webui = None
-        if self.cfg.get("server", {}).get("enabled", True):
-            try:
-                from .webui import WebUI
-                self.webui = WebUI(daemon=self, cfg=self.cfg)
-                port = self.webui.start()
-                log(f"settings UI: http://127.0.0.1:{port} (`fluidvoice settings`)")
-            except Exception as e:
-                log(f"WARN settings UI unavailable: {e}")
 
         self._start_tray()
         self._maybe_first_run_onboard()
@@ -386,10 +389,7 @@ class Daemon:
                 save_config(self.cfg)
             except Exception as e:
                 log(f"WARN could not save microphone choice: {e}")
-            rcfg = self.cfg["recording"]
-            self.recorder = Recorder(command=rcfg.get("command", "auto"),
-                                     device=device,
-                                     sample_rate=rcfg.get("sample_rate", 16000))
+            self._rebuild_recorder()
             log(f"microphone set to {device or 'auto'}")
 
     def _quit_gracefully(self) -> None:
@@ -419,18 +419,23 @@ class Daemon:
         hint = f" — {hk} or click to dictate" if hk else ""
         return f"FluidVoice: {state}{hint}"
 
-    def _open_settings(self, page: str = "") -> None:
-        port = self.webui.port if getattr(self, "webui", None) else None
-        if not port:
-            log("tray: settings UI not running")
-            return
+    def _spawn_app(self, *args: str) -> None:
+        """Launch the native GTK app in the same interpreter/env as us."""
+        import os
         import subprocess
+        if os.environ.get("FLUIDVOICE_NO_APP_SPAWN"):  # tests/headless
+            log(f"app launch suppressed ({' '.join(args) or 'app'})")
+            return
         try:
-            subprocess.Popen(["xdg-open", f"http://127.0.0.1:{port}{page}"],
+            subprocess.Popen([sys.executable, "-m", "fluidvoice", "app", *args],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            log(f"tray: opened {page or 'settings'}")
         except Exception as e:
-            log(f"tray: could not open settings: {e}")
+            log(f"WARN could not launch the app: {e}")
+
+    def _open_settings(self, page: str = "") -> None:
+        target = (page or "").strip("/") or "settings"
+        self._spawn_app("--open", "history" if target == "history" else "settings")
+        log(f"tray: opened {target}")
 
     def shutdown(self) -> None:
         log("shutting down")
@@ -453,8 +458,6 @@ class Daemon:
             except OSError:
                 pass
             paths.socket_path().unlink(missing_ok=True)
-        if self.webui:
-            self.webui.stop()
 
     @staticmethod
     def _sweep_stale_tmp() -> None:
@@ -469,8 +472,10 @@ class Daemon:
             except OSError:
                 pass
 
-    def _start_hotkey(self) -> None:
+    def _start_hotkey(self) -> str | None:
+        """(Re-)grab the dictation hotkeys. Returns the first error, if any."""
         from .hotkey import HotkeyError, HotkeyListener
+        error = None
         hk = self.cfg["hotkey"]
         try:
             self._hotkey = HotkeyListener(
@@ -484,10 +489,12 @@ class Daemon:
             for line in self._hotkey.summary:
                 log(line)
         except HotkeyError as e:
+            self._hotkey = None
             log(f"WARN hotkey unavailable: {e}")
             ui.notify("FluidVoice", f"Hotkey unavailable: {e}\n"
                       "Bind a DE shortcut to `fluidvoice toggle` instead.",
                       timeout_ms=8000, enabled=self.cfg["notifications"]["enabled"])
+            error = str(e)
         rewrite_key = (hk.get("rewrite_key") or "").strip()
         if rewrite_key:
             try:
@@ -498,7 +505,125 @@ class Daemon:
                 for line in self._rewrite_hotkey.summary:
                     log(line)
             except HotkeyError as e:
+                self._rewrite_hotkey = None
                 log(f"WARN rewrite hotkey unavailable: {e}")
+                error = error or str(e)
+        return error
+
+    def _restart_hotkey(self) -> None:
+        """Re-grab the hotkeys after a settings change (frees the old grabs
+        first). Raises on failure so the settings UI can surface it."""
+        if not self.use_hotkey:
+            return
+        for attr in ("_hotkey", "_rewrite_hotkey"):
+            listener = getattr(self, attr)
+            if listener is not None:
+                try:
+                    listener.stop()
+                except Exception as e:
+                    log(f"WARN stopping old hotkey grab failed: {e}")
+                setattr(self, attr, None)
+        error = self._start_hotkey()
+        if error:
+            raise RuntimeError(f"hotkey re-bind failed: {error} "
+                               "(fix the key and save again)")
+
+    def _rebuild_recorder(self) -> None:
+        """New Recorder from the current cfg (command/device changed)."""
+        rcfg = self.cfg["recording"]
+        self.recorder = Recorder(command=rcfg.get("command", "auto"),
+                                 device=rcfg.get("device", ""),
+                                 sample_rate=rcfg.get("sample_rate", 16000))
+
+    def _apply_tray_setting(self) -> None:
+        enabled = self.cfg["general"].get("tray_enabled", True)
+        if not enabled and self._tray is not None:
+            self._tray.stop()
+            self._tray = None
+            log("tray disabled (settings change)")
+        elif enabled and self._tray is None:
+            self._start_tray()
+
+    def apply_config(self, changed: list[str]) -> dict:
+        """Apply just-saved settings that need more than a cfg-dict update
+        (everything else is read from cfg at use time, or needs a daemon
+        restart - see config.RESTART_REQUIRED). Feedback for the settings UI."""
+        applied: list[str] = []
+        errors: list[str] = []
+
+        def _try(area: str, fn) -> None:
+            try:
+                fn()
+                applied.append(area)
+            except Exception as e:  # noqa: BLE001 - surfaced in the UI
+                errors.append(f"{area}: {e}")
+
+        if any(k.startswith("hotkey.") for k in changed):
+            _try("hotkeys", self._restart_hotkey)
+        if "recording.command" in changed:
+            _try("recorder", self._rebuild_recorder)
+        if "recording.device" in changed:
+            def _set_mic() -> None:
+                with self._lock:
+                    if self.recording or self.busy:
+                        raise RuntimeError("cannot switch microphone while dictating")
+                self._set_device(self.cfg["recording"].get("device", ""))
+            _try("microphone", _set_mic)
+        if "general.tray_enabled" in changed:
+            _try("tray", self._apply_tray_setting)
+        return {"applied": applied, "errors": errors}
+
+    # -- model warmup / hot-swap (native-app spec: select-model over socket) ----
+
+    def _active_model_name(self) -> str:
+        name = str(self.cfg["model"].get("name", "auto"))
+        if name in ("", "auto"):
+            return backends.resolve_model_name(self.cfg["model"]["name"])
+        return backends.ALIASES.get(name.lower(), name.lower())
+
+    def select_model(self, name: str) -> dict:
+        name = backends.ALIASES.get(name.strip().lower(), name.strip().lower())
+        if name not in backends.FW_MODEL_REPOS:
+            return {"ok": False, "error": f"unknown model '{name}'"}
+        with self._warmup_lock:
+            if self.warmup["running"]:
+                return {"ok": False, "error": "a model download is already running"}
+            self.warmup = {"running": True, "error": None, "model": name}
+        threading.Thread(target=self._warmup_model, args=(name,),
+                         daemon=True).start()
+        return {"ok": True, "model": name}
+
+    def _warmup_model(self, name: str) -> None:
+        previous = self.cfg["model"].get("name", "auto")
+        try:
+            cfg = dict(self.cfg)
+            cfg["model"] = dict(self.cfg["model"], name=name)
+            backend = backends.load_backend(cfg)
+            backend.warmup()
+            # Persist the choice only after the model is verified usable.
+            self.cfg["model"]["name"] = name
+            from .config import save_config
+            save_config(self.cfg)
+            self.backend = backend  # hot-swap into the running daemon
+            self.warmup = {"running": False, "error": None, "model": name}
+            log(f"model switched to {name} (hot-swapped)")
+        except Exception as e:  # noqa: BLE001 - surfaced in the UI
+            self.cfg["model"]["name"] = previous  # rollback, keep usable
+            self.warmup = {"running": False, "error": str(e)[:300], "model": name}
+            log(f"model switch to {name} failed: {e}")
+
+    def _reload_backend(self) -> None:
+        """Rebuild the loaded backend after engine-option changes. Config
+        stays saved even on failure - the running backend keeps its last
+        working state until the next try."""
+        model = self._active_model_name()
+        try:
+            backend = backends.load_backend(self.cfg)
+            backend.warmup()
+            self.backend = backend
+            self.warmup = {"running": False, "error": None, "model": model}
+        except Exception as e:  # noqa: BLE001 - surfaced in the UI
+            self.warmup = {"running": False, "error": str(e)[:300], "model": model}
 
     # -- control protocol ----------------------------------------------------
 
@@ -514,10 +639,11 @@ class Daemon:
             ok, detail = self.paste_last()
             return {"ok": ok, "error": detail if not ok else None}
         if action == "status":
-            webui_port = self.webui.port if getattr(self, "webui", None) else None
             return {"ok": True, "recording": self.recording, "busy": self.busy,
                     "backend": self.backend.name if self.backend else None,
-                    "version": __version__, "webui_port": webui_port}
+                    "version": __version__,
+                    "warmup": dict(self.warmup),
+                    "active_model": self._active_model_name()}
         if action == "shutdown":
             self._quit_gracefully()
             return {"ok": True}
@@ -527,7 +653,54 @@ class Daemon:
             return {"ok": True, "device": device}
         if action == "test-dictation":
             return self.test_dictation(float(req.get("seconds", 3.0)))
+        if action == "get-config":
+            from .config import mask_secrets
+            return {"ok": True, "config": mask_secrets(self.cfg)}
+        if action == "set-config":
+            return self._set_config(req.get("config") or {})
+        if action == "select-model":
+            return self.select_model(str(req.get("name", "")))
+        if action == "mics":
+            from .tray import list_microphones
+            return {"ok": True, "mics": list_microphones()}
         return {"ok": False, "error": f"unknown action {action!r}"}
+
+    def _set_config(self, body: dict) -> dict:
+        """Validated settings merge over the socket (native-app spec):
+        validate -> save -> hot-apply what the daemon can take live."""
+        from .config import (RESTART_REQUIRED, ENGINE_KEYS, apply_settings,
+                             save_config)
+        changed, rejected = apply_settings(self.cfg, body)
+        if changed:
+            try:
+                save_config(self.cfg)
+            except Exception as e:
+                return {"ok": False, "error": f"save failed: {e}",
+                        "changed": [], "rejected": rejected}
+        restart = [k for k in changed if k in RESTART_REQUIRED]
+        live = [k for k in changed if k not in RESTART_REQUIRED]
+        applied: list[str] = []
+        errors: list[str] = []
+        if live:
+            feedback = self.apply_config(live)
+            applied = feedback.get("applied", [])
+            errors = feedback.get("errors", [])
+        if any(k in ENGINE_KEYS for k in changed):
+            with self._warmup_lock:
+                if not self.warmup["running"]:
+                    self.warmup = {"running": True, "error": None,
+                                   "model": self._active_model_name()}
+                    threading.Thread(target=self._reload_backend,
+                                     daemon=True).start()
+                    applied.append("speech engine (reloading)")
+                else:
+                    errors.append("speech engine: a load is already running - "
+                                  "save again once it finishes")
+        note = ("restart the daemon to apply: " + ", ".join(restart)) \
+            if restart else ""
+        return {"ok": not rejected, "changed": changed, "rejected": rejected,
+                "restart_required": restart, "applied": applied,
+                "errors": errors, "note": note}
 
     # -- dictation -----------------------------------------------------------
 
@@ -572,6 +745,8 @@ class Daemon:
             return
         self.recording = True
         self._tray_recording(True)
+        if self.cfg["recording"].get("pause_media", True):
+            self._media.pause_if_playing()  # upstream: only what's playing
         ui.play_sound("start", self.cfg["sounds"]["volume"],
                       self.use_sounds and self.cfg["sounds"]["enabled"])
         log(f"recording (app={self._app_hint or '?'})")
@@ -665,6 +840,7 @@ class Daemon:
                 self.recorder.cancel()
                 self.recording = False
                 self._tray_recording(False)
+                self._media.resume()
                 msg = "microphone produced no audio (muted or wrong device?) - stopped"
                 log(msg)
                 ui.notify("FluidVoice", msg, enabled=self.cfg["notifications"]["enabled"])
@@ -690,6 +866,7 @@ class Daemon:
         wav = self.recorder.stop()
         self.recording = False
         self._tray_recording(False)
+        self._media.resume()
         if wav is None or not Path(wav).exists() or Path(wav).stat().st_size < 200:
             log("no audio captured")
             self._close_closing_display()
@@ -716,25 +893,20 @@ class Daemon:
             self.recorder.cancel()
             self.recording = False
             self._tray_recording(False)
+            self._media.resume()
         log("cancelled")
         ui.notify("FluidVoice", "Cancelled", enabled=self.cfg["notifications"]["enabled"])
 
     def _maybe_first_run_onboard(self) -> None:
-        """Open the setup page once on first launch (macOS parity: the app
-        opens onboarding before the first dictation)."""
+        """Open onboarding once on first launch (macOS parity: the app opens
+        onboarding before the first dictation)."""
         try:
             marker = paths.data_dir() / ".onboarded"
             if marker.exists() or history_mod.tail(1):
                 return
-            port = self.webui.port if getattr(self, "webui", None) else None
-            if not port:
-                return
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text("opened\n")  # once only, even if skipped
-            import subprocess
-            subprocess.Popen(["xdg-open", f"http://127.0.0.1:{port}/onboard"],
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
+            self._spawn_app("--onboard")
             log("first run detected - opened the setup page")
         except Exception as e:
             log(f"WARN onboarding open failed: {e}")

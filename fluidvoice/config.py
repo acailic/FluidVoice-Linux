@@ -51,6 +51,7 @@ DEFAULTS: dict[str, Any] = {
         "preview_min_audio": 1.0,  # seconds before the first partial
         "preview_bottom_offset": 64,  # pill px above the screen bottom edge
         "preview_overlay_size": "medium",  # pill | small | medium | large (macOS sizes)
+        "pause_media": True,  # pause MPRIS players while dictating (resume after)
     },
     "model": {
         "backend": "auto",  # auto | faster-whisper | whisper-torch | whisper.cpp
@@ -81,6 +82,8 @@ DEFAULTS: dict[str, Any] = {
         "temperature": 0.2,
         "timeout_seconds": 120,
         "max_retries": 3,
+        # upstream per-app prompt sets: [{"apps": ["zed"], "instructions": "..."}]
+        "per_app_prompts": [],
     },
     "insertion": {
         "mode": "typed",  # typed | paste | auto (typed, falls back to paste)
@@ -98,11 +101,6 @@ DEFAULTS: dict[str, Any] = {
         "save": True,
         "save_audio": False,
         "audio_budget_gb": 4.0,
-    },
-    "server": {
-        # Local settings web UI (127.0.0.1 only) - like upstream's local API
-        "enabled": True,
-        "port": 47735,
     },
 }
 
@@ -124,6 +122,7 @@ def load_config(path: Path | None = None) -> dict:
     if path.exists():
         with open(path, "rb") as fh:
             user = tomllib.load(fh)
+    user.pop("server", None)  # retired web UI section (spec: strip silently)
     return _deep_merge(DEFAULTS, user)
 
 
@@ -218,11 +217,6 @@ enabled = true
 save = true
 save_audio = false
 audio_budget_gb = 4.0
-
-[server]
-# Local settings web UI (`fluidvoice settings`), bound to 127.0.0.1 only
-enabled = true
-port = 47735
 """
 
 
@@ -261,19 +255,19 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
                   "first_pcm_timeout", "spoken_send_enabled", "spoken_send_phrase",
                   "spoken_send_key", "preview_enabled", "preview_mode",
                   "preview_interval", "preview_min_audio",
-                  "preview_bottom_offset", "preview_overlay_size"],
+                  "preview_bottom_offset", "preview_overlay_size",
+                  "pause_media"],
     "model": ["backend", "name", "device", "compute", "whispercpp_model",
               "eager_warmup"],
     "processing": ["remove_filler_words", "filler_words", "punctuation_enabled",
                    "punctuation_prefix", "dictionary", "gaav_enabled",
                    "gaav_lowercase_first", "gaav_remove_trailing_period"],
     "ai": ["enabled", "base_url", "model", "api_key", "api_key_env", "temperature",
-           "timeout_seconds", "max_retries"],
+           "timeout_seconds", "max_retries", "per_app_prompts"],
     "insertion": ["mode", "type_delay_ms", "paste_threshold_chars"],
     "sounds": ["enabled", "volume"],
     "notifications": ["enabled"],
     "history": ["save", "save_audio", "audio_budget_gb"],
-    "server": ["enabled", "port"],
 }
 
 
@@ -320,3 +314,193 @@ def save_config(cfg: dict, path: Path | None = None) -> Path:
         lines.append("")
     _write_private(path, "\n".join(lines).rstrip() + "\n")
     return path
+
+
+# ---------------------------------------------------------------------------
+# Settings validation - single source of truth for the web UI, the socket
+# API and the native GTK app (moved from webui.py per the native-app spec).
+# ---------------------------------------------------------------------------
+
+# (section, key) -> ("float"|"int", (lo, hi)) | ("str", max_len)
+SETTING_RANGES: dict[tuple[str, str], Any] = {
+    ("recording", "first_pcm_timeout"): ("float", (0.0, 60.0)),
+    ("recording", "preview_interval"): ("float", (0.3, 10.0)),
+    ("recording", "preview_min_audio"): ("float", (0.3, 10.0)),
+    ("recording", "preview_bottom_offset"): ("int", (0, 400)),
+    ("hotkey", "key"): ("str", 64),
+    ("hotkey", "cancel_key"): ("str", 64),
+    ("hotkey", "rewrite_key"): ("str", 64),
+    ("recording", "device"): ("str", 256),
+    ("recording", "max_seconds"): ("float", (1, 86400)),
+    ("recording", "spoken_send_phrase"): ("str", 64),
+    ("model", "whispercpp_model"): ("str", 4096),
+    ("processing", "punctuation_prefix"): ("str", 32),
+    ("ai", "base_url"): ("str", 2048),
+    ("ai", "model"): ("str", 256),
+    ("ai", "api_key_env"): ("str", 128),
+    ("ai", "temperature"): ("float", (0.0, 2.0)),
+    ("ai", "timeout_seconds"): ("float", (1, 3600)),
+    ("insertion", "type_delay_ms"): ("int", (0, 1000)),
+    ("insertion", "paste_threshold_chars"): ("int", (1, 1_000_000)),
+    ("sounds", "volume"): ("float", (0.0, 1.0)),
+    ("history", "audio_budget_gb"): ("float", (0.0, 1024.0)),
+}
+SETTING_ENUMS: dict[tuple[str, str], set] = {
+    ("recording", "preview_mode"): {"auto", "notify", "overlay"},
+    ("recording", "preview_overlay_size"): {"pill", "small", "medium", "large"},
+    ("hotkey", "mode"): {"toggle", "hold"},
+    ("model", "backend"): {"auto", "faster-whisper", "whisper-torch", "whisper.cpp"},
+    ("model", "device"): {"auto", "cuda", "cpu"},
+    ("model", "compute"): {"auto", "float16", "int8"},
+    ("insertion", "mode"): {"auto", "typed", "paste"},
+    ("recording", "command"): {"auto", "pw-record", "parecord"},
+    ("recording", "spoken_send_key"): {"enter", "shift+enter", "ctrl+enter"},
+}
+SETTING_BOOLS = {("general", "copy_to_clipboard"), ("general", "tray_enabled"),
+                 ("recording", "pause_media"), ("recording", "preview_enabled"),
+                 ("recording", "skip_silent"),
+                 ("recording", "spoken_send_enabled"),
+                 ("processing", "remove_filler_words"),
+                 ("processing", "punctuation_enabled"),
+                 ("processing", "gaav_enabled"),
+                 ("processing", "gaav_lowercase_first"),
+                 ("processing", "gaav_remove_trailing_period"),
+                 ("ai", "enabled"), ("sounds", "enabled"),
+                 ("notifications", "enabled"),
+                 ("history", "save"), ("history", "save_audio"),
+                 ("model", "eager_warmup")}
+# list-valued pass-through keys the UI owns
+SETTING_LISTS = (("processing", "filler_words"), ("processing", "dictionary"),
+                 ("hotkey", "modifiers"))
+ALLOWED_SETTINGS: dict[str, set] = {
+    "general": {"language", "copy_to_clipboard", "tray_enabled"},
+    "hotkey": {"key", "modifiers", "mode", "cancel_key", "rewrite_key"},
+    "recording": {"command", "device", "max_seconds", "skip_silent",
+                  "first_pcm_timeout", "spoken_send_enabled",
+                  "spoken_send_phrase", "spoken_send_key",
+                  "preview_enabled", "preview_mode", "preview_interval",
+                  "preview_min_audio", "preview_bottom_offset",
+                  "preview_overlay_size", "pause_media"},
+    "model": {"backend", "name", "device", "compute", "whispercpp_model",
+              "eager_warmup"},
+    "processing": {"remove_filler_words", "filler_words",
+                   "punctuation_enabled", "punctuation_prefix", "dictionary",
+                   "gaav_enabled", "gaav_lowercase_first",
+                   "gaav_remove_trailing_period"},
+    "ai": {"enabled", "base_url", "model", "api_key_env", "temperature",
+           "timeout_seconds", "max_retries", "per_app_prompts"},
+    "insertion": {"mode", "type_delay_ms", "paste_threshold_chars"},
+    "sounds": {"enabled", "volume"},
+    "notifications": {"enabled"},
+    "history": {"save", "save_audio", "audio_budget_gb"},
+}
+RESTART_REQUIRED = {"model.eager_warmup"}
+ENGINE_KEYS = {"model.backend", "model.device", "model.compute",
+               "model.whispercpp_model"}
+
+
+def coerce_setting(section: str, key: str, value: Any) -> tuple[bool, Any]:
+    """Validate one value. Returns (ok, coerced)."""
+    import re as _re
+
+    if (section, key) in SETTING_BOOLS:
+        return (isinstance(value, bool), value)
+    if (section, key) in SETTING_ENUMS:
+        enums = SETTING_ENUMS[(section, key)]
+        return (isinstance(value, str) and value in enums, value)
+    if (section, key) == ("general", "language"):
+        ok = isinstance(value, str) and bool(
+            _re.fullmatch(r"auto|[a-z]{2,3}(-[A-Za-z0-9]{2,8})?", value.strip()))
+        return (ok, value.strip() if ok else value)
+    if (section, key) == ("ai", "per_app_prompts"):
+        return _coerce_per_app_prompts(value)
+    rule = SETTING_RANGES.get((section, key))
+    if rule:
+        kind, bound = rule
+        if kind == "str":
+            ok = isinstance(value, str) and 0 < len(value) <= bound \
+                and not value.startswith("-")
+            return (ok, value)
+        try:
+            num = float(value) if kind == "float" else int(value)
+            if isinstance(value, bool) or not (bound[0] <= num <= bound[1]):
+                return (False, value)
+            return (True, num)
+        except (TypeError, ValueError):
+            return (False, value)
+    if (section, key) in SETTING_LISTS:
+        if not isinstance(value, list):
+            return (False, value)
+        if key == "modifiers" and any(m not in ("ctrl", "alt", "shift", "super")
+                                      for m in value):
+            return (False, value)
+        if key == "filler_words" and any(not isinstance(w, str) or len(w) > 64
+                                         or not w.strip() for w in value):
+            return (False, value)
+        if key == "dictionary":
+            for entry in value:
+                if (not isinstance(entry, dict)
+                        or not isinstance(entry.get("triggers", []), list)
+                        or not isinstance(entry.get("replacement", ""), str)
+                        or len(entry.get("replacement", "")) > 512):
+                    return (False, value)
+        return (True, value)
+    return (False, value)  # unknown key -> reject
+
+
+def _coerce_per_app_prompts(value: Any) -> tuple[bool, Any]:
+    if not isinstance(value, list):
+        return (False, value)
+    rules = []
+    for raw in value[:50]:
+        if not isinstance(raw, dict):
+            return (False, value)
+        apps = [str(a).strip() for a in raw.get("apps", []) if str(a).strip()][:20]
+        instructions = str(raw.get("instructions", "")).strip()[:2000]
+        if not apps or not instructions:
+            return (False, value)
+        rules.append({"apps": apps, "instructions": instructions})
+    return (True, rules)
+
+
+def apply_settings(cfg: dict, body: dict) -> tuple[list[str], list[str]]:
+    """Whitelisted, validated merge of {section: {key: value}} into cfg
+    (mutates cfg; no save). Returns (changed, rejected) as 'section.key'
+    strings. Unknown keys and bad types are rejected, never half-applied."""
+    from . import backends
+
+    changed: list[str] = []
+    rejected: list[str] = []
+    for section, keys in ALLOWED_SETTINGS.items():
+        for key in keys:
+            if section in body and key in body[section]:
+                value = body[section][key]
+                if (section, key) == ("model", "name"):
+                    value = backends.ALIASES.get(str(value).strip().lower(),
+                                                 str(value).strip().lower())
+                    ok = value in backends.FW_MODEL_REPOS or value == "auto"
+                elif (section, key) == ("ai", "max_retries"):
+                    try:
+                        ok = isinstance(value, (int, float)) \
+                            and not isinstance(value, bool) \
+                            and 0 <= int(value) <= 10
+                        value = int(value)
+                    except (TypeError, ValueError):
+                        ok = False
+                else:
+                    ok, value = coerce_setting(section, key, value)
+                if not ok:
+                    rejected.append(f"{section}.{key}")
+                    continue
+                if cfg.get(section, {}).get(key) != value:
+                    changed.append(f"{section}.{key}")
+                cfg.setdefault(section, {})[key] = value
+    return changed, rejected
+
+
+def mask_secrets(cfg: dict) -> dict:
+    """Deep copy with secrets replaced by booleans (api-key rule)."""
+    safe = copy.deepcopy(cfg)
+    key = safe.get("ai", {}).get("api_key", "")
+    safe.setdefault("ai", {})["api_key"] = bool(key)
+    return safe

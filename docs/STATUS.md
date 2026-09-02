@@ -71,16 +71,23 @@ matrix + upstream changelog with its refresh loop).
   llama.cpp); live-tested against local Ollama.
 - Error behavior: AI failure falls back to raw transcript + notification.
 
-### Settings web UI (`fluidvoice settings`, 127.0.0.1:47735)
-- Model picker (sizes verified against the actual HF artifacts, download
-  state, one-click switch with rollback on failure and double-spawn guard).
-- AI config with live Test-connection; hotkey/mode/language/insertion/
-  processing toggles; history view; live status (recording/backend/GPU).
-- **Security-hardened** (audit-driven, live-verified): Host allowlist +
-  Origin check + JSON-only POSTs + 64 KB body cap (CSRF/DNS-rebinding),
-  API key never sent to non-saved hosts, XSS escaping of window titles,
-  config written 0600 atomically, full type/range validation of POSTed
-  config, secrets carried over on save and masked in GET.
+### Native GTK app (`fluidvoice app` / `fluidvoice settings`)
+- GTK 4 + libadwaita, single instance with remote window raising
+  (`--open history|settings`, `--onboard`); follows the system theme.
+- **History window** (macOS main-window counterpart): live status header
+  (state/backend/GPU/model + warmup), search, copy/delete, inline audio
+  replay (GtkMediaFile, xdg-open fallback), clear-all, daemon-down banner.
+- **Settings window**: every validated key across General / Models /
+  AI Polish (+ per-app prompt rules) / Dictation (hotkeys with press-to-
+  capture, mic picker, preview, spoken send, GAAV, insertion) / History /
+  About; dirty tracking, Ctrl+S, close-with-changes confirm; saves go over
+  the control socket and hot-apply (hotkeys re-grab, recorder/tray/model
+  rebuild); file-only mode when the daemon is down.
+- Replaces the retired web UI (spec: docs/superpowers/specs/
+  2026-09-02-native-settings-app-design.md) - no TCP listener remains;
+  the localhost CSRF/DNS-rebinding surface is gone by construction.
+  Validation lives in config.apply_settings (one source of truth), config
+  is written 0600 atomically, secrets masked in get-config.
 
 ### Infrastructure
 - CLI: `daemon / toggle / cancel / status / paste-last / transcribe / history
