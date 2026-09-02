@@ -5,7 +5,7 @@ import math
 import struct
 
 from fluidvoice.overlay import (BAR_COUNT, BAR_MAX_H, BAR_MIN_H, PILL_H,
-                                PILL_RADIUS, TEXT_RADIUS, AudioLevels,
+                                PILL_RADIUS, AudioLevels,
                                 PillRenderer, head_truncate)
 
 
@@ -25,19 +25,46 @@ def bright_pixels(img, region=None, step=2, threshold=150) -> int:
 
 class TestPillGeometry:
     def test_idle_pill_matches_mac_spec(self):
-        r = PillRenderer()
+        r = PillRenderer(size="pill")
         w, h, radius = r.inner_size(None)
         assert h == PILL_H
         assert radius == PILL_RADIUS  # stadium: height / 2
         assert w >= 100               # icon + waveform + label fit
 
     def test_text_grows_pill_and_switches_radius(self):
-        r = PillRenderer()
+        r = PillRenderer(size="small")
         w0, h0, _ = r.inner_size(None)
         w1, h1, radius = r.inner_size("hello world")
         assert h1 > h0
-        assert radius == TEXT_RADIUS
+        assert radius == 14  # small-size rounded rect (upstream constant)
         assert w1 >= w0
+
+    def test_pill_size_hides_streaming_text(self):
+        # upstream: the pill size shows no preview text
+        r = PillRenderer(size="pill")
+        w0, h0, _ = r.inner_size(None)
+        w1, h1, _ = r.inner_size("lots of streaming words")
+        assert (w0, h0) == (w1, h1)
+
+    def test_size_presets_follow_mac_constants(self):
+        from fluidvoice.overlay import DEFAULT_SIZE, SIZE_SPECS
+        assert DEFAULT_SIZE == "medium"  # upstream default
+        pill = SIZE_SPECS["pill"]
+        assert (pill.bars, pill.wave_w, pill.wave_h, pill.radius) == (8, 46, 30, 23)
+        large = SIZE_SPECS["large"]
+        assert (large.bars, large.bar_w, large.wave_h) == (11, 5.0, 48)
+        assert large.text_lines == 4      # upstream 92pt preview box
+        small = SIZE_SPECS["small"]
+        assert small.text_lines == 1
+
+    def test_medium_wraps_to_two_lines(self):
+        r = PillRenderer(size="medium")
+        lines = r.text_lines(
+            "the quick brown fox jumps over the lazy dog again and again")
+        assert 1 < len(lines) <= 2
+        w, h, _ = r.inner_size(
+            "the quick brown fox jumps over the lazy dog again and again")
+        assert h > 60  # two text lines + waveform row
 
     def test_corners_transparent_center_opaque(self):
         r = PillRenderer()

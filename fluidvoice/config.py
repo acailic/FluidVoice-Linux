@@ -50,6 +50,7 @@ DEFAULTS: dict[str, Any] = {
         "preview_interval": 1.2,   # seconds between partial passes
         "preview_min_audio": 1.0,  # seconds before the first partial
         "preview_bottom_offset": 64,  # pill px above the screen bottom edge
+        "preview_overlay_size": "medium",  # pill | small | medium | large (macOS sizes)
     },
     "model": {
         "backend": "auto",  # auto | faster-whisper | whisper-torch | whisper.cpp
@@ -57,6 +58,7 @@ DEFAULTS: dict[str, Any] = {
         "device": "auto",  # auto | cuda | cpu
         "compute": "auto",  # auto | float16 | int8
         "whispercpp_model": "",  # path to ggml/gguf model for the whisper.cpp backend
+        "eager_warmup": True,  # load the model at daemon start (preview-ready)
     },
     "processing": {
         "remove_filler_words": True,
@@ -259,8 +261,9 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
                   "first_pcm_timeout", "spoken_send_enabled", "spoken_send_phrase",
                   "spoken_send_key", "preview_enabled", "preview_mode",
                   "preview_interval", "preview_min_audio",
-                  "preview_bottom_offset"],
-    "model": ["backend", "name", "device", "compute", "whispercpp_model"],
+                  "preview_bottom_offset", "preview_overlay_size"],
+    "model": ["backend", "name", "device", "compute", "whispercpp_model",
+              "eager_warmup"],
     "processing": ["remove_filler_words", "filler_words", "punctuation_enabled",
                    "punctuation_prefix", "dictionary", "gaav_enabled",
                    "gaav_lowercase_first", "gaav_remove_trailing_period"],

@@ -108,19 +108,96 @@ def _load_default_icon():
         return None
 
 
+# ---------------------------------------------------------------------------
+# Overlay size presets - ported 1:1 from the macOS LayoutConstants
+# (pill / small / medium / large; upstream default is medium)
+# ---------------------------------------------------------------------------
+
+
+class SizeSpec:
+    def __init__(self, name, pad_h, pad_v, wave_w, wave_h, icon,
+                 bars, bar_w, bar_gap, bar_min, bar_max,
+                 label_font, text_font, radius, max_w, text_lines):
+        self.name = name
+        self.pad_h = pad_h
+        self.pad_v = pad_v
+        self.wave_w = wave_w
+        self.wave_h = wave_h
+        self.icon = icon
+        self.bars = bars
+        self.bar_w = bar_w
+        self.bar_gap = bar_gap
+        self.bar_min = bar_min
+        self.bar_max = bar_max
+        self.label_font = label_font
+        self.text_font = text_font
+        self.radius = radius
+        self.max_w = max_w
+        self.text_lines = text_lines  # 0 = no streaming preview (pill)
+
+    @property
+    def line_h(self) -> int:
+        return int(self.text_font * 1.5) if self.text_lines else 0
+
+
+SIZE_SPECS: dict[str, SizeSpec] = {
+    "pill": SizeSpec("pill", 12, 8, 46, 30, 18,
+                     BAR_COUNT, BAR_W, BAR_GAP, BAR_MIN_H, BAR_MAX_H,
+                     10, 10, PILL_RADIUS, 220, 0),
+    "small": SizeSpec("small", 10, 6, 90, 20, 16,
+                      7, 3.0, 3.5, 5, 16,
+                      10, 11, 14, 280, 1),
+    "medium": SizeSpec("medium", 18, 12, 130, 32, 20,
+                       8, 3.5, 4.5, 6, 28,
+                       12, 13, 18, 400, 2),
+    "large": SizeSpec("large", 18, 12, 180, 48, 26,
+                      11, 5.0, 6.0, 8, 44,
+                      14, 15, 24, 620, 4),
+}
+DEFAULT_SIZE = "medium"
+
+
+def wrap_lines(draw, text: str, font, max_w: int, max_lines: int) -> list[str]:
+    """Word-wrap streaming text; on overflow keep the NEWEST lines and mark
+    the first kept line with a leading ellipsis (head truncation)."""
+    if max_lines <= 0 or not text:
+        return []
+    words = text.split()
+    lines: list[str] = []
+    cur = ""
+    for word in words:
+        cand = f"{cur} {word}".strip()
+        if not cur or draw.textlength(cand, font=font) <= max_w:
+            cur = cand
+        else:
+            lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    if len(lines) > max_lines:
+        lines = lines[-max_lines:]
+        first = lines[0]
+        while len(first) > 2 and draw.textlength("…" + first, font=font) > max_w:
+            first = first[2:]
+        lines[0] = "…" + first
+    return lines
+
+
 class PillRenderer:
     """Renders pill frames as RGBA images (pure Pillow, no X11)."""
 
     SS = 2   # supersample factor for anti-aliasing
     MARGIN = 22  # transparent margin: room for the drop shadow (blur tail ~3*sigma)
 
-    def __init__(self, icon_path: str | Path | None = None):
+    def __init__(self, icon_path: str | Path | None = None,
+                 size: str = DEFAULT_SIZE):
         from PIL import Image
         self._Image = Image
+        self.spec = SIZE_SPECS.get(size, SIZE_SPECS[DEFAULT_SIZE])
         # fonts are painted on the supersampled canvas, so scale by SS and
         # divide textlength by SS wherever 1x geometry is needed
-        self._label_font = _load_font(LABEL_SIZE * self.SS, bold=True)
-        self._text_font = _load_font(TEXT_SIZE * self.SS, bold=False)
+        self._label_font = _load_font(self.spec.label_font * self.SS, bold=True)
+        self._text_font = _load_font(self.spec.text_font * self.SS, bold=False)
         self._icon = self._load_icon(icon_path or _load_default_icon())
         self._cache: dict = {}
 
@@ -129,10 +206,21 @@ class PillRenderer:
             img = self._Image.open(icon_path).convert("RGBA")
         except Exception:
             return None
-        return img.resize((ICON_SIZE * self.SS, ICON_SIZE * self.SS),
+        return img.resize((self.spec.icon * self.SS, self.spec.icon * self.SS),
                           self._Image.LANCZOS)
 
     # -- geometry -----------------------------------------------------------
+
+    def text_lines(self, text: str | None) -> list[str]:
+        """Wrapped, head-truncated preview lines under the current spec."""
+        if self.spec.text_lines == 0 or not text:
+            return []
+        from PIL import ImageDraw
+        probe = self._Image.new("RGBA", (4, 4))
+        d = ImageDraw.Draw(probe)
+        max_w = (self.spec.max_w - 2 * self.spec.pad_h) * self.SS
+        return wrap_lines(d, text, self._text_font, max_w,
+                          self.spec.text_lines)
 
     def _row_width(self) -> int:
         from PIL import ImageDraw
@@ -141,26 +229,29 @@ class PillRenderer:
             LABEL, font=self._label_font) / self.SS
         w = 0
         if self._icon is not None:
-            w += ICON_SIZE + ICON_GAP
-        w += WAVE_W + 10 + int(label_w)
+            w += self.spec.icon + ICON_GAP
+        w += self.spec.wave_w + 10 + int(label_w)
         return w
 
     def inner_size(self, text: str | None) -> tuple[int, int, int]:
         """(pill width, pill height, radius) without the shadow margin."""
-        from PIL import ImageDraw
         row_w = self._row_width()
-        inner_w = row_w
-        h = PILL_H
-        radius = PILL_RADIUS
-        if text:
-            probe = self._Image.new("RGBA", (4, 4))
-            d = ImageDraw.Draw(probe)
-            text = head_truncate(d, text, self._text_font, MAX_TEXT_W * self.SS)
-            tw = int(d.textlength(text, font=self._text_font) / self.SS)
-            inner_w = max(row_w, tw)
-            h = PAD_V + TEXT_LINE_H + TEXT_GAP + WAVE_H + PAD_V
-            radius = TEXT_RADIUS
-        return inner_w + 2 * PAD_H, h, radius
+        lines = self.text_lines(text)
+        spec = self.spec
+        if not lines:
+            h = 2 * spec.pad_v + spec.wave_h
+            radius = h // 2 if spec.name == "pill" else spec.radius
+            return max(row_w, spec.wave_w) + 2 * spec.pad_h, h, radius
+        widest = 0
+        from PIL import ImageDraw
+        probe = self._Image.new("RGBA", (4, 4))
+        d = ImageDraw.Draw(probe)
+        for ln in lines:
+            widest = max(widest, int(d.textlength(ln, font=self._text_font) / self.SS))
+        inner_w = max(row_w, widest)
+        h = spec.pad_v + len(lines) * spec.line_h + TEXT_GAP + spec.wave_h \
+            + spec.pad_v
+        return inner_w + 2 * spec.pad_h, h, spec.radius
 
     def measure(self, text: str | None) -> tuple[int, int]:
         """Outer size (pill + shadow margin) - also the X11 window size."""
@@ -189,34 +280,39 @@ class PillRenderer:
     def _paint(self, im, levels, text, processing, phase, radius):
         from PIL import Image, ImageDraw
         S = self.SS
+        spec = self.spec
         W, H = im.size
         d = ImageDraw.Draw(im)
 
         d.rounded_rectangle((0, 0, W - 1, H - 1), radius * S, fill=(0, 0, 0, 255))
         im.alpha_composite(self._gloss_border(W, H, radius))
 
+        lines = self.text_lines(text)
         row_w = self._row_width()
-        row_y = (H - WAVE_H * S) // 2 if not text \
-            else (PAD_V + TEXT_LINE_H + TEXT_GAP) * S
+        text_block_h = len(lines) * spec.line_h + TEXT_GAP if lines else 0
+        row_y = (H - spec.wave_h * S) // 2 if not lines \
+            else (spec.pad_v * S) + text_block_h * S
         x = (W - row_w * S) // 2
 
         if self._icon is not None:
-            icon_y = row_y + (WAVE_H * S - ICON_SIZE * S) // 2
+            icon_y = row_y + (spec.wave_h * S - spec.icon * S) // 2
             im.alpha_composite(self._rounded_icon(), (int(x), int(icon_y)))
-            x += (ICON_SIZE + ICON_GAP) * S
+            x += (spec.icon + ICON_GAP) * S
 
-        self._paint_bars(d, x + (WAVE_W - BARS_WIDTH) / 2 * S, row_y,
+        bars_width = spec.bars * spec.bar_w + (spec.bars - 1) * spec.bar_gap
+        self._paint_bars(d, x + (spec.wave_w - bars_width) / 2 * S, row_y,
                          levels, processing, phase)
-        x += WAVE_W * S + 10 * S
+        x += spec.wave_w * S + 10 * S
 
         label_a = LABEL_ALPHA if not processing else int(LABEL_ALPHA * 0.5)
-        d.text((x, row_y + (WAVE_H * S - LABEL_SIZE * S) // 2 + S), LABEL,
-               font=self._label_font, fill=(255, 255, 255, label_a))
+        d.text((x, row_y + (spec.wave_h * S - spec.label_font * S) // 2 + S),
+               LABEL, font=self._label_font, fill=(255, 255, 255, label_a))
 
-        if text:
-            text = head_truncate(d, text, self._text_font, MAX_TEXT_W * S)
-            d.text((PAD_H * S, PAD_V * S), text, font=self._text_font,
+        ty = spec.pad_v * S
+        for ln in lines:
+            d.text((spec.pad_h * S, ty), ln, font=self._text_font,
                    fill=(255, 255, 255, TEXT_ALPHA))
+            ty += spec.line_h * S
 
     def _gloss_border(self, W, H, radius):
         """Subtle gloss: brighter top edge fading toward the bottom."""
@@ -244,7 +340,7 @@ class PillRenderer:
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        size = ICON_SIZE * self.SS
+        size = self.spec.icon * self.SS
         r = int(size * 0.3)
         mask = Image.new("L", (size, size), 0)
         ImageDraw.Draw(mask).rounded_rectangle((0, 0, size - 1, size - 1), r,
@@ -256,25 +352,27 @@ class PillRenderer:
 
     def _paint_bars(self, d, x, row_y, levels, processing, phase):
         S = self.SS
+        spec = self.spec
         heights = list(levels) if levels else []
-        heights += [BAR_MIN_H] * (BAR_COUNT - len(heights))
-        heights = [min(max(h, BAR_MIN_H), BAR_MAX_H) for h in heights[:BAR_COUNT]]
+        heights += [spec.bar_min] * (spec.bars - len(heights))
+        heights = [min(max(h, spec.bar_min), spec.bar_max)
+                   for h in heights[:spec.bars]]
         sweep = (phase % SHIMMER_PERIOD) / SHIMMER_PERIOD  # 0..1 left..right
         for i, bh in enumerate(heights):
-            bx = x + i * (BAR_W + BAR_GAP) * S
+            bx = x + i * (spec.bar_w + spec.bar_gap) * S
             bh_px = bh * S
-            y0 = row_y + (WAVE_H * S - bh_px) / 2
+            y0 = row_y + (spec.wave_h * S - bh_px) / 2
             if processing:
                 # flat bars + shimmer sweep across the waveform
-                center = (i + 0.5) / BAR_COUNT
+                center = (i + 0.5) / spec.bars
                 dist = abs(center - sweep)
                 boost = math.exp(-((dist / 0.16) ** 2))
                 a = int(BAR_FLAT_ALPHA + (255 - BAR_FLAT_ALPHA) * 0.9 * boost)
             else:
                 a = BAR_ALPHA
             d.rounded_rectangle(
-                (bx, y0, bx + BAR_W * S - S * 0.4, y0 + bh_px),
-                BAR_W * S / 2, fill=(255, 255, 255, a))
+                (bx, y0, bx + spec.bar_w * S - S * 0.4, y0 + bh_px),
+                spec.bar_w * S / 2, fill=(255, 255, 255, a))
 
     # -- cached layers --------------------------------------------------------
 
@@ -358,7 +456,8 @@ class FluidOverlay:
     def __init__(self, display_name: str | None = None,
                  raw_path: Path | None = None,
                  bottom_offset: int = BOTTOM_OFFSET,
-                 icon_path: str | Path | None = None):
+                 icon_path: str | Path | None = None,
+                 size: str = DEFAULT_SIZE):
         from .preview import NotifyPreview
         self.fallback = NotifyPreview()
         self._d = None
@@ -366,13 +465,16 @@ class FluidOverlay:
         self._renderer = None
         self._raw_path = raw_path
         self._bottom_offset = bottom_offset
+        self._size = size
         self._text: str | None = None
         self._state = "recording"
         self._state_since = time.monotonic()
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
-        self._levels = AudioLevels()
+        spec = SIZE_SPECS.get(size, SIZE_SPECS[DEFAULT_SIZE])
+        self._levels = AudioLevels(bars=spec.bars, lo=spec.bar_min,
+                                   hi=spec.bar_max)
         self._phase = 0.0
         self._last_sig: tuple | None = None
         try:
@@ -389,7 +491,7 @@ class FluidOverlay:
         self._d = Display(display_name)
         self._screen = self._d.screen()
         self._depth, self._visual_id, self._colormap = self._pick_visual()
-        self._renderer = PillRenderer(icon_path)
+        self._renderer = PillRenderer(icon_path, size=self._size)
         self._gc = self._scratch_gc()
         self._win_size = (0, 0)
 

@@ -602,7 +602,8 @@ class Daemon:
                 # display/pill stack is unavailable.
                 display = FluidOverlay(
                     raw_path=Path(raw_path),
-                    bottom_offset=int(rcfg.get("preview_bottom_offset", 64)))
+                    bottom_offset=int(rcfg.get("preview_bottom_offset", 64)),
+                    size=rcfg.get("preview_overlay_size", "medium"))
                 actual = "overlay" if display.using_overlay else "notify"
             else:
                 display = NotifyPreview()

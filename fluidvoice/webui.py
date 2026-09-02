@@ -181,6 +181,7 @@ class WebUI:
         ("server", "port"): ("int", (1024, 65535)),
     }
     _ENUMS = {("recording", "preview_mode"): {"auto", "notify", "overlay"},
+        ("recording", "preview_overlay_size"): {"pill", "small", "medium", "large"},
         ("hotkey", "mode"): {"toggle", "hold"},
         ("model", "backend"): {"auto", "faster-whisper", "whisper-torch", "whisper.cpp"},
         ("model", "device"): {"auto", "cuda", "cpu"},
