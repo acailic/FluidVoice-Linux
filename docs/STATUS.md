@@ -35,8 +35,9 @@ matrix + upstream changelog with its refresh loop).
   with GB budget), `paste-last`, optional copy-to-clipboard.
 - **Live streaming preview** (upstream's headline UX): raw-PCM capture is
   transcribed on a rolling basis while you speak (~1.2 s cadence) and shown
-  in an X11 overlay window (override-redirect, no focus stealing) or a
-  replaceable notification; the model is pre-warmed at daemon start.
+  in a Mac-style pill overlay (bottom-center stadium: live-audio waveform,
+  streaming text, processing shimmer; override-redirect, no focus stealing)
+  or a replaceable notification; the model is pre-warmed at daemon start.
 - **Rewrite/Write mode** (`hotkey.rewrite_key`): captures the selection,
   dictates the instruction, runs the verbatim upstream edit prompts
   (context block, follow-up history, temperature 0.7), types the result.

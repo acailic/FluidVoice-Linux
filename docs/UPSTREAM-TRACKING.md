@@ -62,7 +62,7 @@ new that Linux doesn't have" a one-command answer.
 | Cohere Transcribe | ➖ | non-goal — CoreML-only artifacts, no Linux runtime |
 | Fluid Intelligence (bundled local AI) | ➖ | closed-source private runtime; substitute: any OpenAI-compatible endpoint incl. local Ollama ✅ |
 | Cloud AI polish (OpenAI/Groq/custom) | ✅ | byte-identical prompts, audit-verified request params |
-| Live streaming preview overlay | ✅ | X11 overlay-redirect window, ~1.2 s rolling cadence; notch styling ➖ N/A |
+| Live streaming preview overlay | ✅ | Mac-style pill overlay port (solid-black stadium, gloss border, live-audio waveform, streaming text, processing shimmer), ~1.2 s rolling cadence; notch ➖ N/A |
 | Write/Rewrite mode (⌥R) | ✅ | `hotkey.rewrite_key`, verbatim upstream edit prompts |
 | Spoken punctuation ("literal …") | ✅ | full live rule table (108 aliases, spacing semantics) |
 | Filler removal + custom dictionary | ✅ | same defaults and matching semantics |

@@ -212,6 +212,7 @@ class Daemon:
         self._rewrite_mode = False
         self._watchdog: threading.Timer | None = None
         self._preview: Any = None
+        self._closing_display: Any = None
         self._lock = threading.Lock()
         self._hotkey = None
         self._rewrite_hotkey = None
@@ -230,27 +231,25 @@ class Daemon:
             log(f"WARN speech backend not ready yet ({e}); will retry on first use")
             self.backend = None
         else:
-            # Eagerly load the model in the background so the live preview
-            # works from the very first dictation (the model is lazy otherwise).
-            backend_ref = self.backend
+            if not self.cfg["model"].get("eager_warmup", True):
+                pass  # warmup disabled (e.g. test isolation on small GPUs)
+            else:
+                # Load the model in the background so the live preview works
+                # from the very first dictation (lazy otherwise).
+                backend_ref = self.backend
 
-            def _warm():
-                try:
-                    backend_ref.warmup()
-                    log("speech model loaded (preview ready)")
-                except Exception as e:
-                    log(f"WARN model warmup failed: {e}")
+                def _warm():
+                    try:
+                        backend_ref.warmup()
+                        log("speech model loaded (preview ready)")
+                    except Exception as e:
+                        log(f"WARN model warmup failed: {e}")
 
-            threading.Thread(target=_warm, name="fluidvoice-warmup",
-                             daemon=True).start()
+                threading.Thread(target=_warm, name="fluidvoice-warmup",
+                                 daemon=True).start()
 
         if self.use_hotkey:
             self._start_hotkey()
-
-        ready = threading.Event()
-        self._srv = control.serve(self.handle_request, ready=ready)
-        ready.wait(timeout=5)
-        log(f"control socket: {paths.socket_path()}")
 
         self.webui = None
         if self.cfg.get("server", {}).get("enabled", True):
@@ -261,6 +260,11 @@ class Daemon:
                 log(f"settings UI: http://127.0.0.1:{port} (`fluidvoice settings`)")
             except Exception as e:
                 log(f"WARN settings UI unavailable: {e}")
+
+        ready = threading.Event()
+        self._srv = control.serve(self.handle_request, ready=ready)
+        ready.wait(timeout=5)
+        log(f"control socket: {paths.socket_path()}")
 
         import os as _os
         cfg_shown = _os.environ.get("FLUIDVOICE_CONFIG") or paths.config_file()
@@ -283,6 +287,8 @@ class Daemon:
             self.recording = False
         if self._watchdog:
             self._watchdog.cancel()
+        self._stop_preview()
+        self._close_closing_display()
         if self._hotkey:
             self._hotkey.stop()
         if self._rewrite_hotkey:
@@ -425,14 +431,23 @@ class Daemon:
         if not rcfg.get("preview_enabled", True) or raw_path is None:
             return
         try:
-            from .preview import (NotifyPreview, PreviewEngine, X11OverlayPreview,
+            from .overlay import FluidOverlay
+            from .preview import (NotifyPreview, PreviewEngine,
                                   faster_whisper_transcriber)
             backend = self.backend
             model = getattr(backend, "_model", None)
             if backend is None or model is None:
                 return  # not a ready faster-whisper backend
-            mode = rcfg.get("preview_mode", "notify")
-            display = X11OverlayPreview() if mode == "overlay" else NotifyPreview()
+            mode = rcfg.get("preview_mode", "auto")
+            if mode in ("auto", "overlay"):
+                # FluidOverlay itself falls back to notifications when the
+                # display/pill stack is unavailable.
+                display = FluidOverlay(raw_path=Path(raw_path))
+                actual = "overlay" if display.using_overlay else "notify"
+            else:
+                display = NotifyPreview()
+                actual = "notify"
+            display.start()
             engine = PreviewEngine(
                 Path(raw_path),
                 faster_whisper_transcriber(model, self.cfg["general"]["language"]),
@@ -441,17 +456,28 @@ class Daemon:
                 min_audio=float(rcfg.get("preview_min_audio", 1.0)))
             engine.start()
             self._preview = (engine, display)
-            log(f"preview started ({mode})")
+            log(f"preview started ({actual})")
         except Exception as e:
             log(f"WARN preview unavailable: {e}")
 
-    def _stop_preview(self) -> None:
+    def _stop_preview(self, finishing: bool = False) -> None:
         preview, self._preview = self._preview, None
         if preview is None:
             return
         engine, display = preview
         engine.stop()
-        display.close()
+        if finishing:
+            # Keep the pill up in its processing state (flat bars + shimmer,
+            # like the Mac) until the final text is inserted.
+            display.set_state("processing")
+            self._closing_display = display
+        else:
+            display.close()
+
+    def _close_closing_display(self) -> None:
+        display, self._closing_display = self._closing_display, None
+        if display is not None:
+            display.close()
 
     def _check_first_pcm(self, wav: Path) -> None:
         with self._lock:
@@ -488,7 +514,7 @@ class Daemon:
         if self._watchdog:
             self._watchdog.cancel()
             self._watchdog = None
-        self._stop_preview()
+        self._stop_preview(finishing=True)
         # Stop cue fires at capture stop (upstream behavior), before waiting
         # for the recorder process to flush and exit.
         ui.play_sound("stop", self.cfg["sounds"]["volume"],
@@ -497,6 +523,7 @@ class Daemon:
         self.recording = False
         if wav is None or not Path(wav).exists() or Path(wav).stat().st_size < 200:
             log("no audio captured")
+            self._close_closing_display()
             if wav:
                 Path(wav).unlink(missing_ok=True)
             return
@@ -566,3 +593,4 @@ class Daemon:
                                             rewrite_context=rewrite_context) or {}
         finally:
             self.busy = False
+            self._close_closing_display()

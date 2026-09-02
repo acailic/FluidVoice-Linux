@@ -129,7 +129,7 @@ providers set `api_key_env = "FLUIDVOICE_API_KEY"` and export the variable
 | Spoken punctuation ("literal comma") | ✅ full rule table | ✅ ported (dot/slash/at-sign contexts included) |
 | AI polish with the original prompt | ✅ (local Fluid Intelligence or cloud) | ✅ (any OpenAI-compatible endpoint; no bundled local LLM yet) |
 | Start/stop sounds | ✅ | ✅ (same GPLv3 SFX) |
-| Live streaming preview overlay | ✅ | ✅ X11 overlay (notch styling N/A) |
+| Live streaming preview overlay | ✅ | ✅ Mac-style pill overlay (bottom-center, live waveform) |
 | Write/Rewrite selected text | ✅ (⌥R) | ✅ dedicated rewrite hotkey |
 | Command mode (voice → terminal agent) | ✅ | 🚧 roadmap |
 | Per-app prompt sets | ✅ | 🚧 roadmap (app hint is already captured) |
@@ -189,8 +189,9 @@ work; to see what moved upstream, run `scripts/upstream-diff.sh`.
 
 ```bash
 .venv/bin/python -m pytest -m "not slow and not integration"  # unit: offline, fast
-.venv/bin/python -m pytest -m integration                     # real subsystems
-.venv/bin/python -m pytest                                    # everything (281 tests, ~40s)
+.venv/bin/python -m pytest -m "integration and not desktop"   # real subsystems, deterministic
+.venv/bin/python -m pytest -m desktop                          # live session (grabs, pixels)
+.venv/bin/python -m pytest -m "not desktop"                    # deterministic everything
 ```
 
 The test pyramid:

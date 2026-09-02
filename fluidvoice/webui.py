@@ -179,7 +179,7 @@ class WebUI:
         ("history", "audio_budget_gb"): ("float", (0.0, 1024.0)),
         ("server", "port"): ("int", (1024, 65535)),
     }
-    _ENUMS = {("recording", "preview_mode"): {"notify", "overlay"},
+    _ENUMS = {("recording", "preview_mode"): {"auto", "notify", "overlay"},
         ("hotkey", "mode"): {"toggle", "hold"},
         ("model", "backend"): {"auto", "faster-whisper", "whisper-torch", "whisper.cpp"},
         ("model", "device"): {"auto", "cuda", "cpu"},

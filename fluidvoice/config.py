@@ -43,7 +43,7 @@ DEFAULTS: dict[str, Any] = {
         "spoken_send_key": "enter",  # enter | shift+enter | ctrl+enter
         # Live transcription preview while recording
         "preview_enabled": True,
-        "preview_mode": "notify",  # notify | overlay (X11 window)
+        "preview_mode": "auto",   # auto (pill, falls back) | overlay | notify
         "preview_interval": 1.2,   # seconds between partial passes
         "preview_min_audio": 1.0,  # seconds before the first partial
     },

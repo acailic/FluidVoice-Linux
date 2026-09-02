@@ -3,8 +3,8 @@
 The recorder captures headerless raw PCM; PreviewEngine periodically wraps
 the accumulated bytes in a WAV (in memory) and transcribes the growing
 prefix through the faster-whisper model. Partial text goes to a pluggable
-display: an X11 override-redirect overlay window (no focus stealing) or a
-replaceable desktop notification (works everywhere).
+display: the Mac-style pill overlay (overlay.FluidOverlay) or a replaceable
+desktop notification (works everywhere).
 """
 from __future__ import annotations
 
@@ -110,6 +110,12 @@ class NotifyPreview:
         self.timeout_ms = timeout_ms
         self._id: int | None = None
 
+    def start(self) -> None:  # overlay parity: no window to map
+        pass
+
+    def set_state(self, state: str) -> None:  # no processing visual
+        pass
+
     def show(self, text: str) -> None:
         if not self.supported:
             return
@@ -137,78 +143,5 @@ class NotifyPreview:
             self._id = None
 
 
-class X11OverlayPreview:
-    """Small always-on-top, never-focusable text window at the top of the
-    screen (override-redirect). Falls back to notifications on any error."""
-
-    WIDTH, HEIGHT, MAX_CHARS = 720, 54, 80
-
-    def __init__(self, display_name: str | None = None):
-        self.fallback = NotifyPreview()
-        self._d = None
-        try:
-            from Xlib import X, XK
-            from Xlib.display import Display
-            self._X = X
-            self._d = Display(display_name)
-            screen = self._d.screen()
-            self._font = self._d.open_font(b"-misc-fixed-medium-r-semicondensed--13-120-75-75-c-60-iso10646-1")
-            if not self._font:
-                self._font = self._d.open_font(b"fixed")
-            self._gc = screen.root.create_gc(
-                foreground=self._d.screen().white_pixel,
-                background=self._d.screen().black_pixel,
-                font=self._font)
-            x = (screen.width_in_pixels - self.WIDTH) // 2
-            self._win = screen.root.create_window(
-                x, 24, self.WIDTH, self.HEIGHT, 1,
-                screen.root_depth,
-                override_redirect=True,
-                event_mask=X.ExposureMask,
-                background_pixel=screen.black_pixel,
-                border_pixel=screen.white_pixel)
-            self._d.sync()
-        except Exception:
-            self._close_display()
-            self._d = None  # fallback mode
-
-    @property
-    def using_overlay(self) -> bool:
-        return self._d is not None
-
-    def show(self, text: str) -> None:
-        if self._d is None:
-            self.fallback.show(text)
-            return
-        try:
-            X = self._X
-            self._win.map()
-            # brief exposure settle, then draw (double-buffered by clear+draw)
-            while self._d.pending_events() > 0:
-                self._d.next_event()  # drain exposes
-            self._win.clear_area(x=0, y=0, width=self.WIDTH, height=self.HEIGHT)
-            shown = text if len(text) <= self.MAX_CHARS else text[:self.MAX_CHARS - 1] + "…"
-            self._win.draw_text(self._gc, 12, self.HEIGHT // 2 + 5, shown.encode("utf-8"))
-            self._d.sync()
-        except Exception:
-            self._close_display()
-            self._d = None
-            self.fallback.show(text)
-
-    def close(self) -> None:
-        if self._d is not None:
-            try:
-                self._win.unmap()
-                self._d.sync()
-            except Exception:
-                pass
-            self._close_display()
-        self.fallback.close()
-
-    def _close_display(self) -> None:
-        if self._d is not None:
-            try:
-                self._d.close()
-            except Exception:
-                pass
-            self._d = None
+# The X11 pill overlay (Mac-style BottomOverlayView port) lives in
+# .overlay.FluidOverlay; this module keeps the engine + notification fallback.

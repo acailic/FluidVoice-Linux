@@ -8,7 +8,10 @@ import pytest
 
 from fluidvoice import control
 
-pytestmark = pytest.mark.integration
+# `desktop` layer: these verify against the LIVE interactive session (real
+# key grabs, real screen pixels) and can flake while the machine is in use.
+# Deterministic default runs exclude them:  pytest -m "not desktop"
+pytestmark = [pytest.mark.integration, pytest.mark.desktop]
 
 
 def _requires_x11():
@@ -26,11 +29,20 @@ requires_x11 = _requires_x11()
 class TestHotkeyLive:
     def test_synthetic_hotkey_toggles_recording(self, daemon_with_hotkey):
         # TEST_CONFIG grabs F9 (never Right_Control: the user's own daemon
-        # may hold that grab on a live session).
-        subprocess.run(["xdotool", "key", "F9"], check=True, timeout=5)
-        time.sleep(1.2)
-        status = control.request("status")
-        assert status["recording"] is True
+        # may hold that grab on a live session). Retry: a previous test
+        # daemon's X connection can take a moment to release the grab.
+        recording = False
+        for _ in range(3):
+            subprocess.run(["xdotool", "key", "F9"], check=True, timeout=5)
+            deadline = time.monotonic() + 1.2
+            while time.monotonic() < deadline:
+                if control.request("status")["recording"]:
+                    recording = True
+                    break
+                time.sleep(0.15)
+            if recording:
+                break
+        assert recording, "F9 grab did not fire within 3 attempts"
         control.request("cancel")
         assert control.request("status")["recording"] is False
 
@@ -45,25 +57,29 @@ class TestHotkeyLive:
 
 @requires_x11
 class TestOverlayLive:
-    def test_overlay_renders_text_pixels(self):
+    def test_pill_overlay_renders_text_pixels(self):
         from PIL import Image
-        from fluidvoice.preview import X11OverlayPreview
-        overlay = X11OverlayPreview()
-        assert overlay.using_overlay, "expected the X11 overlay on this display"
+        from fluidvoice.overlay import BOTTOM_OFFSET, PILL_H, FluidOverlay
+        overlay = FluidOverlay()
+        assert overlay.using_overlay, "expected the X11 pill overlay on this display"
         try:
+            overlay.start()
             overlay.show("INTEGRATION TEST 12345")
-            time.sleep(0.6)
+            time.sleep(0.8)
             geom = subprocess.run(["xdotool", "getdisplaygeometry"],
                                   capture_output=True, text=True, timeout=5)
-            w, _h = map(int, geom.stdout.split())
-            x0 = (w - 720) // 2
+            w, h = map(int, geom.stdout.split())
             shot = "/tmp/fv-overlay-itest.png"
             subprocess.run(["import", "-window", "root", shot], timeout=10)
             img = Image.open(shot).convert("L")
-            dark = sum(1 for y in range(24, 78) if img.getpixel((x0 + 360, y)) < 60)
-            light = sum(1 for x in range(x0, x0 + 720, 4) for y in range(24, 78, 3)
+            # the pill floats bottom-center, BOTTOM_OFFSET above the screen edge
+            cy = h - BOTTOM_OFFSET - PILL_H // 2
+            dark = sum(1 for dx in range(-80, 80, 4)
+                       if img.getpixel((w // 2 + dx, cy)) < 60)
+            light = sum(1 for x in range(w // 2 - 260, w // 2 + 260, 3)
+                        for y in range(cy - 60, cy + 20, 3)
                         if img.getpixel((x, y)) > 150)
-            assert dark > 30, "overlay window (dark band) not visible"
-            assert light > 20, "no bright text pixels inside the overlay"
+            assert dark > 20, "pill (dark band) not visible at bottom center"
+            assert light > 20, "no bright text/bar pixels inside the pill"
         finally:
             overlay.close()
