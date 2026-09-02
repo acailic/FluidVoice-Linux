@@ -160,6 +160,61 @@ class TestWebUIAPI:
         entries = get(port, "/api/history")
         assert entries and entries[-1]["text"] == "entry one"
 
+    def test_history_page_served(self, server):
+        w, port = server
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/history",
+                                    timeout=5) as r:
+            html = r.read().decode()
+        assert "FluidVoice History" in html and "/api/history" in html
+
+    def test_history_search_and_delete_and_clear(self, server):
+        from fluidvoice import history
+        w, port = server
+        history.append({"ts": 1, "text": "hello world"})
+        history.append({"ts": 2, "text": "grocery list", "app": "Firefox"})
+        found = get(port, "/api/history?q=grocery")
+        assert len(found) == 1 and found[0]["text"] == "grocery list"
+        assert get(port, "/api/history?q=zzz") == []
+        resp = post(port, "/api/history/delete", {"ts": 2})
+        assert resp["removed"] == 1
+        assert get(port, "/api/history?q=grocery") == []
+        assert len(get(port, "/api/history")) == 1  # ts=1 still there
+        resp = post(port, "/api/history/clear", {})
+        assert resp["removed"] == 1
+        assert get(port, "/api/history") == []
+
+    def test_history_audio_requires_retained_file(self, server, tmp_path,
+                                                   monkeypatch):
+        w, port = server
+        import wave as wav_mod
+        from fluidvoice import history
+
+        adir = tmp_path / "audio"
+        adir.mkdir(exist_ok=True)
+        monkeypatch.setattr(history.paths, "audio_dir", lambda: adir)
+        wav = tmp_path / "utt.wav"
+        with wav_mod.open(str(wav), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(b"\x00\x00" * 1600)
+        history.append({"ts": 5, "text": "with audio"},
+                       audio_src=wav, keep_audio=True)
+        entries = get(port, "/api/history")
+        assert entries and entries[-1].get("audio")
+        # serve by ts, and only files inside the audio dir
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/api/history/audio?ts=5",
+                timeout=5) as r:
+            assert r.headers["Content-Type"] == "audio/wav"
+            data = r.read()
+        assert len(data) > 1000
+        try:
+            get(port, "/api/history/audio?ts=999")
+            assert False
+        except urllib.error.HTTPError as e:  # noqa: F821
+            assert e.code == 404
+
     def test_toggle_passes_to_daemon(self, server):
         w, port = server
         resp = post(port, "/api/toggle", {})

@@ -335,7 +335,10 @@ class Daemon:
             {"kind": "item", "label": "Copy Last Transcript",
              "enabled": bool(text), "action": self._copy_last_transcript},
             {"kind": "separator"},
-            {"kind": "item", "label": "Settings…", "action": self._open_settings},
+            {"kind": "item", "label": "Settings…",
+             "action": lambda: self._open_settings()},
+            {"kind": "item", "label": "History",
+             "action": lambda: self._open_settings("/history")},
             {"kind": "item", "label": "Microphone", "children": mics},
             {"kind": "separator"},
             {"kind": "item", "label": "Quit Fluid Voice",
@@ -415,16 +418,16 @@ class Daemon:
         hint = f" — {hk} or click to dictate" if hk else ""
         return f"FluidVoice: {state}{hint}"
 
-    def _open_settings(self) -> None:
+    def _open_settings(self, page: str = "") -> None:
         port = self.webui.port if getattr(self, "webui", None) else None
         if not port:
             log("tray: settings UI not running")
             return
         import subprocess
         try:
-            subprocess.Popen(["xdg-open", f"http://127.0.0.1:{port}"],
+            subprocess.Popen(["xdg-open", f"http://127.0.0.1:{port}{page}"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            log("tray: opened settings")
+            log(f"tray: opened {page or 'settings'}")
         except Exception as e:
             log(f"tray: could not open settings: {e}")
 

@@ -150,6 +150,24 @@ class WebUI:
         except AIError as e:
             return {"ok": False, "error": str(e)[:300]}
 
+    # -- history (the macOS main window's history list) ------------------------
+
+    def api_history(self, q: str = "", limit: int = 100) -> list[dict]:
+        limit = max(1, min(limit, 500))
+        return history_mod.search(q, limit)
+
+    def api_history_delete(self, body: dict) -> dict:
+        try:
+            ts = float(body.get("ts", 0))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "bad ts"}
+        removed = history_mod.delete(ts)
+        return {"ok": True, "removed": removed}
+
+    def api_history_clear(self) -> dict:
+        removed = history_mod.clear()
+        return {"ok": True, "removed": removed}
+
     def api_config_get(self) -> dict:
         safe = json.loads(json.dumps(self.cfg))  # plain copy
         key = safe.get("ai", {}).get("api_key", "")
@@ -358,16 +376,54 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+        elif self.path in ("/history", "/history.html"):
+            data = HISTORY_PAGE.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
         elif self.path == "/api/status":
             self._json(w.api_status())
         elif self.path == "/api/models":
             self._json(w.api_models())
         elif self.path == "/api/config":
             self._json(w.api_config_get())
-        elif self.path == "/api/history":
-            self._json(history_mod.tail(20))
+        elif self.path.startswith("/api/history"):
+            from urllib.parse import parse_qs, urlparse
+            parsed = urlparse(self.path)
+            if parsed.path == "/api/history/audio":
+                return self._serve_history_audio(parsed)
+            qs = parse_qs(parsed.query)
+            self._json(w.api_history(qs.get("q", [""])[0],
+                                     int(qs.get("limit", ["100"])[0])))
         else:
             self._json({"error": "not found"}, 404)
+
+    def _serve_history_audio(self, parsed) -> None:
+        """Stream a retained WAV - only for files recorded by the app."""
+        from urllib.parse import parse_qs
+        w = self.webui_ref
+        qs = parse_qs(parsed.query)
+        try:
+            ts = float(qs.get("ts", ["0"])[0])
+        except ValueError:
+            return self._json({"error": "bad ts"}, 400)
+        p = history_mod.audio_path_for(ts)
+        if p is None or w is None:
+            return self._json({"error": "no audio"}, 404)
+        try:
+            audio_dir = paths.audio_dir().resolve()
+            if p.resolve().parent != audio_dir:
+                return self._json({"error": "forbidden"}, 403)
+            data = p.read_bytes()
+        except OSError:
+            return self._json({"error": "gone"}, 404)
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_POST(self) -> None:  # noqa: N802
         w = self.webui_ref
@@ -386,6 +442,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(w.api_select_model(body.get("name", "")))
         elif self.path == "/api/test-ai":
             self._json(w.api_test_ai(body))
+        elif self.path == "/api/history/delete":
+            self._json(w.api_history_delete(body))
+        elif self.path == "/api/history/clear":
+            self._json(w.api_history_clear())
         elif self.path == "/api/toggle":
             if w.daemon is not None:
                 self._json(w.daemon.handle_request({"action": "toggle"}))
@@ -405,6 +465,9 @@ PAGE = """<!doctype html>
 *{box-sizing:border-box}body{margin:0;font:14px/1.5 system-ui,sans-serif;
 background:var(--bg);color:var(--text)}
 .wrap{max-width:880px;margin:0 auto;padding:24px 20px 60px}
+.nav{display:flex;gap:14px;margin-bottom:14px;font-size:13px}
+.nav a{color:var(--mut);text-decoration:none;padding:6px 12px;border-radius:7px}
+.nav a.on{color:var(--text);background:var(--card);border:1px solid var(--line)}
 h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 10px;color:var(--mut);
 text-transform:uppercase;letter-spacing:.06em}
 .sub{color:var(--mut);margin-bottom:18px}
@@ -438,6 +501,7 @@ border-radius:8px;padding:10px 16px;display:none}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media(max-width:640px){.two{grid-template-columns:1fr}}
 </style></head><body><div class="wrap">
+<div class="nav"><a href="/" class="on">Settings</a><a href="/history">History</a></div>
 <h1>FluidVoice <span style="color:var(--mut);font-weight:400">Linux</span></h1>
 <div class="sub"><span class="dot idle" id="dot"></span> <span id="state">idle</span>
 &middot; <span id="backend"></span> &middot; <span id="cuda"></span>
@@ -559,5 +623,108 @@ $('testAi').onclick=async()=>{
  $('testAiOut').className=r.ok?'ok':'err';
 };
 load();refresh();setInterval(refresh,3000);
+</script></body></html>
+"""
+
+
+HISTORY_PAGE = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>FluidVoice History</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#0f1420;--card:#171e2e;--line:#253048;--text:#e6ebf5;--mut:#8b96ad;
+--acc:#3ac8c6;--ok:#4cc38a;--err:#e5534b}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 system-ui,sans-serif;
+background:var(--bg);color:var(--text)}
+.wrap{max-width:880px;margin:0 auto;padding:24px 20px 60px}
+.nav{display:flex;gap:14px;margin-bottom:14px;font-size:13px}
+.nav a{color:var(--mut);text-decoration:none;padding:6px 12px;border-radius:7px}
+.nav a.on{color:var(--text);background:var(--card);border:1px solid var(--line)}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:var(--mut);margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+padding:14px 16px;margin-bottom:10px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.spread{justify-content:space-between}
+input{background:#0c111c;border:1px solid var(--line);color:var(--text);
+border-radius:7px;padding:7px 10px;font:inherit;width:100%}
+button{background:var(--acc);border:0;color:#04211f;font-weight:600;border-radius:7px;
+padding:6px 12px;font:inherit;cursor:pointer}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+button.danger{background:transparent;border:1px solid var(--err);color:var(--err)}
+button.sm{padding:4px 10px;font-size:12px}
+.hint{font-size:12px;color:var(--mut)}
+.e{background:var(--card);border:1px solid var(--line);border-radius:10px;
+padding:12px 14px;margin-bottom:8px}
+.e .meta{color:var(--mut);font-size:12px;display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.e .text{white-space:pre-wrap}
+.e audio{width:100%;margin-top:8px}
+mark{background:#3ac8c633;color:var(--acc);border-radius:3px;padding:0 2px}
+</style></head><body><div class="wrap">
+<div class="nav"><a href="/">Settings</a><a href="/history" class="on">History</a></div>
+<h1>History</h1>
+<div class="sub">Everything dictated with this app - search it, replay it, copy it.
+This is the Linux counterpart of the macOS main window's transcript list.</div>
+<div class="row" style="margin-bottom:12px">
+  <input id="q" placeholder="Search transcripts, raw text, apps…" style="flex:1">
+  <button onclick="load(0)">Search</button>
+  <button class="ghost" onclick="load(0);document.getElementById('q').value=''">Reset</button>
+  <button class="danger" onclick="clearAll()">Clear all</button>
+</div>
+<div id="list" class="hint">loading…</div>
+<div class="hint" id="count" style="margin-top:10px"></div>
+</div>
+<script>
+let t=null,entries=[];
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=ts=>new Date(ts*1000).toLocaleString();
+function hl(text){
+  const q=document.getElementById('q').value.trim();
+  const s=esc(text);
+  if(!q)return s;
+  try{return s.replace(new RegExp('('+q.replace(/[.*+?^\${}()|[\\]\\\\]/g,'\\\\$&')+')','gi'),'<mark>$1</mark>');}
+  catch(e){return s;}
+}
+async function load(){
+  const q=document.getElementById('q').value;
+  const r=await fetch('/api/history?limit=200&q='+encodeURIComponent(q)).then(r=>r.json());
+  entries=Array.isArray(r)?r:[];
+  render();
+}
+function render(){
+  const el=document.getElementById('list');
+  if(!entries.length){el.innerHTML='<div class="card hint">No dictations yet. Press your hotkey and speak - transcripts land here.</div>';}
+  else el.innerHTML=entries.map(e=>`
+    <div class="e">
+      <div class="meta"><span>${esc(fmt(e.ts))}</span>
+        <span>${e.duration_s?s.toFixed?'':''}${Number(e.duration_s||0).toFixed(1)}s</span>
+        ${e.app?`<span>${esc(e.app)}</span>`:''}
+        ${e.mode?`<span>${esc(e.mode)}</span>`:''}
+        ${e.ai?'<span style="color:var(--acc)">AI polished</span>':''}
+        <span style="flex:1"></span>
+        <button class="sm ghost" onclick="copyTs(${e.ts})">Copy</button>
+        <button class="sm danger" onclick="del(${e.ts})">Delete</button></div>
+      <div class="text">${hl(e.text||e.raw||'')}</div>
+      ${e.audio?`<audio controls preload="none" src="/api/history/audio?ts=${e.ts}"></audio>`:''}
+    </div>`).join('');
+  document.getElementById('count').textContent=entries.length+' entries'+(entries.length>=200?' (showing latest 200)':'');
+}
+function find(ts){return entries.find(e=>Math.abs(e.ts-ts)<1e-6);}
+async function copyTs(ts){
+  const e=find(ts);if(!e)return;
+  await navigator.clipboard.writeText(e.text||e.raw||'');
+}
+async function del(ts){
+  if(!confirm('Delete this entry?'))return;
+  await fetch('/api/history/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ts})});
+  load();
+}
+async function clearAll(){
+  if(!confirm('Delete ALL history and retained audio?'))return;
+  await fetch('/api/history/clear',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  load();
+}
+document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')load();});
+load();
 </script></body></html>
 """
