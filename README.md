@@ -96,7 +96,7 @@ daemon) that mirrors the macOS app's settings window:
   live "Test connection" button.
 - **Dictation** — hotkey, mode, language, insertion strategy, filler/punctuation
   toggles.
-- **History** — your recent transcriptions.
+- **History** — searchable in the web UI (`fluidvoice settings` → History): filter by text/app, replay retained audio, copy, delete.
 
 Everything it saves goes to the same `config.toml` (with a strict whitelist;
 API keys are never exposed through the UI — use the env var). The page is
@@ -133,7 +133,9 @@ providers set `api_key_env = "FLUIDVOICE_API_KEY"` and export the variable
 | Write/Rewrite selected text | ✅ (⌥R) | ✅ dedicated rewrite hotkey |
 | Command mode (voice → terminal agent) | ✅ | 🚧 roadmap |
 | Per-app prompt sets | ✅ | 🚧 roadmap (app hint is already captured) |
-| Settings UI with model picker | ✅ | ✅ local web UI (`fluidvoice settings`) |
+| Settings UI with model picker | ✅ | ✅ local web UI (`fluidvoice settings`) + History page |
+| Onboarding (setup + tryout) | ✅ | ✅ opens once on first launch (`/onboard`) |
+| Overlay sizes (pill/small/medium/large) | ✅ | ✅ `recording.preview_overlay_size` |
 | Notch overlay / menu bar | ✅ | ✅ tray/panel icon (StatusNotifierItem): click = dictate, state badge, tooltip with hotkey |
 
 See [docs/STATUS.md](docs/STATUS.md) for the full done/left ledger (verified

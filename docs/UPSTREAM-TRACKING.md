@@ -71,7 +71,7 @@ new that Linux doesn't have" a one-command answer.
 | Per-app prompt sets | ⏳ v0.2 | frontmost-app hint already captured |
 | Smart typing via accessibility APIs | ✅ / 🚧 | xdotool on X11 ✅; Wayland insertion 🚧 v0.3 (ydotool/wtype); AT-SPI fallback ⏳ |
 | Menu bar + notch overlay | ✅ (equivalent) | tray/panel icon via StatusNotifierItem (`tray.py`): click = toggle, right-click = settings, recording badge, tooltip w/ hotkey; notch ➖ N/A |
-| Audio history (budget, retention) | ✅ | history JSONL + GB budget; ZIP export ⏳ |
+| Audio history (budget, retention) | ✅ | history JSONL + GB budget; searchable History page w/ inline replay, delete, clear; ZIP export ⏳ |
 | Today-usage stats | ⏳ | not started |
 | Adaptive light/dark theming | ➖ | settings web UI is plain by design |
 | Auto-updates + beta channel | ⏳ | today: .deb / GitHub releases; AUR/nix on roadmap |
@@ -167,7 +167,7 @@ new that Linux doesn't have" a one-command answer.
 | Rebuilt Parakeet ("pretty much zero delay") | 🚧 | v0.4 model work |
 | Fluid Intelligence local AI | ➖ | substitute: any OpenAI-compatible endpoint ✅ |
 | Adaptive theming + compact toolbar switcher | ➖ | N/A for the web settings UI |
-| Refreshed onboarding (language-first engine setup, tryout) | ⏳ | `fluidvoice doctor` + README today; onboarding is roadmap |
+| Refreshed onboarding (engine setup, tryout) | ✅ | `/onboard` web page opens once on first launch: mic/engine/hotkey checks + real 3s dictation tryout (nothing typed) |
 
 ---
 
