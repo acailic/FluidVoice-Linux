@@ -123,10 +123,18 @@ class TestHotkeyListenerConstruction:
         listener = HotkeyListener("F9", [], "toggle", on_toggle=lambda: None,
                                   on_cancel=lambda: None, cancel_key="Escape")
         assert listener.cancel_key == "Escape"
-        # omitted -> macOS default (Escape); "" -> explicitly disabled
-        assert HotkeyListener("F9", [], "toggle", on_toggle=lambda: None).cancel_key is None
+
+    def test_cancel_key_resolution(self):
+        from fluidvoice.hotkey import HotkeyListener
+        # omitted and "" both mean the macOS default (old templates wrote ""
+        # into saved configs - they must not silently lose Escape on upgrade)
+        assert HotkeyListener("F9", [], "toggle", on_toggle=lambda: None)._resolve_cancel() == "Escape"
         assert HotkeyListener("F9", [], "toggle", on_toggle=lambda: None,
-                              cancel_key="").cancel_key == ""
+                              cancel_key="")._resolve_cancel() == "Escape"
+        assert HotkeyListener("F9", [], "toggle", on_toggle=lambda: None,
+                              cancel_key="none")._resolve_cancel() == ""
+        assert HotkeyListener("F9", [], "toggle", on_toggle=lambda: None,
+                              cancel_key="F10 ")._resolve_cancel() == "F10"
 
     def test_modifier_mask_summed(self):
         from fluidvoice.hotkey import HotkeyListener, MODIFIER_MASKS

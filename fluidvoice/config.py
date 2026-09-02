@@ -29,7 +29,7 @@ DEFAULTS: dict[str, Any] = {
         "modifiers": [],  # any of: ctrl, alt, shift, super
         "mode": "toggle",  # toggle | hold (hold needs a non-modifier key)
         # macOS parity: Escape cancels an in-progress dictation (discards,
-        # nothing typed). Grabbed ONLY while recording; set "" to disable.
+        # nothing typed). Grabbed ONLY while recording; "none" disables.
         "cancel_key": "Escape",
         "rewrite_key": "",  # optional keysym for Rewrite mode (needs [ai])
     },

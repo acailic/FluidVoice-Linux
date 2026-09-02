@@ -106,6 +106,17 @@ class HotkeyListener:
             root.grab_key(keycode, self._mods | extra, False,
                           X.GrabModeAsync, X.GrabModeAsync)
 
+    def _resolve_cancel(self) -> str:
+        """Config value -> keysym name. None/"" mean the macOS default
+        (Escape) - important for upgrade migration, since old templates
+        wrote cancel_key = "" into saved configs. "none"/"off" disables."""
+        raw = "" if self.cancel_key is None else self.cancel_key.strip()
+        if not raw:
+            return DEFAULT_CANCEL_KEY
+        if raw.lower() in ("none", "off", "disabled"):
+            return ""
+        return raw
+
     def setup(self) -> list[str]:
         try:
             self._display = Display(self.display_name)
@@ -115,17 +126,17 @@ class HotkeyListener:
         if not self._keycode:
             raise HotkeyError(f"key '{self.key}' has no keycode on this keymap")
         self._grab(self._keycode)
-        # cancel_key: None/omitted -> macOS default (Escape); "" -> disabled
-        cancel = DEFAULT_CANCEL_KEY if self.cancel_key is None \
-            else self.cancel_key.strip()
+        # cancel acts ONLY while recording (macOS overlay-up semantics)
+        cancel = self._resolve_cancel()
         self._cancel_keycode = self._keycode_for(resolve_keysym(cancel)) \
             if cancel else None
         self._cancel_grabbed = False
         self._escape_keycode = self._keycode_for(XK.XK_Escape)
         self._display.sync()
         self._summary = [f"hotkey {self.key} = keycode {self._keycode}, "
-                         f"modifiers {self._mods:#x}, mode {self.mode}, "
-                         f"cancel {cancel} while recording"]
+                         f"modifiers {self._mods:#x}, mode {self.mode}"
+                         + (f", cancel {cancel} while recording" if cancel
+                            else ", cancel disabled")]
         return self._summary
 
     # -- loop ----------------------------------------------------------------
