@@ -182,6 +182,11 @@ mode = "auto"               # typed | paste | auto (paste for long texts)
 
 ## Development & testing
 
+**Branch layout:** the port lives on `linux` — treat it as this fork's main
+line (all commits, merges, and releases go there). The `main` branch mirrors
+the upstream macOS repo for reference only and is **never** updated with port
+work; to see what moved upstream, run `scripts/upstream-diff.sh`.
+
 ```bash
 .venv/bin/python -m pytest -m "not slow and not integration"  # unit: offline, fast
 .venv/bin/python -m pytest -m integration                     # real subsystems
