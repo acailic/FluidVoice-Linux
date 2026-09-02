@@ -26,7 +26,8 @@ def main(argv: list[str] | None = None) -> int:
 
     for name, help_ in [("toggle", "start/stop a recording"),
                         ("cancel", "cancel the running recording (no transcription)"),
-                        ("status", "daemon status")]:
+                        ("status", "daemon status"),
+                        ("paste-last", "re-type the most recent transcription")]:
         p = sub.add_parser(name, help=help_)
         p.add_argument("--json", action="store_true", help="raw JSON output")
 
@@ -58,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
                use_sounds=not args.no_sounds).run()
         return 0
 
-    if args.cmd in ("toggle", "cancel", "status"):
+    if args.cmd in ("toggle", "cancel", "status", "paste-last"):
         from . import control
         try:
             resp = control.request(args.cmd)

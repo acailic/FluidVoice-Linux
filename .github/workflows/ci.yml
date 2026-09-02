@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [linux]
+  pull_request:
+    branches: [linux]
+
+jobs:
+  unit:
+    name: unit tests (py${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install system tools used by the code under test
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xdotool xclip libnotify-bin \
+              pulseaudio-utils pipewire-audio-utils
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . pytest
+      - name: Unit tests (offline)
+        run: pytest -m "not slow and not integration" -q
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log-py${{ matrix.python }}
+          path: |
+            .pytest_cache/
+          if-nothing-found: ignore
+
+  lint-compile:
+    name: compile + metadata checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Byte-compile everything
+        run: |
+          pip install -e .
+          python -m compileall -q fluidvoice tests
+      - name: Integration suite compiles and collects
+        run: pytest --collect-only -q tests/integration

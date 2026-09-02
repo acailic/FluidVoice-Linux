@@ -11,6 +11,10 @@ def config_dir() -> Path:
 
 
 def config_file() -> Path:
+    import os
+    override = os.environ.get("FLUIDVOICE_CONFIG")
+    if override:
+        return Path(override)
     return config_dir() / "config.toml"
 
 

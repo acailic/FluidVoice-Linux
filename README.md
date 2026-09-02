@@ -191,7 +191,7 @@ The test pyramid:
 |---|---|---|
 | Unit | processing engines, AI client (mocked transport), daemon state machine (stubs), insertion command construction, web UI API + security matrix | ~268 |
 | E2E (slow) | real whisper model transcribing the JFK sample | 2 |
-| Integration | real `pw-record` capture + raw→WAV, GPU transcription, streaming preview with the loaded model, a real daemon **subprocess** (socket control, settings web UI over HTTP incl. the CSRF-403 guard, toggle/cancel, clean shutdown), .deb extract + relocated-venv import, one-shot installer DRY_RUN download | 13 |
+| Integration | real `pw-record` capture + raw→WAV, GPU transcription, streaming preview with the loaded model, a real daemon **subprocess** (socket control, settings web UI over HTTP incl. the CSRF-403 guard, toggle/cancel, clean shutdown), live X11 hotkey grab + overlay pixel proof, real CLI invocations (doctor/transcribe/history/config), live AI polish + rewrite against local Ollama (skipped when absent), .deb extract + relocated-venv import, one-shot installer DRY_RUN download | 27 |
 
 Integration tests run against your real PipeWire/X11/CUDA environment and are
 isolated through `FLUIDVOICE_CONFIG` / `FLUIDVOICE_SOCKET` / `XDG_DATA_HOME`

@@ -113,9 +113,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 def load_config(path: Path | None = None) -> dict:
     """Load config, deep-merged over DEFAULTS. Unknown keys are kept."""
-    import os
-    path = path or Path(os.environ.get("FLUIDVOICE_CONFIG") or "") \
-        if os.environ.get("FLUIDVOICE_CONFIG") else (path or paths.config_file())
+    path = path or paths.config_file()
     user: dict = {}
     if path.exists():
         with open(path, "rb") as fh:

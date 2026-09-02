@@ -3,16 +3,20 @@ whisper, a real daemon subprocess with its socket + web UI, packaging, and
 the installer download. Run with:  pytest -m integration
 """
 import os
+import subprocess
+import time
 from pathlib import Path
 
 import pytest
-
 
 REPO = Path(__file__).resolve().parents[2]
 
 TEST_CONFIG = """\
 [general]
 language = "en"
+
+[hotkey]
+key = "F9"
 
 [recording]
 preview_enabled = false
@@ -36,7 +40,7 @@ port = 0
 
 @pytest.fixture()
 def isolated_env(tmp_path, monkeypatch):
-    """Fully isolated XDG + config environment (also for daemon subprocesses)."""
+    """Fully isolated config/data/socket environment (also for subprocesses)."""
     (tmp_path / "run").mkdir()
     (tmp_path / "data").mkdir()
     cfg = tmp_path / "config.toml"
@@ -49,45 +53,57 @@ def isolated_env(tmp_path, monkeypatch):
     return cfg
 
 
-@pytest.fixture()
-def daemon_process(isolated_env, tmp_path):
-    """A real daemon subprocess: socket control + web UI, no hotkey/sounds."""
-    import subprocess
-    import time
-
+def _spawn_and_wait(tmp_path: Path, extra_args: list) -> subprocess.Popen:
     from fluidvoice import paths
-
-    proc = subprocess.Popen(
-        [str(REPO / ".venv/bin/fluidvoice"), "daemon", "--no-hotkey", "--no-sounds"],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        env={**os.environ})
-    log_path = tmp_path / "daemon.log"
+    args = [str(REPO / ".venv/bin/fluidvoice"), "daemon", *extra_args]
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True,
+                            env={**os.environ})
     socket = paths.socket_path()
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if socket.exists():
             break
         if proc.poll() is not None:
-            log_path.write_text(proc.stdout.read())
-            raise RuntimeError(f"daemon died at startup, log in {log_path}")
+            (tmp_path / "daemon.log").write_text(proc.stdout.read())
+            raise RuntimeError("daemon died at startup, log in %s" % (tmp_path / "daemon.log"))
         time.sleep(0.2)
     else:
         proc.terminate()
         raise RuntimeError("daemon socket never appeared")
-    yield proc
-    proc.terminate()
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+    return proc
+
+
+def _stop_daemon(proc: subprocess.Popen, tmp_path: Path) -> None:
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
     if proc.stdout:
-        log_path.write_text(proc.stdout.read())
+        (tmp_path / "daemon.log").write_text(proc.stdout.read())
+
+
+@pytest.fixture()
+def daemon_process(isolated_env, tmp_path):
+    """A real daemon subprocess: socket control + web UI, no hotkey."""
+    proc = _spawn_and_wait(tmp_path, ["--no-hotkey", "--no-sounds"])
+    yield proc
+    _stop_daemon(proc, tmp_path)
+
+
+@pytest.fixture()
+def daemon_with_hotkey(isolated_env, tmp_path):
+    """A real daemon with its hotkey grab active (TEST_CONFIG: F9)."""
+    proc = _spawn_and_wait(tmp_path, ["--no-sounds"])
+    yield proc
+    _stop_daemon(proc, tmp_path)
 
 
 @pytest.fixture(scope="session")
 def jfk_wav(tmp_path_factory) -> Path:
     """JFK sample as a 16 kHz mono WAV (downloaded once per session)."""
-    import subprocess as sp
     import urllib.request
     flac = tmp_path_factory.mktemp("audio") / "jfk.flac"
     with urllib.request.urlopen(
@@ -95,6 +111,6 @@ def jfk_wav(tmp_path_factory) -> Path:
             timeout=60) as resp:
         flac.write_bytes(resp.read())
     wav = flac.with_suffix(".wav")
-    sp.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(flac),
-            "-ar", "16000", "-ac", "1", str(wav)], check=True)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(flac),
+                    "-ar", "16000", "-ac", "1", str(wav)], check=True)
     return wav
