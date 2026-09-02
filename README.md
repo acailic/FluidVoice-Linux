@@ -33,7 +33,7 @@ hotkey ─▶ pw-record 16k mono ─▶ faster-whisper (CUDA/int8) ─▶ filler
 ## Quick start (X11: Pop!_OS/Ubuntu/Debian)
 
 ```bash
-git clone https://github.com/acailic/FluidVoice.git -b linux
+git clone https://github.com/acailic/FluidVoice-Linux.git -b linux
 cd FluidVoice
 ./scripts/install.sh          # apt deps + venv (reuses your CUDA torch if present)
 

@@ -4,7 +4,7 @@
 
 [Unit]
 Description=FluidVoiceLinux dictation daemon
-Documentation=https://github.com/acailic/FluidVoice
+Documentation=https://github.com/acailic/FluidVoice-Linux
 PartOf=graphical-session.target
 After=graphical-session.target
 
