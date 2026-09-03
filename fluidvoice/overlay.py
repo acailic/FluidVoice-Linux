@@ -45,14 +45,38 @@ MAX_TEXT_W = 560
 BOTTOM_OFFSET = 64        # px above the screen bottom edge
 MAX_FRAME_BYTES = 800_000  # conservative XPutImage request cap
 
-BAR_ALPHA = 224           # white @ 0.88 while recording
-BAR_FLAT_ALPHA = 82       # white @ 0.32 while processing
-LABEL_ALPHA = 217         # white @ 0.85
+BAR_ALPHA = 224           # accent @ 0.88 while recording
+BAR_FLAT_ALPHA = 82       # accent @ 0.32 while processing
+LABEL_ALPHA = 217         # accent @ 0.85
 TEXT_ALPHA = 230          # white @ 0.9
 BORDER_ALPHA_TOP = 76     # gloss: bright top fading to dim bottom
 BORDER_ALPHA_BOTTOM = 26
 SHIMMER_PERIOD = 1.05     # seconds per sweep (upstream CompositorShimmerSweep)
 PROCESSING_CAP = 15.0     # hard auto-close so a hung pipeline never strands it
+
+# Upstream NotchContentViews.OverlayMode.notchColor: dictation white,
+# edit blue, command red - the pill accent (bars + label) follows the mode.
+MODE_ACCENTS: dict[str, tuple[int, int, int]] = {
+    "dictate": (255, 255, 255),
+    "rewrite": (96, 165, 250),
+    "command": (255, 99, 88),
+}
+
+# Per-state label (upstream processingLabel / "Listening..." header)
+STATE_LABELS: dict[tuple[str, str], str] = {
+    ("dictate", "recording"): "Dictate",
+    ("dictate", "processing"): "Transcribing",
+    ("rewrite", "recording"): "Rewrite",
+    ("rewrite", "processing"): "Thinking",
+    ("command", "recording"): "Listening...",
+    ("command", "processing"): "Working...",
+    ("command", "confirm"): "Command",
+}
+
+
+def state_label(mode: str, state: str) -> str:
+    return STATE_LABELS.get((mode, state),
+                            STATE_LABELS[("dictate", "recording")])
 
 _FONT_DIRS = (
     "/usr/share/fonts/truetype/dejavu",
@@ -222,20 +246,25 @@ class PillRenderer:
         return wrap_lines(d, text, self._text_font, max_w,
                           self.spec.text_lines)
 
-    def _row_width(self) -> int:
+    def _row_width(self, label: str = LABEL,
+                   badge: str | None = None) -> int:
         from PIL import ImageDraw
         probe = self._Image.new("RGBA", (4, 4))
-        label_w = ImageDraw.Draw(probe).textlength(
-            LABEL, font=self._label_font) / self.SS
+        dd = ImageDraw.Draw(probe)
+        label_w = dd.textlength(label, font=self._label_font) / self.SS
         w = 0
         if self._icon is not None:
             w += self.spec.icon + ICON_GAP
         w += self.spec.wave_w + 10 + int(label_w)
+        if badge:
+            w += 10 + int(dd.textlength(badge, font=self._label_font)
+                          / self.SS)
         return w
 
-    def inner_size(self, text: str | None) -> tuple[int, int, int]:
+    def inner_size(self, text: str | None, label: str = LABEL,
+                   badge: str | None = None) -> tuple[int, int, int]:
         """(pill width, pill height, radius) without the shadow margin."""
-        row_w = self._row_width()
+        row_w = self._row_width(label, badge)
         lines = self.text_lines(text)
         spec = self.spec
         if not lines:
@@ -261,26 +290,41 @@ class PillRenderer:
     # -- painting -----------------------------------------------------------
 
     def render(self, levels, text: str | None = None, *, processing: bool = False,
-               phase: float = 0.0, alpha: float = 1.0):
-        """One frame -> (RGBA image, (w, h), L-mode alpha of pill+shadow)."""
+               phase: float = 0.0, alpha: float = 1.0,
+               mode: str = "dictate", state: str | None = None,
+               badge: str | None = None):
+        """One frame -> (RGBA image, (w, h)).
+
+        `mode` picks the accent color (dictate/rewrite/command); `state`
+        ("recording"/"processing"/"confirm") picks the label - `processing`
+        is the legacy shorthand for state="processing". `badge` is a short
+        status chip (e.g. the spoken-send indicator) right of the label.
+        """
         from PIL import Image
-        w, h, radius = self.inner_size(text)
+        if state is None:
+            state = "processing" if processing else "recording"
+        accent = MODE_ACCENTS.get(mode, MODE_ACCENTS["dictate"])
+        label = state_label(mode, state)
+        w, h, radius = self.inner_size(text, label, badge)
         ow = w + 2 * self.MARGIN
         oh = h + 2 * self.MARGIN
 
         frame = self._shadow_layer(ow, oh, radius)
         inner = Image.new("RGBA", (w * self.SS, h * self.SS), (0, 0, 0, 0))
-        self._paint(inner, levels, text, processing, phase, radius)
+        self._paint(inner, levels, text, state, phase, radius, accent, label,
+                    badge)
         inner = inner.resize((w, h), Image.LANCZOS)
         frame.alpha_composite(inner, (self.MARGIN, self.MARGIN))
         if alpha < 1.0:
             frame.putalpha(frame.getchannel("A").point(lambda a: int(a * alpha)))
         return frame, (ow, oh)
 
-    def _paint(self, im, levels, text, processing, phase, radius):
+    def _paint(self, im, levels, text, state, phase, radius, accent, label,
+               badge=None):
         from PIL import Image, ImageDraw
         S = self.SS
         spec = self.spec
+        processing = state == "processing"
         W, H = im.size
         d = ImageDraw.Draw(im)
 
@@ -288,7 +332,7 @@ class PillRenderer:
         im.alpha_composite(self._gloss_border(W, H, radius))
 
         lines = self.text_lines(text)
-        row_w = self._row_width()
+        row_w = self._row_width(label, badge)
         text_block_h = len(lines) * spec.line_h + TEXT_GAP if lines else 0
         row_y = (H - spec.wave_h * S) // 2 if not lines \
             else (spec.pad_v * S) + text_block_h * S
@@ -301,12 +345,18 @@ class PillRenderer:
 
         bars_width = spec.bars * spec.bar_w + (spec.bars - 1) * spec.bar_gap
         self._paint_bars(d, x + (spec.wave_w - bars_width) / 2 * S, row_y,
-                         levels, processing, phase)
+                         levels, processing, phase, accent)
         x += spec.wave_w * S + 10 * S
 
         label_a = LABEL_ALPHA if not processing else int(LABEL_ALPHA * 0.5)
         d.text((x, row_y + (spec.wave_h * S - spec.label_font * S) // 2 + S),
-               LABEL, font=self._label_font, fill=(255, 255, 255, label_a))
+               label, font=self._label_font,
+               fill=(*accent, label_a))
+        if badge:
+            bx = x + d.textlength(label, font=self._label_font) + 10 * S
+            d.text((bx, row_y + (spec.wave_h * S - spec.label_font * S) // 2 + S),
+                   badge, font=self._label_font,
+                   fill=(*accent, 255 if not processing else 200))
 
         ty = spec.pad_v * S
         for ln in lines:
@@ -350,7 +400,8 @@ class PillRenderer:
         self._cache[key] = out
         return out
 
-    def _paint_bars(self, d, x, row_y, levels, processing, phase):
+    def _paint_bars(self, d, x, row_y, levels, processing, phase,
+                    accent=(255, 255, 255)):
         S = self.SS
         spec = self.spec
         heights = list(levels) if levels else []
@@ -372,7 +423,7 @@ class PillRenderer:
                 a = BAR_ALPHA
             d.rounded_rectangle(
                 (bx, y0, bx + spec.bar_w * S - S * 0.4, y0 + bh_px),
-                spec.bar_w * S / 2, fill=(255, 255, 255, a))
+                spec.bar_w * S / 2, fill=(*accent, a))
 
     # -- cached layers --------------------------------------------------------
 
@@ -457,6 +508,218 @@ def confirmation_pill_text(command: str, purpose: str | None = None) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Command panel - Linux port of the upstream NotchCommandOutputExpandedView:
+# a ~380 px black panel that shows the voice->shell conversation (instruction,
+# proposed commands, results, summary) while the agent loop runs. Voice
+# follow-ups work as before (command key starts a new take); the panel makes
+# the loop visible instead of blind.
+# ---------------------------------------------------------------------------
+
+PANEL_W = 380
+PANEL_RADIUS = 16
+PANEL_PAD = 14
+PANEL_HEADER_H = 30
+PANEL_TEXT_SIZE = 12
+PANEL_LINE_H = 17
+PANEL_ENTRY_GAP = 7
+PANEL_MAX_ENTRIES = 8
+PANEL_HINT = "follow-up: command key · Esc cancels"
+
+PANEL_FG = (235, 235, 235)
+PANEL_DIM = (150, 150, 150)
+PANEL_OK = (94, 214, 132)
+
+
+class CommandPanelRenderer:
+    """Renders command-conversation frames as RGBA images (pure Pillow)."""
+
+    SS = 2    # supersample, same as the pill
+    MARGIN = 22
+
+    def __init__(self, width: int = PANEL_W):
+        from PIL import Image
+        self._Image = Image
+        self.width = width
+        self._font = _load_font(PANEL_TEXT_SIZE * self.SS, bold=False)
+        self._font_bold = _load_font(PANEL_TEXT_SIZE * self.SS, bold=True)
+        self._small = _load_font(10 * self.SS, bold=True)
+        self.entries: list[dict] = []
+        self.status: str | None = None
+        self.awaiting: str | None = None   # pending "$ command" hint footer
+        self._cache: dict = {}
+
+    # -- content ---------------------------------------------------------
+
+    def set_entries(self, entries: list[dict]) -> None:
+        self.entries = list(entries)[-PANEL_MAX_ENTRIES:]
+
+    def set_status(self, status: str | None) -> None:
+        self.status = status
+
+    def set_awaiting(self, command: str | None) -> None:
+        self.awaiting = command
+
+    # -- geometry ----------------------------------------------------------
+
+    def _wrap(self, d, text: str, max_w: int, max_lines: int) -> list[str]:
+        return wrap_lines(d, text, self._font, max_w, max_lines)
+
+    def _body_lines(self, d) -> int:
+        """Total painted line count + inter-entry gaps for current entries."""
+        max_w = (self.width - 2 * PANEL_PAD - 14) * self.SS
+        lines = 0
+        for e in self.entries:
+            lines += len(self._wrap(d, e.get("text", ""), max_w, 4))
+            if e.get("sub"):
+                lines += len(self._wrap(d, e["sub"], max_w, 2))
+            lines += 1  # the inter-entry gap (PANEL_ENTRY_GAP) in line units
+        return lines
+
+    def inner_size(self, text: str | None = None) -> tuple[int, int, int]:
+        from PIL import ImageDraw
+        probe = ImageDraw.Draw(self._Image.new("RGBA", (4, 4)))
+        lines = self._body_lines(probe)
+        status_h = (PANEL_LINE_H + 2) if self.status else 0
+        hint_h = 16 if self.awaiting else 0
+        h = PANEL_PAD + PANEL_HEADER_H + PANEL_ENTRY_GAP \
+            + lines * PANEL_LINE_H + status_h + hint_h + PANEL_PAD
+        h = max(h, 90)
+        return self.width, h, PANEL_RADIUS
+
+    def measure(self, text: str | None = None) -> tuple[int, int]:
+        w, h, _ = self.inner_size(text)
+        return w + 2 * self.MARGIN, h + 2 * self.MARGIN
+
+    # -- painting ----------------------------------------------------------
+
+    def render(self, levels, text: str | None = None, *,
+               processing: bool = False, phase: float = 0.0,
+               alpha: float = 1.0, mode: str = "command",
+               state: str | None = None):
+        from PIL import Image, ImageDraw
+        accent = MODE_ACCENTS.get("command", (255, 99, 88))
+        w, h, radius = self.inner_size()
+        ow, oh = w + 2 * self.MARGIN, h + 2 * self.MARGIN
+        frame = self._shadow_layer(ow, oh, radius)
+        inner = Image.new("RGBA", (w * self.SS, h * self.SS), (0, 0, 0, 0))
+        d = ImageDraw.Draw(inner)
+        S = self.SS
+
+        d.rounded_rectangle((0, 0, w * S - 1, h * S - 1), radius * S,
+                            fill=(0, 0, 0, 255))
+        inner.alpha_composite(self._gloss_border(w * S, h * S, radius * S))
+
+        # header: red dot + "Command" + right-aligned state/hint
+        y = PANEL_PAD * S
+        dot_r = 4 * S
+        cy = y + PANEL_HEADER_H * S // 2
+        live = state in ("recording", "processing")
+        d.ellipse((PANEL_PAD * S, cy - dot_r, PANEL_PAD * S + 2 * dot_r,
+                   cy + dot_r), fill=(*accent, 255 if live else 140))
+        tx = (PANEL_PAD + 14) * S
+        d.text((tx, cy - self._small.size // 2 - S), "Command",
+               font=self._small, fill=(*accent, 230))
+        right = "confirm?" if self.awaiting \
+            else ("working" if self.status else "")
+        rw = d.textlength(right, font=self._small)
+        d.text((w * S - PANEL_PAD * S - rw, cy - self._small.size // 2 - S),
+               right, font=self._small, fill=(*PANEL_DIM, 200))
+
+        # body: newest at bottom, head-truncated wrap
+        y = (PANEL_PAD + PANEL_HEADER_H + PANEL_ENTRY_GAP) * S
+        max_w = (self.width - 2 * PANEL_PAD) * S
+        line_h = PANEL_LINE_H * S
+        for e in self.entries:
+            kind = e.get("kind")
+            if kind == "user":
+                d.text((PANEL_PAD * S, y), "»", font=self._font_bold,
+                       fill=(*PANEL_FG, 235))
+                x = (PANEL_PAD + 14) * S
+                col = (*PANEL_FG, 235)
+            elif kind == "proposal":
+                d.text((PANEL_PAD * S, y), "$", font=self._font_bold,
+                       fill=(*accent, 255))
+                x = (PANEL_PAD + 14) * S
+                col = (*accent, 255)
+            elif kind == "ok":
+                d.text((PANEL_PAD * S, y), "✓", font=self._font_bold,
+                       fill=(*PANEL_OK, 235))
+                x = (PANEL_PAD + 14) * S
+                col = (*PANEL_DIM, 230)
+            elif kind == "fail":
+                d.text((PANEL_PAD * S, y), "✗", font=self._font_bold,
+                       fill=(*accent, 255))
+                x = (PANEL_PAD + 14) * S
+                col = (*PANEL_DIM, 230)
+            else:  # summary / note
+                x = PANEL_PAD * S
+                col = (*PANEL_FG, 220)
+            for ln in self._wrap(d, e.get("text", ""), max_w - 14 * S, 4):
+                d.text((x, y), ln, font=self._font, fill=col)
+                y += line_h
+            if e.get("sub"):
+                for ln in self._wrap(d, e["sub"], max_w - 14 * S, 2):
+                    d.text(((PANEL_PAD + 14) * S, y), ln, font=self._font,
+                           fill=(*PANEL_DIM, 200))
+                    y += line_h
+            y += PANEL_ENTRY_GAP * S
+
+        if self.status:
+            d.text((PANEL_PAD * S, y), self.status, font=self._font,
+                   fill=(*PANEL_DIM, 210))
+            y += (PANEL_LINE_H + 2) * S
+        if self.awaiting:
+            d.text((PANEL_PAD * S, y + 2 * S), self.awaiting,
+                   font=self._small, fill=(*accent, 220))
+
+        inner = inner.resize((w, h), Image.LANCZOS)
+        frame.alpha_composite(inner, (self.MARGIN, self.MARGIN))
+        if alpha < 1.0:
+            frame.putalpha(frame.getchannel("A").point(
+                lambda a: int(a * alpha)))
+        return frame, (ow, oh)
+
+    # -- cached layers (same recipe as the pill) -----------------------------
+
+    def pill_mask(self, text: str | None = None):
+        from PIL import Image, ImageDraw
+        w, h, radius = self.inner_size()
+        S = 4
+        im = Image.new("L", (w * S, h * S), 0)
+        ImageDraw.Draw(im).rounded_rectangle(
+            (0, 0, w * S - 1, h * S - 1), radius * S, fill=255)
+        im = im.resize((w, h), Image.LANCZOS)
+        full = Image.new("L", (w + 2 * self.MARGIN, h + 2 * self.MARGIN), 0)
+        full.paste(im, (self.MARGIN, self.MARGIN))
+        return full
+
+    def _gloss_border(self, W, H, radius):
+        from PIL import Image, ImageChops, ImageDraw
+        outline = Image.new("L", (W, H), 0)
+        ImageDraw.Draw(outline).rounded_rectangle(
+            (0, 0, W - 1, H - 1), radius, outline=255,
+            width=max(2, int(1.2 * self.SS)))
+        grad = Image.linear_gradient("L").resize((W, H))
+        scale = Image.new("L", (W, H), BORDER_ALPHA_TOP)
+        scale.paste(Image.new("L", (W, H), BORDER_ALPHA_BOTTOM),
+                    (0, 0, W, H), grad)
+        border = Image.new("RGBA", (W, H), (255, 255, 255, 0))
+        border.putalpha(ImageChops.multiply(outline, scale))
+        return border
+
+    def _shadow_layer(self, w: int, h: int, radius: int):
+        from PIL import Image, ImageDraw, ImageFilter
+        m = self.MARGIN
+        pill = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(pill).rounded_rectangle(
+            (m, m + 6, w - m - 1, h - m - 1), radius, fill=90)
+        pill = pill.filter(ImageFilter.GaussianBlur(7))
+        layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        layer.putalpha(pill)
+        return layer
+
+
 class FluidOverlay:
     """The pill window. Falls back to NotifyPreview when X11/Pillow fail."""
 
@@ -466,7 +729,8 @@ class FluidOverlay:
                  raw_path: Path | None = None,
                  bottom_offset: int = BOTTOM_OFFSET,
                  icon_path: str | Path | None = None,
-                 size: str = DEFAULT_SIZE):
+                 size: str = DEFAULT_SIZE,
+                 mode: str = "dictate"):
         from .preview import NotifyPreview
         self.fallback = NotifyPreview()
         self._d = None
@@ -475,6 +739,8 @@ class FluidOverlay:
         self._raw_path = raw_path
         self._bottom_offset = bottom_offset
         self._size = size
+        self._mode = mode if mode in MODE_ACCENTS else "dictate"
+        self._badge: str | None = None
         self._text: str | None = None
         self._state = "recording"
         self._state_since = time.monotonic()
@@ -544,6 +810,23 @@ class FluidOverlay:
             self._text = text
             self._last_sig = None  # force redraw + possible resize
 
+    def set_mode(self, mode: str) -> None:
+        """Switch the accent color + label family (dictate/rewrite/command)."""
+        if mode not in MODE_ACCENTS:
+            raise ValueError(f"unknown overlay mode {mode!r}")
+        with self._lock:
+            if self._mode != mode:
+                self._mode = mode
+                self._last_sig = None  # accent change -> repaint
+
+    def set_badge(self, text: str | None) -> None:
+        """Short right-of-label status chip (spoken-send indicator: 
+        '⏎ sending…' / '⏎ sent')."""
+        with self._lock:
+            if self._badge != text:
+                self._badge = text
+                self._last_sig = None
+
     def set_state(self, state: str) -> None:
         """'recording' (bars follow audio), 'processing' (flat bars +
         shimmer) or 'confirm' (static bars while the user decides whether
@@ -605,15 +888,19 @@ class FluidOverlay:
 
     def _tick(self, state: str) -> None:
         X = self._X
-        text = self._text
+        with self._lock:
+            text = self._text
+            mode = self._mode
+            badge = self._badge
         if state == "recording":
             self._levels.update(self._read_pcm_tail())
         self._phase += 1.0 / self.FPS
 
         img, (w, h) = self._renderer.render(
             self._levels.levels(), text,
-            processing=(state == "processing"), phase=self._phase)
-        sig = (w, h, state, text,
+            processing=(state == "processing"), phase=self._phase,
+            mode=mode, state=state, badge=badge)
+        sig = (w, h, state, mode, text, badge,
                tuple(round(b, 1) for b in self._levels.levels()),
                round(self._phase % SHIMMER_PERIOD, 2))
         if sig == self._last_sig:
@@ -717,3 +1004,57 @@ class FluidOverlay:
                 d.close()
             except Exception:
                 pass
+
+
+class CommandPanel(FluidOverlay):
+    """The command-conversation window: FluidOverlay's X11 plumbing with a
+    structured-content renderer. Voice follow-ups stay on the command key."""
+
+    FPS = 12  # static content + a slow "Working..." pulse is plenty
+
+    def __init__(self, display_name: str | None = None, **kw):
+        kw.setdefault("mode", "command")
+        super().__init__(display_name, **kw)
+        self._entries: list[dict] = []
+        self._status: str | None = None
+        self._awaiting: str | None = None
+        if self._d is not None:
+            self._renderer = CommandPanelRenderer()
+
+    # content API (thread-safe through the overlay lock)
+
+    def update(self, entries: list[dict], status: str | None = None,
+               awaiting: str | None = None) -> None:
+        with self._lock:
+            self._entries = list(entries)[-PANEL_MAX_ENTRIES:]
+            self._status = status
+            self._awaiting = awaiting
+            self._last_sig = None
+
+    def show(self, text: str) -> None:  # pill API not used by the panel
+        pass
+
+    def _tick(self, state: str) -> None:
+        X = self._X
+        with self._lock:
+            entries, status, awaiting = (self._entries, self._status,
+                                         self._awaiting)
+        if self._renderer is None:
+            return
+        self._renderer.set_entries(entries)
+        self._renderer.set_status(status)
+        self._renderer.set_awaiting(awaiting)
+        self._phase += 1.0 / self.FPS
+        pulse = "Working..." if (status and int(self._phase * 2) % 2) \
+            else (status or "")
+        self._renderer.set_status(pulse)
+        img, (w, h) = self._renderer.render(
+            None, state="confirm")
+        sig = (w, h, state, tuple(map(str, entries)), status, awaiting,
+               round(self._phase, 1))
+        if sig == self._last_sig:
+            return
+        self._last_sig = sig
+        if self._win is None or self._win_size != (w, h):
+            self._create_window(w, h)
+        self._blit(img, w, h, None)

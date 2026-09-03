@@ -7,8 +7,8 @@ import struct
 import pytest
 
 from fluidvoice.overlay import (BAR_COUNT, BAR_MAX_H, BAR_MIN_H, PILL_H,
-                                PILL_RADIUS, AudioLevels,
-                                PillRenderer, head_truncate)
+                                PILL_RADIUS, AudioLevels, CommandPanel,
+                                FluidOverlay, PillRenderer, head_truncate)
 
 
 def sine(seconds: float = 1.0, rate: int = 16000, freq: int = 220,
@@ -220,3 +220,133 @@ class TestConfig:
     def test_default_preview_mode_is_auto(self):
         from fluidvoice.config import DEFAULTS
         assert DEFAULTS["recording"]["preview_mode"] == "auto"
+
+
+class TestModeAccents:
+    """Upstream OverlayMode.notchColor parity: dictate white, rewrite blue,
+    command red - with per-state labels."""
+
+    def test_accent_table_matches_upstream(self):
+        from fluidvoice.overlay import MODE_ACCENTS, state_label
+        assert MODE_ACCENTS["dictate"] == (255, 255, 255)
+        assert MODE_ACCENTS["rewrite"] != MODE_ACCENTS["dictate"]
+        assert MODE_ACCENTS["command"][0] > 200  # red-dominant
+        assert state_label("dictate", "processing") == "Transcribing"
+        assert state_label("rewrite", "processing") == "Thinking"
+        assert state_label("command", "recording") == "Listening..."
+        assert state_label("command", "confirm") == "Command"
+
+    def test_command_renders_red_label_white_dictate(self):
+        r = PillRenderer()
+        img, _ = r.render([BAR_MAX_H] * BAR_COUNT, None, mode="command",
+                          state="recording")
+        # find a reddish pixel (R >> G,B)
+        reds = sum(1 for x in range(0, img.width, 2)
+                   for y in range(0, img.height, 2)
+                   if (lambda p: p[3] > 200 and p[0] > 200 and p[1] < 140)
+                   (img.getpixel((x, y))))
+        assert reds > 5
+        white, _ = r.render([BAR_MAX_H] * BAR_COUNT, None, mode="dictate",
+                            state="recording")
+        assert img.tobytes() != white.tobytes()
+
+    def test_label_changes_pill_width(self):
+        r = PillRenderer(size="pill")
+        w1, _, _ = r.inner_size(None, "Dictate")
+        w2, _, _ = r.inner_size(None, "Transcribing")
+        assert w2 > w1
+
+    def test_overlay_set_mode_validates(self, monkeypatch):
+        import fluidvoice.overlay as ov
+
+        def boom(*a, **k):
+            raise OSError("no display")
+
+        monkeypatch.setattr("Xlib.display.Display", boom)
+        o = ov.FluidOverlay()
+        o.set_mode("command")
+        assert o._mode == "command"
+        with pytest.raises(ValueError):
+            o.set_mode("bogus")
+        o.close()
+
+
+class TestCommandPanel:
+    """NotchCommandOutputExpandedView port: structured conversation feed."""
+
+    def _renderer(self):
+        from fluidvoice.overlay import CommandPanelRenderer
+        return CommandPanelRenderer()
+
+    def test_entries_shrink_panelless_than_cap(self):
+        from fluidvoice.overlay import PANEL_MAX_ENTRIES
+        r = self._renderer()
+        r.set_entries([{"kind": "user", "text": f"step {i}"} for i in range(20)])
+        assert len(r.entries) == PANEL_MAX_ENTRIES
+
+    def test_panel_is_wide_and_tall_enough_for_entries(self):
+        r = self._renderer()
+        r.set_entries([{"kind": "user", "text": "list big files"},
+                       {"kind": "proposal", "text": "du -a . | sort -n | tail",
+                        "sub": "find the biggest entries"},
+                       {"kind": "ok", "text": "$ du -a . · exit 0"}])
+        w, h, radius = r.inner_size()
+        assert w == 380          # upstream panel width
+        assert h >= 120
+        assert radius == 16      # upstream corner radius
+
+    def test_render_draws_accent_and_role_marks(self):
+        r = self._renderer()
+        r.set_entries([{"kind": "user", "text": "check disk usage"},
+                       {"kind": "proposal", "text": "df -h",
+                        "sub": "show free space"},
+                       {"kind": "ok", "text": "$ df -h · exit 0"}])
+        r.set_awaiting("run: command key · Esc")
+        img, (w, h) = r.render(None, state="confirm")
+        assert (w, h) == r.measure()
+        reds = sum(1 for x in range(0, img.width, 3)
+                   for y in range(0, img.height, 3)
+                   if (lambda p: p[3] > 200 and p[0] > 200 and p[1] < 140)
+                   (img.getpixel((x, y))))
+        assert reds > 5          # "$" marks + dot + hint in command red
+
+    def test_headless_panel_update_close(self, monkeypatch):
+        import fluidvoice.overlay as ov
+
+        def boom(*a, **k):
+            raise OSError("no display")
+
+        monkeypatch.setattr("Xlib.display.Display", boom)
+        p = ov.CommandPanel()
+        assert p.using_overlay is False
+        p.update([{"kind": "user", "text": "hi"}], status="Working...")
+        p.close()
+
+
+class TestSendBadge:
+    """Upstream SpokenSendIndicator, simplified to a pill status chip."""
+
+    def test_badge_widens_pill_and_paints_accent_text(self):
+        r = PillRenderer()
+        w0, h0, _ = r.inner_size(None, "Transcribing")
+        w1, h1, _ = r.inner_size(None, "Transcribing", "⏎ sending…")
+        assert w1 > w0
+        img, _ = r.render([BAR_MIN_H] * BAR_COUNT, None, mode="dictate",
+                          state="processing", badge="⏎ sending…")
+        # the badge row is bright text on black somewhere right of center
+        strip = img.crop((img.width // 2, 0, img.width, img.height))
+        assert bright_pixels(strip) > 5
+
+    def test_overlay_set_badge_updates(self, monkeypatch):
+        import fluidvoice.overlay as ov
+
+        def boom(*a, **k):
+            raise OSError("no display")
+
+        monkeypatch.setattr("Xlib.display.Display", boom)
+        o = ov.FluidOverlay()
+        o.set_badge("⏎ sending…")
+        assert o._badge == "⏎ sending…"
+        o.set_badge(None)
+        assert o._badge is None
+        o.close()

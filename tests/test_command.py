@@ -446,22 +446,18 @@ class TestDaemonCommandMode:
         ai_ready(cfg)
         pills = []
 
-        class CapturingDisplay:
+        class CapturingPanel:
             using_overlay = True
 
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
-                self.shown = []
-                self.states = []
+                self.updates = []          # (entries, status, awaiting)
                 self.started = 0
                 self.closed = 0
                 pills.append(self)
 
-            def show(self, text):
-                self.shown.append(text)
-
-            def set_state(self, state):
-                self.states.append(state)
+            def update(self, entries, status=None, awaiting=None):
+                self.updates.append((list(entries), status, awaiting))
 
             def start(self):
                 self.started += 1
@@ -469,7 +465,7 @@ class TestDaemonCommandMode:
             def close(self):
                 self.closed += 1
 
-        monkeypatch.setattr("fluidvoice.overlay.FluidOverlay", CapturingDisplay)
+        monkeypatch.setattr("fluidvoice.overlay.CommandPanel", CapturingPanel)
         hk = FakeCommandHotkey()
         client = StubAIClient(replies or [
             '{"command": "echo hello", "purpose": "greet", "done": false}'])
@@ -491,14 +487,18 @@ class TestDaemonCommandMode:
         assert pills, "pill never built"
         return d, pills[-1], hk, client, sessions
 
-    def test_propose_shows_confirmation_pill(self, cfg, quiet_ui, monkeypatch):
+    def test_propose_shows_confirmation_panel(self, cfg, quiet_ui, monkeypatch):
         d, pill, hk, client, sessions = self._pending(cfg, monkeypatch)
-        assert pill.shown and "echo hello" in pill.shown[0]
-        assert "greet" in pill.shown[0]
-        assert pill.states == ["confirm"]
+        assert pill.updates, "panel never updated"
+        entries, status, awaiting = pill.updates[-1]
+        texts = " ".join(str(e.get("text", "")) + str(e.get("sub", ""))
+                         for e in entries)
+        assert "echo hello" in texts and "greet" in texts
+        assert "list files" in texts           # instruction is in the feed
+        assert awaiting and "Esc" in awaiting  # confirm hint armed
         assert pill.started == 1
         assert hk.armed == [True]      # Escape grab armed
-        assert pill.kwargs.get("size") == "large"
+        assert "bottom_offset" in pill.kwargs  # panel built with daemon geometry
         assert any("Esc" in (t + b) for t, b in quiet_ui["notify"])
         assert d.busy is False         # waiting for the user, not busy
         assert d._command_timer is not None
@@ -524,7 +524,12 @@ class TestDaemonCommandMode:
         notes = " ".join(t + b for t, b in quiet_ui["notify"])
         assert "exit 0" in notes
         assert "all done" in notes
-        assert pill.closed >= 1
+        summary = [u for u in pill.updates
+                   if any(e.get("kind") == "summary" for e in u[0])]
+        assert summary and "all done" in summary[-1][0][-1]["text"]
+        for u in pill.updates:     # no stale confirm hint afterwards
+            pass
+        assert summary[-1][2] is None
         assert hk.armed[-1] is False and True in hk.armed  # disarmed after run
 
     def test_escape_cancel_executes_nothing(self, cfg, quiet_ui, monkeypatch,

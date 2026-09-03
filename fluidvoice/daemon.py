@@ -140,6 +140,16 @@ class DictationPipeline:
         except insertion.InsertError as e:
             self.log(f"send-key failed: {e}")
 
+    def _set_pill_badge(self, text: str) -> None:
+        """Spoken-send indicator on the processing pill (upstream
+        SpokenSendIndicator, simplified to a status chip)."""
+        display = getattr(self, "_closing_display", None)
+        if display is not None:
+            try:
+                display.set_badge(text)
+            except Exception:
+                pass
+
     def _insert(self, text: str) -> str:
         try:
             strategy = self.inserter(text, self.cfg)
@@ -197,7 +207,9 @@ class DictationPipeline:
             strategy = self._insert(polished)
             if self._pending_send_key:
                 spec, self._pending_send_key = self._pending_send_key, None
+                self._set_pill_badge("⏎ sending…")
                 self.key_presser(spec)
+                self._set_pill_badge("⏎ sent")
                 strategy += f"+{spec}"
             out = {"raw": raw, "text": polished, "ai": ai_used, "strategy": strategy}
             self.log(f"typed ({strategy}, {len(polished)} chars, {duration:.1f}s audio, "
@@ -240,6 +252,7 @@ class Daemon:
         self._command_session = None
         self._command_pending = False
         self._command_display = None
+        self._command_entries: list[dict] = []  # panel conversation feed
         self._command_timer: threading.Timer | None = None
         self._command_hotkey = None
         self._watchdog: threading.Timer | None = None
@@ -907,10 +920,13 @@ class Daemon:
             if mode in ("auto", "overlay"):
                 # FluidOverlay itself falls back to notifications when the
                 # display/pill stack is unavailable.
+                accent = "rewrite" if self._rewrite_mode \
+                    else "command" if self._command_mode else "dictate"
                 display = FluidOverlay(
                     raw_path=Path(raw_path),
                     bottom_offset=int(rcfg.get("preview_bottom_offset", 64)),
-                    size=rcfg.get("preview_overlay_size", "medium"))
+                    size=rcfg.get("preview_overlay_size", "medium"),
+                    mode=accent)
                 actual = "overlay" if display.using_overlay else "notify"
             else:
                 display = NotifyPreview()
@@ -1139,6 +1155,9 @@ class Daemon:
         """Turn 1: ask the model for the first proposal (background thread;
         the user is not blocked - not even by the LLM latency)."""
         from . import command as command_mod
+        self._command_entries = [{"kind": "user", "text": instruction}]
+        self._command_panel(self._command_entries, status="Working...",
+                            awaiting=None)
 
         def _work():
             factory = self._command_session_factory or command_mod.CommandSession
@@ -1181,23 +1200,39 @@ class Daemon:
         threading.Thread(target=_guarded, name="fluidvoice-command",
                          daemon=True).start()
 
-    def _present_proposal(self, session, proposal) -> None:
-        """Awaiting-confirmation UX: pill, armed Escape grab, notification,
-        confirm watchdog. Call with no lock held."""
+    def _command_panel(self, entries: list[dict], status: str | None,
+                       awaiting: str | None):
+        """Live conversation panel (best-effort). Reuses the running panel
+        when present; falls back to None headlessly."""
         try:
-            from .overlay import FluidOverlay, confirmation_pill_text
+            from .overlay import CommandPanel
+            panel = self._command_display
+            if panel is not None and panel.using_overlay:
+                panel.update(entries, status=status, awaiting=awaiting)
+                return panel
             rcfg = self.cfg["recording"]
-            ov = FluidOverlay(raw_path=None,
-                              bottom_offset=int(rcfg.get("preview_bottom_offset", 64)),
-                              size="large")
-            if ov.using_overlay:
-                ov.show(confirmation_pill_text(proposal.command,
-                                               proposal.purpose))
-                ov.set_state("confirm")
-                ov.start()
-                self._command_display = ov
-            else:
-                ov.close()  # headless: the notification carries everything
+            panel = CommandPanel(
+                bottom_offset=int(rcfg.get("preview_bottom_offset", 64)))
+            if not panel.using_overlay:
+                panel.close()
+                return None
+            panel.update(entries, status=status, awaiting=awaiting)
+            panel.start()
+            self._command_display = panel
+            return panel
+        except Exception as e:  # noqa: BLE001 - never block the agent loop
+            log(f"WARN command panel unavailable: {e}")
+            return None
+
+    def _present_proposal(self, session, proposal) -> None:
+        """Awaiting-confirmation UX: conversation panel, armed Escape grab,
+        notification, confirm watchdog. Call with no lock held."""
+        try:
+            self._command_entries = (self._command_entries + [
+                {"kind": "proposal", "text": proposal.command,
+                 "sub": proposal.purpose}])[-8:]
+            self._command_panel(self._command_entries, status=None,
+                                awaiting="run: command key · Esc")
         except Exception as e:  # noqa: BLE001 - never block confirmation
             log(f"WARN command pill unavailable: {e}")
         if self._command_hotkey:
@@ -1226,7 +1261,10 @@ class Daemon:
             self._command_pending = False
             self.busy = True                 # atomic with the flag clear
         session = self._command_session      # never None while pending
+        # the conversation panel survives the pending-UX teardown
+        panel, self._command_display = self._command_display, None
         self._teardown_pending_ux()
+        self._command_display = panel
 
         def _work():
             from . import command as command_mod
@@ -1245,14 +1283,26 @@ class Daemon:
                           f"$ {outcome.command} → exit {outcome.exit_code}"
                           + (f"\n{brief}" if brief else ""),
                           enabled=self.cfg["notifications"]["enabled"])
+                self._command_entries = (self._command_entries + [
+                    {"kind": "ok" if outcome.success else "fail",
+                     "text": f"$ {outcome.command} · "
+                             f"exit {outcome.exit_code}"}])[-8:]
             if proposal is None:
+                self._command_entries = (self._command_entries + [
+                    {"kind": "summary",
+                     "text": session.summary or "Command finished."}])[-8:]
+                self._command_panel(self._command_entries, status=None,
+                                    awaiting=None)
                 ui.notify("FluidVoice",
                           (session.summary or "Command finished.")
                           + (" (step limit reached)" if session.exhausted
                              else ""),
                           enabled=self.cfg["notifications"]["enabled"])
-                self._end_command_session()
+                threading.Timer(8.0, self._close_command_panel).start()
+                self._end_command_session(close_panel=False)
                 return
+            self._command_panel(self._command_entries, status="Working...",
+                                awaiting=None)
             with self._lock:
                 self._command_pending = True
                 self.busy = False
@@ -1305,9 +1355,20 @@ class Daemon:
             except Exception:
                 pass
 
-    def _end_command_session(self) -> None:
+    def _close_command_panel(self) -> None:
+        if self._command_session is not None:
+            return  # a new command session reused the panel - leave it up
+        panel, self._command_display = self._command_display, None
+        if panel is not None:
+            try:
+                panel.close()
+            except Exception:
+                pass
+
+    def _end_command_session(self, close_panel: bool = True) -> None:
         with self._lock:
             self._command_pending = False
             self.busy = False
         self._command_session = None
-        self._teardown_pending_ux()
+        if close_panel:
+            self._teardown_pending_ux()
