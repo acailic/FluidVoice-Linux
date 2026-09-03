@@ -193,9 +193,9 @@ commands are recorded in History.
 | Spoken punctuation ("literal comma") | ✅ full rule table | ✅ ported (dot/slash/at-sign contexts included) |
 | AI polish with the original prompt | ✅ (local Fluid Intelligence or cloud) | ✅ (any OpenAI-compatible endpoint; no bundled local LLM yet) |
 | Start/stop sounds | ✅ | ✅ (same GPLv3 SFX) |
-| Live streaming preview overlay | ✅ | ✅ Mac-style pill overlay (bottom-center, live waveform) |
+| Live streaming preview overlay | ✅ | ✅ Mac-style pill (live waveform, mode accent colors, state labels, send indicator) |
 | Write/Rewrite selected text | ✅ (⌥R) | ✅ dedicated rewrite hotkey |
-| Command mode (voice → terminal agent) | ✅ | ✅ (v1) dedicated hotkey, pill confirmation, JSON agent loop |
+| Command mode (voice → terminal agent) | ✅ (notch chat panel) | ✅ dedicated hotkey, live conversation panel, JSON agent loop |
 | Per-app prompt sets | ✅ | 🚧 roadmap (app hint is already captured) |
 | Settings UI with model picker | ✅ | ✅ native GTK app (`fluidvoice app`): Settings + History windows |
 | Onboarding (setup + tryout) | ✅ | ✅ opens once on first launch (`fluidvoice app --onboard`) |
