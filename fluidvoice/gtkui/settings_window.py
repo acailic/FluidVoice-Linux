@@ -14,7 +14,7 @@ import threading
 from gi.repository import Adw, Gdk, GLib, Gtk
 
 from .. import __version__ as APP_VERSION
-from .. import backends, model_catalog
+from .. import backends, model_catalog, model_download
 from ..config import DEFAULTS
 from .client import Client
 
@@ -91,6 +91,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._save_groups: list[Adw.PreferencesGroup] = []
         self._save_rows: list[Adw.ActionRow] = []
         self._model_rows: list[Adw.ActionRow] = []
+        self._gguf_rows: list[Adw.ActionRow] = []
+        self._gguf_dl: dict[str, dict] = {}  # name -> {bytes, total, done, error}
         self._mod_toggles: dict[str, Gtk.ToggleButton] = {}
 
         self._build_general()
@@ -372,8 +374,13 @@ class SettingsWindow(Adw.PreferencesWindow):
                                    title="Models")
         self.models_group = Adw.PreferencesGroup(
             title="Speech models",
-            description="Local whisper models (faster-whisper)")
+            description="faster-whisper models (downloaded on first use)")
         page.add(self.models_group)
+
+        self.gguf_group = Adw.PreferencesGroup(
+            title="whisper.cpp GGUF",
+            description="Direct ggml models for the whisper.cpp backend")
+        page.add(self.gguf_group)
 
         warm = Adw.PreferencesGroup(title="State")
         self.warmup_row = Adw.ActionRow(title="Model", subtitle="—")
@@ -395,7 +402,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             "model", "compute", "Compute",
             [("auto", "auto"), ("float16", "float16"), ("int8", "int8")]))
         engine.add(self._entry("model", "whispercpp_model",
-                               "whisper.cpp model path (ggml/gguf)"))
+                               "whisper.cpp model — name like ggml-base.bin, or a path"))
         engine.add(self._switch("model", "eager_warmup", "Load at startup",
                                 "Warm the model when the daemon starts "
                                 "(needs a daemon restart)"))
@@ -425,6 +432,7 @@ class SettingsWindow(Adw.PreferencesWindow):
                 row.add_suffix(btn)
             self.models_group.add(row)
             self._model_rows.append(row)
+        self._refresh_gguf_rows()
         st = self.c.status() or {}
         warm = st.get("warmup") or {}
         if warm.get("running"):
@@ -466,6 +474,107 @@ class SettingsWindow(Adw.PreferencesWindow):
         if warm.get("error"):
             self.toast(f"model error: {warm['error']}")
         return False
+
+    # -- whisper.cpp GGUF models (download + use) ---------------------------------
+
+    def _active_gguf(self) -> str | None:
+        m = self.cfg.get("model", {})
+        if str(m.get("backend", "")) != "whisper.cpp":
+            return None
+        val = str(m.get("whispercpp_model", "")).strip()
+        return val if val in model_catalog.GGUF_CATALOG else None
+
+    def _dl_subtitle(self, name: str) -> str:
+        st = self._gguf_dl.get(name) or {}
+        b, t = st.get("bytes", 0), st.get("total")
+
+        def mb(n):
+            return f"{n / 1_000_000:.0f} MB"
+
+        return f"downloading… {mb(b)} / {mb(t)}" if t else f"downloading… {mb(b)}"
+
+    def _refresh_gguf_rows(self) -> None:
+        for row in self._gguf_rows:
+            self.gguf_group.remove(row)
+        self._gguf_rows = []
+        active = self._active_gguf()
+        for name, info in model_catalog.GGUF_CATALOG.items():
+            row = Adw.ActionRow(
+                title=name,
+                subtitle=(f"{info['size']} · {info['langs']} languages · "
+                          f"{info['note']}"))
+            if name == active:
+                row.add_suffix(Gtk.Label(label="Active",
+                                         css_classes=["success", "caption"]))
+            elif (name in self._gguf_dl and not self._gguf_dl[name].get("done")
+                    and not self._gguf_dl[name].get("error")):
+                row.set_subtitle(self._dl_subtitle(name))
+                row.add_suffix(Gtk.Spinner(spinning=True))
+            elif model_catalog.gguf_downloaded(name):
+                btn = Gtk.Button(label="Use", css_classes=["suggested-action"])
+                btn.set_valign(Gtk.Align.CENTER)
+                btn.connect("clicked", self._use_gguf, name)
+                row.add_suffix(btn)
+            else:
+                btn = Gtk.Button(label="Download & use",
+                                 css_classes=["suggested-action"])
+                btn.set_valign(Gtk.Align.CENTER)
+                btn.connect("clicked", self._download_gguf, name)
+                row.add_suffix(btn)
+            self.gguf_group.add(row)
+            self._gguf_rows.append(row)
+
+    def _download_gguf(self, _btn, name: str) -> None:
+        if name in self._gguf_dl and not (self._gguf_dl[name].get("done")
+                                          or self._gguf_dl[name].get("error")):
+            return  # already running
+        self._gguf_dl[name] = {"bytes": 0, "total": None, "done": False,
+                               "error": None}
+        self._refresh_models()
+
+        def work():
+            st = self._gguf_dl[name]
+            try:
+                model_download.download_gguf(
+                    name, progress=lambda b, t: st.update(bytes=b, total=t))
+                st["done"] = True
+            except Exception as e:  # noqa: BLE001 - surfaced as a toast
+                st["error"] = str(e)[:300]
+
+        threading.Thread(target=work, daemon=True).start()
+        GLib.timeout_add(400, self._poll_gguf_dl, name)
+
+    def _poll_gguf_dl(self, name: str) -> bool:
+        st = self._gguf_dl.get(name)
+        if st is None or not (st.get("done") or st.get("error")):
+            # still running: rebuild rows for a live subtitle (download state
+            # survives because it lives in self._gguf_dl, not the rows)
+            self._refresh_models()
+            return True
+        self._refresh_models()
+        if st.get("error"):
+            self.toast(f"download failed: {st['error']}")
+        else:
+            self.toast(f"{name} downloaded — click Use to switch")
+        return False  # stop the timer
+
+    def _use_gguf(self, _btn, name: str) -> None:
+        if not model_catalog.gguf_downloaded(name):
+            self.toast(f"{name} is not downloaded yet")
+            return
+        try:
+            resp = self.c.set_config({"model": {
+                "backend": "whisper.cpp", "whispercpp_model": name}})
+        except Exception as e:
+            self.toast(str(e))
+            return
+        if resp.get("rejected") or resp.get("errors"):
+            self.toast("Rejected: " + ", ".join(
+                (resp.get("rejected") or []) + (resp.get("errors") or [])))
+            return
+        self.toast(f"Switching to whisper.cpp ({name})…")
+        self._load()  # resync cfg + rows
+        GLib.timeout_add_seconds(1, self._poll_model)  # existing warmup poll
 
     # -- AI page -------------------------------------------------------------------------
 

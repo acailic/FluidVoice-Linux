@@ -121,6 +121,63 @@ class TestWhisperCppBinary:
         assert backends._whispercpp_binary() is None
 
 
+class TestWhisperCppModelResolution:
+    """name-or-path resolution of model.whispercpp_model (Phase 2 plan)."""
+
+    @pytest.fixture(autouse=True)
+    def _env(self, tmp_path, monkeypatch):
+        import fluidvoice.backends.whisper_cpp as wc
+        monkeypatch.setattr(wc, "_whispercpp_binary", lambda: "/fake/whisper-cli")
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        self.wc = wc
+        self.tmp = tmp_path
+
+    def test_absolute_existing_path_passthrough(self):
+        p = self.tmp / "m.bin"
+        p.write_bytes(b"x")
+        be = self.wc.WhisperCppBackend(cfg(whispercpp_model=str(p)))
+        assert be.model == str(p)
+
+    def test_missing_path_raises(self):
+        with pytest.raises(RuntimeError, match="not found"):
+            self.wc.WhisperCppBackend(
+                cfg(whispercpp_model=str(self.tmp / "nope.bin")))
+
+    def test_catalog_name_resolves_to_managed_cache(self):
+        from fluidvoice import model_catalog
+        model_catalog.gguf_dir().mkdir(parents=True)
+        model_catalog.gguf_path("ggml-base.bin").write_bytes(b"x")
+        be = self.wc.WhisperCppBackend(cfg(whispercpp_model="ggml-base.bin"))
+        assert be.model == str(model_catalog.gguf_path("ggml-base.bin"))
+
+    def test_catalog_name_missing_mentions_settings(self):
+        with pytest.raises(RuntimeError, match="not downloaded"):
+            self.wc.WhisperCppBackend(cfg(whispercpp_model="ggml-base.bin"))
+        try:
+            self.wc.WhisperCppBackend(cfg(whispercpp_model="ggml-base.bin"))
+        except RuntimeError as e:
+            assert "Settings" in str(e)
+
+    def test_unknown_bare_name_lists_catalog(self):
+        with pytest.raises(RuntimeError, match="unknown whisper.cpp model"):
+            self.wc.WhisperCppBackend(cfg(whispercpp_model="ggml-bogus.bin"))
+        try:
+            self.wc.WhisperCppBackend(cfg(whispercpp_model="ggml-bogus.bin"))
+        except RuntimeError as e:
+            assert "ggml-base.bin" in str(e)
+
+    def test_empty_value_requires_setting(self):
+        with pytest.raises(RuntimeError, match="required"):
+            self.wc.WhisperCppBackend(cfg(whispercpp_model=""))
+
+    def test_home_relative_path_expands(self, monkeypatch, tmp_path_factory):
+        home = tmp_path_factory.mktemp("home")
+        monkeypatch.setenv("HOME", str(home))
+        (home / "m.bin").write_bytes(b"x")
+        be = self.wc.WhisperCppBackend(cfg(whispercpp_model="~/m.bin"))
+        assert be.model == str(home / "m.bin")
+
+
 class TestUpstreamNameAliases:
     def test_whisper_prefix_aliases(self):
         assert backends.resolve_model_name("whisper-small") == "small"

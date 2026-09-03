@@ -21,7 +21,7 @@ except ValueError as e:  # pragma: no cover - depends on the machine
 if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
     pytest.skip("no display for GTK tests", allow_module_level=True)  # pragma: no cover
 
-from gi.repository import Adw, GLib  # noqa: E402
+from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from fluidvoice.config import DEFAULTS  # noqa: E402
 from fluidvoice.gtkui.client import Client  # noqa: E402
@@ -352,6 +352,146 @@ class TestSettingsWindow:
         assert _keyname(Gdk.keyval_from_name("F9")) == "F9"
         assert _keyname(Gdk.keyval_from_name("space")) == "space"
         assert _keyname(Gdk.keyval_from_name("q")) == "q"
+
+    # -- whisper.cpp GGUF group --------------------------------------------------
+
+    def test_gguf_group_rows_built(self, loop):
+        from fluidvoice import model_catalog
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        w = SettingsWindow(client=StubClient())
+        w.present()
+        pump(loop)
+        assert len(model_catalog.GGUF_CATALOG) == 7
+        assert len(w._gguf_rows) == 7
+        assert {r.get_title() for r in w._gguf_rows} == set(model_catalog.GGUF_CATALOG)
+        w.close()
+
+    def test_active_gguf_marker(self, loop):
+        from fluidvoice import model_catalog
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        c = StubClient()
+
+        def gg_cfg():
+            cfg = copy.deepcopy(DEFAULTS)
+            cfg["model"] = {**cfg["model"], "backend": "whisper.cpp",
+                            "whispercpp_model": "ggml-small.bin"}
+            return cfg, True
+
+        c.get_config = gg_cfg
+        w = SettingsWindow(client=c)
+        w.present()
+        pump(loop)
+        assert w._active_gguf() == "ggml-small.bin"
+
+        def walk(widget):  # find suffix widgets under a row
+            yield widget
+            child = widget.get_first_child()
+            while child:
+                yield from walk(child)
+                child = child.get_next_sibling()
+
+        active_row = next(r for r in w._gguf_rows
+                          if r.get_title() == "ggml-small.bin")
+        labels = [x.get_text() for x in walk(active_row)
+                  if isinstance(x, Gtk.Label)]
+        assert "Active" in labels
+        w.close()
+
+    def test_download_flow_uses_worker_and_polls(self, loop, monkeypatch):
+        from fluidvoice import model_catalog
+        from fluidvoice.gtkui import settings_window as sw
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        downloaded = {"now": False}
+        monkeypatch.setattr(sw.model_catalog, "gguf_downloaded",
+                            lambda n: downloaded["now"])
+        calls: list[tuple[str, list]] = []
+
+        def fake_download(name, progress=None):
+            seen: list = []
+            calls.append((name, seen))
+            if progress:
+                seen.append(progress(50, 100))
+                seen.append(progress(100, 100))
+            return model_catalog.gguf_path(name)
+
+        monkeypatch.setattr(sw.model_download, "download_gguf", fake_download)
+        w = SettingsWindow(client=StubClient())
+        w.present()
+        pump(loop)
+        w._download_gguf(None, "ggml-small.bin")
+        assert pump_until(loop, lambda: w._gguf_dl["ggml-small.bin"].get("done"))
+        st = w._gguf_dl["ggml-small.bin"]
+        assert calls and calls[0][0] == "ggml-small.bin"
+        assert st["total"] == 100 and st["error"] is None
+        downloaded["now"] = True
+        w._refresh_models()
+
+        def walk(widget):
+            yield widget
+            child = widget.get_first_child()
+            while child:
+                yield from walk(child)
+                child = child.get_next_sibling()
+
+        row = next(r for r in w._gguf_rows if r.get_title() == "ggml-small.bin")
+        buttons = [x.get_label() for x in walk(row) if isinstance(x, Gtk.Button)]
+        assert buttons == ["Use"]
+        w.close()
+
+    def test_download_failure_toasts(self, loop, monkeypatch):
+        from fluidvoice.gtkui import settings_window as sw
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        monkeypatch.setattr(sw.model_catalog, "gguf_downloaded", lambda n: False)
+
+        def broken(name, progress=None):
+            raise OSError("net down")
+
+        monkeypatch.setattr(sw.model_download, "download_gguf", broken)
+        w = SettingsWindow(client=StubClient())
+        w.present()
+        pump(loop)
+        toasts: list[str] = []
+        monkeypatch.setattr(w, "toast", lambda text, timeout=5: toasts.append(text))
+        w._download_gguf(None, "ggml-base.bin")
+        assert pump_until(loop, lambda: w._gguf_dl["ggml-base.bin"].get("error"))
+        assert w._gguf_dl["ggml-base.bin"]["error"] == "net down"
+        assert pump_until(loop, lambda: any("net down" in t for t in toasts))
+        w.close()
+
+    def test_use_gguf_posts_config(self, loop, monkeypatch):
+        from fluidvoice.gtkui import settings_window as sw
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        monkeypatch.setattr(sw.model_catalog, "gguf_downloaded", lambda n: True)
+        c = StubClient()
+        w = SettingsWindow(client=c)
+        w.present()
+        pump(loop)
+        w._use_gguf(None, "ggml-base.bin")
+        assert c.saved[-1]["model"] == {
+            "backend": "whisper.cpp", "whispercpp_model": "ggml-base.bin"}
+        pump(loop, 1300)  # let the scheduled warmup poll run once and stop
+        w.close()
+
+    def test_use_gguf_rejected_toasts(self, loop, monkeypatch):
+        from fluidvoice.gtkui import settings_window as sw
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        monkeypatch.setattr(sw.model_catalog, "gguf_downloaded", lambda n: True)
+        c = StubClient()
+
+        def reject(body):
+            return {"ok": False, "changed": [], "rejected": ["model.backend"],
+                    "restart_required": [], "errors": [], "note": ""}
+
+        c.set_config = reject
+        w = SettingsWindow(client=c)
+        w.present()
+        pump(loop)
+        toasts: list[str] = []
+        monkeypatch.setattr(w, "toast", lambda text, timeout=5: toasts.append(text))
+        w._use_gguf(None, "ggml-base.bin")
+        assert any("model.backend" in t for t in toasts)
+        assert c.saved == []
+        w.close()
 
 
 class TestOnboardingWindow:

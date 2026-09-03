@@ -2,6 +2,8 @@ import json
 import threading
 from pathlib import Path
 
+import pytest
+
 from fluidvoice import control
 from fluidvoice.config import DEFAULTS, load_config
 
@@ -24,6 +26,53 @@ class TestConfig:
         assert cfg["hotkey"]["key"] == "F9"
         assert cfg["hotkey"]["mode"] == "toggle"  # untouched default
         assert cfg["ai"]["enabled"] is True
+
+
+class TestDoctorWhispercpp:
+    """_whispercpp_lines resolution report (pure function, faked binary)."""
+
+    def lines(self, model_value="", binary="/usr/bin/whisper-cli"):
+        from fluidvoice import doctor
+        self.monkeypatch.setattr(doctor.backends, "_whispercpp_binary",
+                                 lambda: binary)
+        cfg = {"model": {"whispercpp_model": model_value}}
+        return doctor._whispercpp_lines(cfg)
+
+    @pytest.fixture(autouse=True)
+    def _cache(self, tmp_path, monkeypatch):
+        self.monkeypatch = monkeypatch
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+    def test_binary_missing_and_model_unset(self):
+        lines = self.lines(model_value="", binary=None)
+        assert any("not found" in l for l in lines)
+        assert any("not set" in l for l in lines)
+
+    def test_catalog_name_downloaded(self, tmp_path):
+        from fluidvoice import model_catalog
+        model_catalog.gguf_dir().mkdir(parents=True)
+        model_catalog.gguf_path("ggml-base.bin").write_bytes(b"x")
+        lines = self.lines(model_value="ggml-base.bin")
+        assert any("downloaded" in l and "ggml-base.bin" in l for l in lines)
+        assert any(str(model_catalog.gguf_path("ggml-base.bin")) in l
+                   for l in lines)
+
+    def test_catalog_name_not_downloaded(self):
+        lines = self.lines(model_value="ggml-base.bin")
+        assert any("not downloaded" in l for l in lines)
+        assert any("downloaded ggml models: none" in l for l in lines)
+
+    def test_path_value_found_and_missing(self, tmp_path):
+        p = tmp_path / "m.bin"
+        p.write_bytes(b"x")
+        assert any("found" in l for l in self.lines(model_value=str(p)))
+        missing = tmp_path / "gone.bin"
+        assert any("MISSING" in l for l in self.lines(model_value=str(missing)))
+
+    def test_unknown_bare_name_lists_catalog(self):
+        lines = self.lines(model_value="ggml-bogus.bin")
+        assert any("unknown name" in l and "ggml-base.bin" in l
+                   for l in lines)
 
 
 class TestControlSocket:

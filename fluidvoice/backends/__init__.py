@@ -3,7 +3,7 @@
 Priority under "auto":
   1. faster-whisper  (CUDA if the NVIDIA runtime libs can be resolved, else CPU int8)
   2. whisper-torch   (openai-whisper; used when torch+CUDA is already installed)
-  3. whisper.cpp     (external binary + ggml model)
+  3. whisper.cpp     (external binary + ggml/gguf model — catalog name or path)
 """
 from __future__ import annotations
 

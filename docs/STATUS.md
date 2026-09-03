@@ -1,6 +1,6 @@
 # FluidVoiceLinux — Status Ledger
 
-Last updated: 2026-09-02 · v0.1.0 · **410 automated tests** (382 offline + 28 integration)
+Last updated: 2026-09-03 · v0.1.0 · **467 automated tests** (439 offline + 28 integration)
 · verified against upstream `altic-dev/FluidVoice` by a 5-agent audit
 (prompts/AI, punctuation rules, daemon pipeline, models, security).
 
@@ -83,6 +83,14 @@ matrix + upstream changelog with its refresh loop).
   About; dirty tracking, Ctrl+S, close-with-changes confirm; saves go over
   the control socket and hot-apply (hotkeys re-grab, recorder/tray/model
   rebuild); file-only mode when the daemon is down.
+- **whisper.cpp GGUF manager** (Settings → Models): curated catalog of the
+  7 `ggerganov/whisper.cpp` ggml models (base…large-v3, multilingual +
+  English-only) with streaming one-click download (progress subtitle,
+  worker thread + GLib polling, `.part` + atomic rename, no half-written
+  files); "Use" switches the backend via validated `set-config`
+  (`model.whispercpp_model` accepts a catalog name **or** a path, with
+  clear missing/unknown errors); `fluidvoice doctor` reports the binary,
+  the resolved model and what's downloaded.
 - Replaces the retired web UI (spec: docs/superpowers/specs/
   2026-09-02-native-settings-app-design.md) - no TCP listener remains;
   the localhost CSRF/DNS-rebinding surface is gone by construction.
@@ -130,7 +138,10 @@ matrix + upstream changelog with its refresh loop).
       highest-value addition on NVIDIA.
 - [ ] Parakeet Realtime / Nemotron 3.5 streaming (NeMo/Riva) — unlocks real
       streaming preview.
-- [ ] whisper.cpp GGUF auto-download; model manager.
+- [x] whisper.cpp GGUF auto-download + model manager — DONE: curated GGUF
+      catalog with one-click streaming download (progress, atomic rename),
+      name-or-path `model.whispercpp_model`, "Use" hot-swaps the backend,
+      doctor resolution report.
 
 ### Later
 - [x] Command mode **v1 shipped**: dedicated `hotkey.command_key`, strict-JSON

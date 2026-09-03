@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .. import model_catalog
 from . import _whispercpp_binary
 
 
@@ -16,9 +17,27 @@ class WhisperCppBackend:
         self.binary = _whispercpp_binary()
         if not self.binary:
             raise RuntimeError("whisper.cpp binary not found (whisper-cli/whisper-cpp)")
-        self.model = (cfg["model"].get("whispercpp_model") or "").strip()
-        if not self.model:
-            raise RuntimeError("model.whispercpp_model path is required for the whisper.cpp backend")
+        raw = (cfg["model"].get("whispercpp_model") or "").strip()
+        if not raw:
+            raise RuntimeError(
+                "model.whispercpp_model is required for the whisper.cpp backend "
+                "(a catalog name like 'ggml-base.bin' or a path to a ggml/gguf file)")
+        if "/" in raw or raw.startswith("~"):
+            path = Path(raw).expanduser()
+            self.model = str(path)
+            if not path.is_file():
+                raise RuntimeError(f"whisper.cpp model not found: {path}")
+        else:
+            if raw not in model_catalog.GGUF_CATALOG:
+                raise RuntimeError(
+                    f"unknown whisper.cpp model '{raw}' — catalog names: "
+                    f"{', '.join(sorted(model_catalog.GGUF_CATALOG))}, or give a full path")
+            self.model = str(model_catalog.gguf_path(raw))
+            if not Path(self.model).is_file():
+                raise RuntimeError(
+                    f"whisper.cpp model '{raw}' not downloaded yet "
+                    f"(expected at {self.model}) — download it in "
+                    f"Settings → Models, whisper.cpp GGUF")
         self.language = cfg["general"]["language"] or "auto"
 
     def transcribe(self, wav_path: Path, language: str | None = None) -> dict[str, Any]:

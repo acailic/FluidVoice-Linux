@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import os
 import shutil
+from pathlib import Path
 
 from . import __version__, backends, paths
+from .config import load_config
 
 
 def _gtk_available() -> bool:
@@ -16,6 +18,33 @@ def _gtk_available() -> bool:
         return True
     except (ImportError, ValueError):
         return False
+
+
+def _whispercpp_lines(cfg: dict) -> list[str]:
+    """Human-readable whisper.cpp resolution: binary + model path or hint."""
+    from . import model_catalog
+    binary = backends._whispercpp_binary()
+    lines = [f"  binary: {binary or 'not found (install whisper-cli)'}"]
+    raw = (cfg.get("model", {}).get("whispercpp_model") or "").strip()
+    if not raw:
+        lines.append("  model: not set (a catalog name like 'ggml-base.bin' "
+                     "or a path — see Settings → Models)")
+        return lines
+    if "/" in raw or raw.startswith("~"):
+        p = Path(raw).expanduser()
+        lines.append(f"  model: {p} ({'found' if p.is_file() else 'MISSING'})")
+    elif raw in model_catalog.GGUF_CATALOG:
+        p = model_catalog.gguf_path(raw)
+        lines.append(f"  model: {raw} -> {p} "
+                     f"({'downloaded' if p.is_file() else 'not downloaded - get it in Settings -> Models'})")
+    else:
+        lines.append(f"  model: unknown name '{raw}' "
+                     f"(catalog: {', '.join(sorted(model_catalog.GGUF_CATALOG))})")
+    have = (sorted(p.name for p in model_catalog.gguf_dir().glob("ggml-*.bin")
+                   if p.is_file())
+            if model_catalog.gguf_dir().is_dir() else [])
+    lines.append("  downloaded ggml models: " + (", ".join(have) if have else "none"))
+    return lines
 
 
 def run() -> int:
@@ -62,6 +91,14 @@ def run() -> int:
     print(f"  cuda_available(): {backends.cuda_available()}")
     if shutil.which("nvidia-smi"):
         os.system("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | sed 's/^/  GPU: /'")
+
+    try:
+        cfg = load_config(paths.config_file())
+    except Exception:
+        cfg = {}
+    print("\nwhisper.cpp:")
+    for line in _whispercpp_lines(cfg):
+        print(line)
 
     print(f"\ncontrol socket: {paths.socket_path()} "
           f"({'alive' if paths.socket_path().exists() else 'daemon not running'})")

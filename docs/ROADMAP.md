@@ -38,9 +38,14 @@ sources. Everything below is a known, classified gap — see
       model and the highest-value Linux addition.
 - [ ] Parakeet Realtime / Nemotron 3.5 streaming (NeMo/Riva) — unlocks the
       live-preview feature with real streaming cadences.
-- [ ] whisper.cpp GGUF auto-download (handy-computer artifacts upstream uses).
+- [x] whisper.cpp GGUF auto-download — DONE: curated `ggerganov/whisper.cpp`
+      ggml catalog in Settings → Models with streaming one-click download
+      (progress, atomic rename), name-or-path `model.whispercpp_model`, and a
+      doctor resolution report.
 - [ ] Per-model language selection (whisper/cohere/nemotron stores upstream).
-- [ ] Model manager: list/download/prune in `~/.cache/fluidvoice/models`.
+- [ ] Model manager: list/download in `~/.cache/fluidvoice/models` — partially
+      done (faster-whisper one-click switch + GGUF downloads in Settings →
+      Models); prune/freeing stays open.
 
 ## Later
 - [ ] Command mode (voice → terminal agent) with the upstream tool schema and

@@ -59,7 +59,7 @@ DEFAULTS: dict[str, Any] = {
         "name": "auto",  # auto -> small (CUDA) / base (CPU); or tiny/base/small/medium/large-v3/large-v3-turbo
         "device": "auto",  # auto | cuda | cpu
         "compute": "auto",  # auto | float16 | int8
-        "whispercpp_model": "",  # path to ggml/gguf model for the whisper.cpp backend
+        "whispercpp_model": "",  # catalog name (ggml-base.bin...) or path to a ggml/gguf model for whisper.cpp
         "eager_warmup": True,  # load the model at daemon start (preview-ready)
     },
     "processing": {
@@ -176,7 +176,8 @@ backend = "auto"
 name = "auto"
 device = "auto"   # auto | cuda | cpu
 compute = "auto"  # auto | float16 | int8
-# ggml/gguf model path for the whisper.cpp backend
+# ggml/gguf model for the whisper.cpp backend: a catalog name
+# (ggml-base.bin, ggml-small.en.bin, ...) or a path to a file
 whispercpp_model = ""
 
 [processing]
