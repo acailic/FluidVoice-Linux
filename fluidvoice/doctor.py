@@ -44,6 +44,7 @@ def run() -> int:
         ("xclip", "clipboard paste mode + restore"),
         ("notify-send", "desktop notifications"),
         ("pw-play", "start/stop sounds"),
+        ("ffmpeg", "transcribe fallback for non-WAV/undecodable input"),
     ]:
         have = shutil.which(tool)
         print(f"  {'OK ' if have else '-- '}{tool}: {'found' if have else 'missing'} ({why})")

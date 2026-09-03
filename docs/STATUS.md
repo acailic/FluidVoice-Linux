@@ -90,7 +90,8 @@ matrix + upstream changelog with its refresh loop).
   is written 0600 atomically, secrets masked in get-config.
 
 ### Infrastructure
-- CLI: `daemon / toggle / cancel / status / paste-last / transcribe / history
+- CLI: `daemon / toggle / cancel / status / paste-last / transcribe (multi-format
+  + --json/--out) / history
   / config / settings / doctor`; unix-socket control protocol.
 - systemd user unit (DISPLAY/XAUTHORITY aware, tied to graphical session);
   installer generates it with real paths and enables it.

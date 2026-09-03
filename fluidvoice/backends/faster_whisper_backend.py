@@ -62,5 +62,10 @@ class FasterWhisperBackend:
         segments, info = self._model.transcribe(
             str(wav_path), language=lang, vad_filter=False, beam_size=1,
         )
-        text = "".join(seg.text for seg in segments).strip()
-        return {"text": text, "language": info.language, "duration": info.duration}
+        texts, segs = [], []
+        for seg in segments:  # generator - consume once, reuse for text AND segments
+            texts.append(seg.text)
+            segs.append({"start": round(seg.start, 3), "end": round(seg.end, 3),
+                         "text": seg.text.strip()})
+        return {"text": "".join(texts).strip(), "language": info.language,
+                "duration": info.duration, "segments": segs}

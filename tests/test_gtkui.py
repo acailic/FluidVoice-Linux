@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import os
+import time
 
 import pytest
 
@@ -100,6 +101,17 @@ def loop():
 def pump(loop, ms=150):
     GLib.timeout_add(ms, loop.quit)
     loop.run()
+
+
+def pump_until(loop, cond, timeout_s=2.0):
+    """Pump in short slices until cond() is truthy. A single fixed pump
+    window is flaky under load: its quit timeout (priority 0) can starve
+    GLib.idle_add sources (priority 200), so the idle callback may not
+    have run by the time the loop quits."""
+    deadline = time.monotonic() + timeout_s
+    while not cond() and time.monotonic() < deadline:
+        pump(loop, ms=20)
+    return cond()
 
 
 ENTRIES = [
@@ -198,7 +210,7 @@ class TestHistoryWindow:
         w._export_to(str(target))
         assert w._exporting is True  # busy until the idle callback runs
         assert enabled == [("hist.export", False)]
-        pump(loop)  # run the idle callback
+        assert pump_until(loop, lambda: not w._exporting)  # run the idle callback
         assert c.exported_to == str(target)
         assert w._exporting is False
         assert enabled == [("hist.export", False), ("hist.export", True)]
@@ -218,7 +230,7 @@ class TestHistoryWindow:
         enabled: list[tuple[str, bool]] = []
         w.action_set_enabled = lambda name, on: enabled.append((name, on))
         w._export_to(str(tmp_path / "h.zip"))
-        pump(loop)
+        assert pump_until(loop, lambda: not w._exporting)
         assert w._exporting is False  # released even on failure
         assert enabled[-1] == ("hist.export", True)
         w.close()

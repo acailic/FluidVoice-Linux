@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
 
 from . import __version__, doctor as doctor_mod, paths
 from .config import load_config, write_template
+
+# Above this size we warn: v1 has no chunked uploads, so huge inputs are slow.
+LARGE_INPUT_BYTES = 25 * 1024 * 1024
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -32,10 +36,17 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--json", action="store_true", help="raw JSON output")
 
     p = sub.add_parser("transcribe", help="one-shot transcription of an audio file")
-    p.add_argument("file", type=Path, help="audio file (wav/flac/mp3/...)")
+    p.add_argument("file", type=Path,
+                   help="audio file (wav/flac/mp3/opus/oga/ogg/m4a/aac/wma/aiff/webm)")
     p.add_argument("--no-process", action="store_true",
                    help="skip filler/punctuation post-processing")
     p.add_argument("--ai", action="store_true", help="also run AI polish")
+    p.add_argument("--json", action="store_true",
+                   help="print structured JSON {text, language, duration_s, segments} "
+                        "instead of plain text")
+    p.add_argument("--out", type=Path, metavar="PATH",
+                   help="write the result to PATH instead of stdout (plain text, "
+                        "or JSON with --json)")
     p.add_argument("--config", type=Path, help="alternative config file")
 
     p = sub.add_parser("history", help="show recent transcriptions")
@@ -83,10 +94,35 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "transcribe":
         from . import backends
         from .ai.client import AIClient
+        from .audio_utils import SUPPORTED_AUDIO_EXTS, AudioFormatError, ensure_wav
         from .processing import post_process
+        if not args.file.exists():
+            print(f"error: file not found: {args.file}", file=sys.stderr)
+            return 1
+        if args.file.stat().st_size > LARGE_INPUT_BYTES:
+            size_mb = args.file.stat().st_size / 1e6
+            print(f"warning: input is {size_mb:.1f} MB; transcription is not "
+                  "chunked in v1 and may be slow/memory-heavy. Shrinking first "
+                  f"usually helps: ffmpeg -i {args.file} -ar 16000 -ac 1 out.wav",
+                  file=sys.stderr)
         cfg = load_config(args.config)
         backend = backends.load_backend(cfg)
-        result = backend.transcribe(args.file, language=cfg["general"]["language"])
+        if args.file.suffix.lower() not in SUPPORTED_AUDIO_EXTS:
+            print(f"note: '{args.file.suffix}' is not a verified format - trying "
+                  "anyway (ffmpeg fallback when needed)", file=sys.stderr)
+        audio, converted_dir = args.file, None
+        try:
+            try:
+                audio = ensure_wav(args.file, force=backend.name == "whisper.cpp")
+            except AudioFormatError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            if audio != args.file:
+                converted_dir = audio.parent
+            result = backend.transcribe(audio, language=cfg["general"]["language"])
+        finally:
+            if converted_dir is not None:
+                shutil.rmtree(converted_dir, ignore_errors=True)
         text = result["text"]
         if not args.no_process:
             text = post_process(text, cfg)
@@ -94,7 +130,22 @@ def main(argv: list[str] | None = None) -> int:
             text = AIClient(cfg).polish(text)
         elif args.ai:
             print("(ai.enabled=false in config; raw transcription only)", file=sys.stderr)
-        print(text)
+        if args.json:
+            payload = {"text": text,  # final text (post-processed/AI if on)
+                       "language": result.get("language"),
+                       # null for torch/whisper.cpp; [] when backend exposes none
+                       "duration_s": result.get("duration"),
+                       # raw per-segment text, not post-processed
+                       "segments": result.get("segments", [])}
+            out_text = json.dumps(payload, indent=2, ensure_ascii=False)
+        else:
+            out_text = text
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(out_text + "\n", encoding="utf-8")
+            print(f"wrote {args.out}", file=sys.stderr)  # stderr keeps stdout clean
+        else:
+            print(out_text)
         return 0
 
     if args.cmd == "history":

@@ -1,8 +1,72 @@
 """Small audio helpers (silence gate, mirroring FluidVoice's thresholds)."""
 from __future__ import annotations
 
+import shutil
+import subprocess
+import tempfile
 import wave
 from dataclasses import dataclass
+from pathlib import Path
+
+# Input formats verified to decode via PyAV 18.1.0 / ffmpeg 6.1.1
+# (specs/eaed8a8c_transcribe-formats-json.md). Other extensions are still
+# attempted (PyAV probe + ffmpeg fallback), but only these are advertised.
+SUPPORTED_AUDIO_EXTS = frozenset({
+    ".wav", ".flac", ".mp3", ".opus", ".oga", ".ogg",
+    ".m4a", ".aac", ".wma", ".aiff", ".aif", ".webm",
+})
+
+
+class AudioFormatError(RuntimeError):
+    """Input cannot be turned into something decodable."""
+
+
+def _pyav_decodable(path: Path) -> bool:
+    """True when PyAV opens the file and it has an audio stream."""
+    try:
+        import av  # deferred: faster-whisper dependency, always present
+        with av.open(str(path)) as container:
+            return any(s.type == "audio" for s in container.streams)
+    except Exception:
+        return False
+
+
+def ensure_wav(path: Path, dest_dir: Path | None = None, force: bool = False) -> Path:
+    """Return a decodable audio path; convert to 16 kHz mono WAV only when needed.
+
+    - `.wav` inputs pass through untouched (no subprocess) unless ``force``.
+    - Other PyAV-decodable formats pass through unless ``force`` (whisper.cpp
+      only reliably reads WAV).
+    - Anything else is converted with ffmpeg to ``dest_dir/<stem>.16k.wav``
+      (``dest_dir`` defaults to a fresh tempdir the *caller* must clean up,
+      only when the returned path differs from ``path``).
+    """
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix == ".wav" and not force:
+        return path
+    if not force and suffix != ".wav" and _pyav_decodable(path):
+        return path
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        if suffix == ".wav":  # forced re-encode of a WAV with no ffmpeg: try as-is
+            return path
+        raise AudioFormatError(
+            f"cannot decode '{path.name}' ({suffix}): format not directly "
+            "decodable and ffmpeg is not installed - install ffmpeg "
+            "(e.g. `sudo apt install ffmpeg`) or convert to 16 kHz mono "
+            "WAV yourself")
+    out_dir = dest_dir if dest_dir is not None else Path(
+        tempfile.mkdtemp(prefix="fluidvoice-wav-"))
+    out = out_dir / f"{path.stem}.16k.wav"
+    proc = subprocess.run(
+        [ffmpeg, "-hide_banner", "-v", "error", "-i", str(path),
+         "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-y", str(out)],
+        capture_output=True, text=True, timeout=1800)
+    if proc.returncode != 0:
+        raise AudioFormatError(
+            f"ffmpeg failed to convert {path.name}: {proc.stderr.strip()[:300]}")
+    return out
 
 
 @dataclass

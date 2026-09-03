@@ -36,5 +36,9 @@ class TorchWhisperBackend:
             lang = None
         result = self._model.transcribe(str(wav_path), language=lang,
                                         fp16=self.device == "cuda")
+        segments = [{"start": round(s.get("start", 0.0), 3),
+                     "end": round(s.get("end", 0.0), 3),
+                     "text": (s.get("text") or "").strip()}
+                    for s in result.get("segments", [])]
         return {"text": result.get("text", "").strip(), "language": result.get("language"),
-                "duration": None}
+                "duration": None, "segments": segments}

@@ -30,4 +30,7 @@ class WhisperCppBackend:
         if proc.returncode != 0:
             raise RuntimeError(f"whisper.cpp failed: {proc.stderr.strip()[:500]}")
         text = " ".join(line.strip() for line in proc.stdout.splitlines() if line.strip())
-        return {"text": text.strip(), "language": None if lang == "auto" else lang, "duration": None}
+        return {"text": text.strip(), "language": None if lang == "auto" else lang,
+                "duration": None,
+                # segments not exposed in v1: needs whisper-cli -ml parsing
+                "segments": []}

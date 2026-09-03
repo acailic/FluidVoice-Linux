@@ -76,7 +76,7 @@ new that Linux doesn't have" a one-command answer.
 | Adaptive light/dark theming | ✅ | native GTK window follows the system theme |
 | Auto-updates + beta channel | ⏳ | today: .deb / GitHub releases; AUR/nix on roadmap |
 | Mic priority list, Bluetooth auto-switch | ⏳ | roadmap: input-device monitoring |
-| Speaker labeling (diarization) for file transcription | ⏳ | not started; timestamps/JSON export would come with it |
+| Speaker labeling (diarization) for file transcription | ⏳ | not started; timestamps/JSON export shipped via `transcribe --json`; diarization pending |
 | API keys in Keychain | ➖ | substitute: `FLUIDVOICE_API_KEY` env var + 0600 config.toml |
 | Opt-in telemetry | ➖ | intentionally none (privacy divergence, see STATUS.md) |
 
@@ -91,7 +91,7 @@ new that Linux doesn't have" a one-command answer.
 | Overlay "custom cleanup styles" + streamlined dictation controls (6 commits) | ⏳ | our overlay exists; per-style labels/limits not ported |
 | Settings: split AI providers / cleanup styles; side-panel nav; simplified welcome | ✅ | native Settings window (Adw Preferences pages) covers the same knobs — v1.1 adds dictionary/filler editors + language picker; richer upstream provider profiles remain on the roadmap |
 | Honor "Send Custom Prompt Only" for dictation-shortcut prompt overrides | ⏳ | shortcut prompt overrides not ported at all yet |
-| File transcription: chunked API uploads, `.opus`/`.oga` input | ⏳ | `fluidvoice transcribe` handles WAV; opus/oga + chunking not |
+| File transcription: chunked API uploads, `.opus`/`.oga` input | ⏳ | `transcribe` accepts opus/oga + 10 more verified formats with ffmpeg fallback; `--json` exports timestamps/segments; **chunked API uploads still pending** |
 | Spoken-send commands, quiet-countdown completion, terminal blocklist | ✅ / ⏳ | spoken-send shipped in our `a1390f5`; terminal blocklist ⏳ |
 | Incremental Parakeet preview finalization (experimental) | 🚧 | parakeet-specific; lands with v0.4 streaming work |
 | Private AI (Fluid Intelligence) in Edit mode + model verification fixes | ➖ | FI is closed-source; edit mode works with any endpoint ✅ |
