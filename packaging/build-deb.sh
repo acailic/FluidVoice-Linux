@@ -58,6 +58,11 @@ for png in packaging/icons/hicolor/*x*/apps/fluidvoice-linux.png; do
     install -Dm644 "$png" \
         "$STAGE/usr/share/icons/hicolor/${png#packaging/icons/hicolor/}"
 done
+# bundled symbolic UI icons under our own names (theme-swap-proof)
+for svg in "$REPO"/fluidvoice/assets/icons/symbolic/actions/*.svg; do
+    install -Dm644 "$svg" \
+        "$STAGE/usr/share/icons/hicolor/symbolic/actions/$(basename "$svg")"
+done
 
 # 4. systemd user unit (optional alternative to XDG autostart) -------------
 mkdir -p "$STAGE/usr/lib/systemd/user"

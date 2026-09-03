@@ -16,24 +16,63 @@ GTK_HINT = ("GTK 4 / libadwaita not available - install with:\n"
 
 
 def _register_bundled_icons() -> None:
-    """Make the bundled `fluidvoice-linux` icon resolvable by icon name.
+    """Make bundled `fluidvoice-*` icons resolvable by name.
 
-    The deb installs it into hicolor; for git/pip runs we point the icon
-    theme at assets/icons so About/onboarding/window icons work everywhere.
+    The six symbolic page icons ship as SVGs in assets/icons/symbolic/actions.
+    We compile them into a GResource (cached in ~/.cache/fluidvoice) and
+    register it with the icon theme — the standard GNOME-app way, immune to
+    icon-theme swaps (third-party themes hijack generic names like
+    `preferences-system-symbolic`, which rendered as washed-out defaults).
+    The deb additionally installs the SVGs into the system hicolor theme.
     """
     try:
+        import hashlib
+        import shutil
+        import subprocess
+        import tempfile
         from importlib import resources
+        from pathlib import Path
 
         import gi
         gi.require_version("Gtk", "4.0")
         gi.require_version("Gdk", "4.0")
-        from gi.repository import Gdk, Gtk
+        from gi.repository import Gdk, Gio, Gtk
 
-        base = resources.files("fluidvoice.assets")
-        with resources.as_file(base.joinpath("icons")) as path:
-            theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
-            if theme is not None:
-                theme.add_search_path(str(path))
+        src = resources.files("fluidvoice.assets").joinpath(
+            "icons/symbolic/actions")
+        with resources.as_file(src) as srcdir:
+            svgs = sorted(Path(srcdir).glob("*.svg"))
+            if not svgs:
+                return
+            names = "".join(p.name for p in svgs)
+            digest = hashlib.sha1(names.encode()
+                                  + b"".join(p.read_bytes() for p in svgs)
+                                  ).hexdigest()[:16]
+            cache = Path.home() / ".cache/fluidvoice/icons"
+            cache.mkdir(parents=True, exist_ok=True)
+            gresource = cache / f"icons-{digest}.gresource"
+            if not gresource.exists():
+                xml = "<gresources><gresource prefix='/dev/fluidvoicelinux/icons'>"
+                for p in svgs:
+                    # strip the trailing -symbolic; GTK looks up by basename
+                    file_attr = f" alias='scalable/actions/{p.name}'"
+                    xml += f"<file{file_attr}>{p}</file>"
+                xml += "</gresource></gresources>"
+                with tempfile.NamedTemporaryFile("w", suffix=".xml",
+                                                 delete=False) as f:
+                    f.write(xml)
+                    manifest = f.name
+                try:
+                    subprocess.run(["glib-compile-resources", "--target",
+                                    str(gresource), manifest],
+                                   check=True, capture_output=True)
+                finally:
+                    Path(manifest).unlink(missing_ok=True)
+
+        Gio.resources_register(Gio.Resource.load(str(gresource)))
+        theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+        if theme is not None:
+            theme.add_resource_path("/dev/fluidvoicelinux/icons")
     except Exception:
         pass  # icon-name lookups degrade to theme fallbacks
 

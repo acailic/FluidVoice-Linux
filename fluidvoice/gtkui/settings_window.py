@@ -351,7 +351,7 @@ class SettingsWindow(Adw.PreferencesWindow):
     # -- pages -------------------------------------------------------------------------
 
     def _build_general(self) -> None:
-        page = Adw.PreferencesPage(name="general", icon_name="preferences-system-symbolic",
+        page = Adw.PreferencesPage(name="general", icon_name="fluidvoice-general-symbolic",
                                    title="General")
         grp = Adw.PreferencesGroup(title="General")
         lang = self._combo("general", "language", "Language",
@@ -375,7 +375,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         self.add(page)
 
     def _build_models(self) -> None:
-        page = Adw.PreferencesPage(name="models", icon_name="audio-x-generic-symbolic",
+        page = Adw.PreferencesPage(name="models", icon_name="fluidvoice-models-symbolic",
                                    title="Models")
         self.models_group = Adw.PreferencesGroup(
             title="Speech models",
@@ -584,7 +584,7 @@ class SettingsWindow(Adw.PreferencesWindow):
     # -- AI page -------------------------------------------------------------------------
 
     def _build_ai(self) -> None:
-        page = Adw.PreferencesPage(name="ai", icon_name="weather-few-clouds-symbolic",
+        page = Adw.PreferencesPage(name="ai", icon_name="fluidvoice-polish-symbolic",
                                    title="AI Polish")
         grp = Adw.PreferencesGroup(
             title="AI polish",
@@ -850,8 +850,8 @@ class SettingsWindow(Adw.PreferencesWindow):
     # -- dictation page -----------------------------------------------------------------
 
     def _build_dictation(self) -> None:
-        page = Adw.PreferencesPage(name="dictation", 
-            icon_name="preferences-desktop-keyboard-symbolic", title="Dictation")
+        page = Adw.PreferencesPage(name="dictation",
+            icon_name="fluidvoice-dictation-symbolic", title="Dictation")
 
         hk = Adw.PreferencesGroup(title="Hotkeys")
         hk.add(self._entry("hotkey", "key", "Dictation key — e.g. Right_Control, F9",
@@ -1017,7 +1017,7 @@ class SettingsWindow(Adw.PreferencesWindow):
     # -- history page -----------------------------------------------------------------
 
     def _build_history_page(self) -> None:
-        page = Adw.PreferencesPage(name="history", icon_name="document-open-recent-symbolic",
+        page = Adw.PreferencesPage(name="history", icon_name="fluidvoice-history-symbolic",
                                    title="History")
         grp = Adw.PreferencesGroup(title="History")
         grp.add(self._switch("history", "save", "Save transcriptions"))
@@ -1062,7 +1062,7 @@ class SettingsWindow(Adw.PreferencesWindow):
     # -- about -----------------------------------------------------------------------
 
     def _build_about(self) -> None:
-        page = Adw.PreferencesPage(name="about", icon_name="help-about-symbolic", title="About")
+        page = Adw.PreferencesPage(name="about", icon_name="fluidvoice-about-symbolic", title="About")
         grp = Adw.PreferencesGroup(title="About")
         from .. import paths
         grp.add(Adw.ActionRow(title="Version", subtitle=APP_VERSION))
