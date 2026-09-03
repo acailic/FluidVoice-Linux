@@ -2,9 +2,18 @@
 
 - "toggle" mode: every KeyPress of the hotkey fires the callback.
   Works with modifier-only keys (Right_Control, Right_Alt, ...).
-- "hold" mode (push-to-talk): KeyPress starts, KeyRelease stops. Implemented
-  with a temporary keyboard grab so the release is visible; requires a
-  non-modifier key. Falls back to toggle for modifier-only keys.
+- "hold" mode (push-to-talk): KeyPress starts, KeyRelease stops. Requires
+  a non-modifier key. Falls back to toggle for modifier-only keys.
+  Keys typed while holding PASS THROUGH to the focused app natively:
+  the hold opens by releasing the XGrabKey activation (which by X11
+  semantics grabs the whole keyboard for the key's press-to-release
+  duration) and re-arming it when the hold ends. The release itself is
+  detected by polling query_keymap() - auto-repeat-proof, since the ~30 Hz
+  synthetic KeyRelease+KeyPress pairs of a held key never clear its bit.
+  (An earlier XTEST ungrab->inject->re-grab replay design was abandoned:
+  live Xorg 21.1 silently drops XTEST fakes that match the current key
+  state - the original event already flipped it - so replayed presses
+  are deduped away and never reach the app.)
 """
 from __future__ import annotations
 
@@ -40,6 +49,40 @@ DEFAULT_CANCEL_KEY = "Escape"
 
 class HotkeyError(RuntimeError):
     pass
+
+
+# Verdicts for one keyboard event seen during a hold cycle (see
+# classify_hold_event). In the native-passthrough design only ABORT is
+# consumed by the hold loop; REPLAY-classified keys flow straight to the
+# focused app and are never delivered to us at all.
+_HOLD_END, _HOLD_ABORT, _HOLD_REPLAY, _HOLD_IGNORE = "end", "abort", "replay", "ignore"
+
+
+def classify_hold_event(etype, detail, hotkey_keycode, escape_keycode) -> str:
+    """Pure: how _hold_cycle should treat one keyboard event.
+
+    - KeyRelease(hotkey)            -> end
+    - KeyPress(escape_keycode)      -> abort   (cancel recording)
+    - Key{Press,Release}(anything else incl. modifiers) -> replay
+      (delivered natively to the focused app; the hold loop ignores them)
+    - hotkey KeyPress (auto-repeat), escape KeyRelease, non-key events,
+      None details                  -> ignore
+    escape_keycode may be None (cancel disabled) -> escape is a normal key.
+    """
+    if etype not in (X.KeyPress, X.KeyRelease) or detail is None:
+        return _HOLD_IGNORE
+    if etype == X.KeyRelease:
+        if detail == hotkey_keycode:
+            return _HOLD_END
+        if escape_keycode is not None and detail == escape_keycode:
+            return _HOLD_IGNORE  # the aborting press already ended the hold
+        return _HOLD_REPLAY
+    if etype == X.KeyPress:
+        if escape_keycode is not None and detail == escape_keycode:
+            return _HOLD_ABORT
+        if detail == hotkey_keycode:
+            return _HOLD_IGNORE  # auto-repeat press of the held hotkey
+    return _HOLD_REPLAY
 
 
 # Friendly aliases -> X11 keysym names (macOS-style modifiers etc.)
@@ -218,34 +261,90 @@ class HotkeyListener:
         except Exception:
             pass  # best-effort; cancel via CLI still works
 
-    def _hold_cycle(self, d: Display, keycode: int) -> None:
-        """Push-to-talk: grab the keyboard until the hotkey is released.
-        Escape aborts the hold and CANCELS the recording (upstream semantics:
-        a cancelled recording is discarded, not transcribed)."""
-        root = d.screen().root
+    def _hotkey_still_down(self, d, keycode: int) -> bool:
+        """True = the hotkey is still physically held, by query_keymap().
+        Auto-repeat-proof: the ~30 Hz synthetic KeyRelease+KeyPress pairs a
+        held key generates never clear its bit, so a clear bit is a REAL
+        release. On any error: return True (keep holding; a closed display
+        is handled by pending_events/next_event raising)."""
         try:
-            root.grab_keyboard(False, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime)
+            km = d.query_keymap()
+            return bool(km[keycode // 8] & (1 << (keycode % 8)))
         except Exception:
-            self._safe(self.on_toggle)  # degrade to a single toggle
-            return
+            return True
+
+    def _hold_cycle(self, d: Display, keycode: int) -> None:
+        """Push-to-talk with native key passthrough.
+
+        The XGrabKey passive grab that fired this hold activates a FULL
+        keyboard grab for the key's press-to-release duration (X11
+        semantics) - historically that swallowed every other keystroke
+        typed during the hold. This cycle instead RELEASES that activation
+        immediately (ungrab_keyboard + ungrab_key), so every other key
+        flows to the focused application natively: real events, no
+        XTEST/XSendEvent injection, no fake-event dedup races. The hotkey's
+        release is detected by polling query_keymap() (auto-repeat-proof);
+        a passive Escape grab is armed just for the hold so Escape still
+        cancels the recording (upstream semantics: a cancelled recording is
+        discarded, not transcribed); the hotkey grab is re-armed on the way
+        out. Deliberate divergences (documented in STATUS.md): typed keys
+        do NOT interrupt the dictation (upstream clean-tap does), and the
+        held hotkey's auto-repeat pairs reach the focused app like any
+        other key. If the initial ungrab fails, keys keep being swallowed
+        - the pre-passthrough behavior - but the hold still works."""
+        root = d.screen().root
         self._safe(self.on_toggle)  # start
         aborted = False
         try:
-            while not self._stop_flag.is_set():
-                try:
-                    event = d.next_event()
-                except Exception:
-                    break
-                etype = getattr(event, "type", None)
-                detail = getattr(event, "detail", None)
-                if etype == X.KeyRelease and detail == keycode:
-                    break
-                if etype == X.KeyPress and detail == self._escape_keycode:
-                    aborted = True
-                    break
-        finally:
+            # Free the keyboard: the passive grab's activation holds it.
             try:
                 d.ungrab_keyboard(X.CurrentTime)
+                root.ungrab_key(keycode, X.AnyModifier)
+                d.sync()
+            except Exception:
+                pass  # best-effort: worst case keys stay swallowed
+            # Escape still cancels: arm a passive grab for the hold only
+            # (its press-activation delivers Escape to us; other keys are
+            # untouched by a passive grab that has not fired).
+            if self._escape_keycode:
+                try:
+                    root.grab_key(self._escape_keycode, X.AnyModifier, False,
+                                  X.GrabModeAsync, X.GrabModeAsync)
+                except Exception:
+                    pass  # best-effort: cancel via CLI still works
+            try:
+                while not self._stop_flag.is_set():
+                    # Release detection: a clear keymap bit is a real
+                    # release (auto-repeat never clears it).
+                    if not self._hotkey_still_down(d, keycode):
+                        break
+                    # Escape (or anything the escape-grab activation
+                    # delivered to us) - the only events we can see now.
+                    try:
+                        if d.pending_events():
+                            event = d.next_event()
+                            if classify_hold_event(
+                                    getattr(event, "type", None),
+                                    getattr(event, "detail", None),
+                                    keycode, self._escape_keycode) == _HOLD_ABORT:
+                                aborted = True
+                                break
+                    except Exception:
+                        break  # display closed / stop() - end the hold
+                    self._stop_flag.wait(0.02)  # ~50 Hz poll: stop-responsive
+            finally:
+                if self._escape_keycode:
+                    try:
+                        root.ungrab_key(self._escape_keycode, X.AnyModifier)
+                    except Exception:
+                        pass
+                try:
+                    self._grab(keycode)  # re-arm the dictation hotkey
+                except Exception:
+                    pass
+        finally:
+            try:
+                d.ungrab_keyboard(X.CurrentTime)  # release escape activation
             except Exception:
                 pass
         if aborted:

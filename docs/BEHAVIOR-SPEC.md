@@ -199,9 +199,18 @@ whisper/cohere/nemotron language stores; we have one global `language`).
   machine; other keys during hold interrupt the trigger.
 
 **Port status:** ✅ toggle (any keysym, incl. modifier-only Right Ctrl);
-✅ hold for non-modifier keys via temporary keyboard grab (known divergence:
-the grab swallows other keystrokes during the hold, where upstream passes
-them through and uses them to interrupt the trigger — roadmap). Automatic
+✅ hold for non-modifier keys with **native key passthrough**: the hold
+releases the XGrabKey activation (X11 semantics: that activation grabs the
+whole keyboard for the held key's press-to-release duration), so keys typed
+during the hold reach the focused application as real events — no
+XTEST/XSendEvent injection (an XTEST replay design was rejected by live
+testing: Xorg 21.1 silently drops XTEST fakes that match the current key
+state, so replayed presses are deduped away). Release is detected by
+auto-repeat-proof query_keymap polling; a passive Escape grab preserves
+cancel-during-hold; the hotkey re-arms after the take. Remaining divergence:
+typed keys do NOT end the dictation, where upstream's clean-tap state
+machine uses them to interrupt the trigger (deliberate "keep typing while
+holding"), and the held hotkey's auto-repeat pairs reach the app. Automatic
 mode, mode-switch-while-recording, paste-last-transcription hotkey and
 Escape-cancel (default Escape semantics) are roadmap. Divergence: the port
 caps recordings at `max_seconds` (300 s default) where upstream has no cap.

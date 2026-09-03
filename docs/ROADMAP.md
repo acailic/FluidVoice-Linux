@@ -14,9 +14,17 @@ sources. Everything below is a known, classified gap — see
       follow-up history), types the result over the selection.
 - [x] First-PCM timeout (2s) — DONE: live-but-silent mics stop early with a
       notification (probes the raw stream, not the finalized WAV).
-- [ ] Hold-mode key passthrough: stop swallowing the keyboard during
-      push-to-talk; other keys interrupt the trigger instead (upstream
-      clean-tap state machine).
+- [x] Hold-mode key passthrough — DONE: keys typed during a push-to-talk
+      hold reach the focused app as REAL events (the XGrabKey activation is
+      released for the hold's duration — X11 gives that activation a full
+      keyboard grab — with release detected by auto-repeat-proof query_keymap
+      polling, a passive Escape grab keeping cancel-during-hold, and the
+      hotkey re-armed after). An XTEST ungrab→inject→re-grab replay design
+      was prototyped and rejected by live testing (Xorg 21.1 drops XTEST
+      fakes that match the current key state). The upstream interrupt
+      semantics deliberately stay out: typed keys keep the dictation running
+      instead of ending the trigger (clean-tap state machine remains a
+      divergence, see STATUS).
 - [x] Escape cancels aborted hold recordings (not stop-and-transcribe).
 - [x] Spoken-send — DONE (final-transcript variant): trailing phrase strips
       and presses enter/shift+enter/ctrl+enter after typing; "literal send

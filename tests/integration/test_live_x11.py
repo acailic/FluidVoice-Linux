@@ -84,6 +84,136 @@ class TestHotkeyLive:
 
 
 @requires_x11
+class TestHoldPassthroughLive:
+    """Push-to-talk (hold mode): keys typed during the hold must reach the
+    focused app (replayed through the daemon's keyboard grab), the ~30 Hz
+    auto-repeat pairs of the held hotkey must not end the hold early, and
+    releasing the hotkey completes the dictation (stop, not cancel)."""
+
+    def _status(self):
+        try:
+            return control.request("status")
+        except Exception:
+            return {}
+
+    def test_typing_during_hold_reaches_app_and_recording_completes(
+            self, daemon_hold_hotkey):
+        from tests.integration.conftest import skip_if_gpu_busy
+        skip_if_gpu_busy()  # the take is transcribed (real model) after the hold
+        from Xlib import X, XK
+        from Xlib.display import Display
+
+        d = Display()
+        win = None
+        prev_focus = None
+        try:
+            root = d.screen().root
+            # receiver window (probe pattern): override-redirect, key events
+            win = root.create_window(
+                10, 10, 240, 120, 1, X.CopyFromParent, X.InputOutput,
+                X.CopyFromParent, override_redirect=True,
+                event_mask=X.KeyPressMask | X.KeyReleaseMask)
+            win.map()
+            d.sync()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if win.get_attributes().map_state == X.IsViewable:
+                    break
+                time.sleep(0.05)
+            assert win.get_attributes().map_state == X.IsViewable
+            prev_focus = d.get_input_focus().focus
+            win.set_input_focus(X.RevertToParent, X.CurrentTime)
+            d.sync()
+
+            # 1. keydown F9 -> push-to-talk hold starts (retry: a previous
+            #    test daemon's X connection may still hold the F9 grab, and
+            #    its release can lag the new daemon's startup)
+            recording = False
+            for _ in range(4):
+                subprocess.run(["xdotool", "keydown", "F9"], check=True, timeout=5)
+                deadline = time.monotonic() + 1.5
+                while time.monotonic() < deadline:
+                    if self._status().get("recording"):
+                        recording = True
+                        break
+                    time.sleep(0.15)
+                if recording:
+                    break
+                subprocess.run(["xdotool", "keyup", "F9"], timeout=5)
+                time.sleep(0.5)
+            assert recording, "hold-mode F9 grab did not start recording"
+
+            try:
+                # 2. type while holding: the daemon's grab swallows the XTEST
+                #    chars and replays them to the focused window; the held
+                #    F9 auto-repeats at ~30 Hz, which must NOT end the hold
+                subprocess.run(["xdotool", "type", "--delay", "60", "hi"],
+                               check=True, timeout=10)
+                time.sleep(0.4)
+                assert self._status().get("recording") is True, \
+                    "hold ended while typing (auto-repeat / replay race)"
+
+                # 3. release F9 -> stop path: recording ends, daemon healthy
+                subprocess.run(["xdotool", "keyup", "F9"], check=True, timeout=5)
+                deadline = time.monotonic() + 10
+                stopped = False
+                while time.monotonic() < deadline:
+                    status = self._status()
+                    if status and not status.get("recording") and status.get("ok"):
+                        stopped = True
+                        break
+                    time.sleep(0.15)
+                assert stopped, "hold did not end on F9 release"
+
+                # 4. drain the receiver window: the typed chars arrived as
+                #    REAL (send_event False) keystrokes - XTEST replay, not
+                #    the XSendEvent fallback. Focus stays on the receiver so
+                #    the daemon's post-transcription insertion lands there.
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline and d.pending_events() < 4:
+                    time.sleep(0.05)
+                real_presses = set()
+                while d.pending_events():
+                    ev = d.next_event()
+                    if ev.type == X.KeyPress and not ev.send_event:
+                        real_presses.add(ev.detail)
+                want = {d.keysym_to_keycode(XK.string_to_keysym(c)) for c in "hi"}
+                assert want <= real_presses, \
+                    f"typed chars did not reach the focused app: " \
+                    f"wanted {want} among real presses, got {real_presses}"
+
+                # best-effort: let the take transcribe while focus is our
+                # harmless receiver window (no assertion - GPU timing)
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    status = self._status()
+                    if status and not status.get("recording") \
+                            and not status.get("busy"):
+                        break
+                    time.sleep(0.5)
+            finally:
+                subprocess.run(["xdotool", "keyup", "F9"], timeout=5)
+                try:
+                    control.request("cancel")
+                except Exception:
+                    pass
+        finally:
+            if win is not None:
+                try:
+                    if prev_focus is not None:
+                        prev_focus.set_input_focus(X.RevertToParent, X.CurrentTime)
+                except Exception:
+                    pass
+                try:
+                    win.unmap()
+                    win.destroy()
+                    d.sync()
+                except Exception:
+                    pass
+            d.close()
+
+
+@requires_x11
 class TestOverlayLive:
     def test_pill_overlay_renders_text_pixels(self):
         from PIL import Image

@@ -27,7 +27,10 @@ DEFAULTS: dict[str, Any] = {
         # Right_Shift, Super_R...) work in "toggle" mode only.
         "key": "Right_Control",
         "modifiers": [],  # any of: ctrl, alt, shift, super
-        "mode": "toggle",  # toggle | hold (hold needs a non-modifier key)
+        # toggle | hold (hold needs a non-modifier key; keys typed during a
+        # hold pass through to the focused app natively - the keyboard is
+        # freed for the duration; swallowed only if freeing it fails)
+        "mode": "toggle",
         # macOS parity: Escape cancels an in-progress dictation (discards,
         # nothing typed). Grabbed ONLY while recording; "none" disables.
         "cancel_key": "Escape",
@@ -153,7 +156,10 @@ key = "Right_Control"
 # Extra modifiers to require, e.g. ["ctrl", "shift"]
 modifiers = []
 # "toggle": tap to start, tap again to stop & transcribe.
-# "hold":   push-to-talk (non-modifier key only).
+# "hold":   push-to-talk (non-modifier key only). Other keys typed during
+#           the hold pass through to the focused app natively (the keyboard
+#           is freed for the hold's duration; swallowed only if freeing it
+#           fails). The held hotkey's auto-repeats also reach the app.
 mode = "toggle"
 # Optional extra key that cancels a running recording (keysym name, "" = off)
 cancel_key = ""

@@ -102,6 +102,17 @@ def daemon_with_hotkey(isolated_env, tmp_path):
     _stop_daemon(proc, tmp_path)
 
 
+@pytest.fixture()
+def daemon_hold_hotkey(isolated_env, tmp_path):
+    """A real daemon in hold (push-to-talk) mode with the F9 grab active.
+    Same config as daemon_with_hotkey plus mode = "hold" under [hotkey]."""
+    isolated_env.write_text(
+        isolated_env.read_text().replace('key = "F9"\n', 'key = "F9"\nmode = "hold"\n'))
+    proc = _spawn_and_wait(tmp_path, ["--no-sounds"])
+    yield proc
+    _stop_daemon(proc, tmp_path)
+
+
 def gpu_free_mb() -> int:
     """Free VRAM in MiB, or -1 when it cannot be determined."""
     try:

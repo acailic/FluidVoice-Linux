@@ -1,6 +1,6 @@
 # FluidVoiceLinux — Status Ledger
 
-Last updated: 2026-09-03 · v0.1.0 · **537 automated tests** (509 offline + 28 integration)
+Last updated: 2026-09-03 · v0.1.0 · **547 automated tests** (518 offline + 29 integration)
 · verified against upstream `altic-dev/FluidVoice` by a 5-agent audit
 (prompts/AI, punctuation rules, daemon pipeline, models, security).
 
@@ -17,7 +17,15 @@ matrix + upstream changelog with its refresh loop).
 ### Core dictation loop (live-tested on Pop!_OS X11)
 - Global hotkey via XGrabKey: **toggle** mode with any keysym (modifier-only
   keys like Right Ctrl included, lock-mask variants handled) and **hold**
-  (push-to-talk) for non-modifier keys; optional second cancel key.
+  (push-to-talk) for non-modifier keys with **native key passthrough**: the
+  hold releases the XGrabKey activation (which by X11 semantics grabs the
+  whole keyboard for the held key's press-to-release duration), so keys
+  typed while holding reach the focused app as real events — no injection;
+  release is detected by auto-repeat-proof query_keymap polling, a passive
+  Escape grab covers cancel-during-hold, and the hotkey re-arms afterwards
+  (an XTEST-replay variant was prototyped and abandoned: live Xorg 21.1
+  silently drops XTEST fakes that match the current key state, so replayed
+  presses never reach the app); optional second cancel key.
 - Recording through PipeWire (`pw-record`) / PulseAudio (`parecord`), 16 kHz
   mono s16 WAV, configurable device; SIGINT→SIGTERM→SIGKILL stop escalation;
   stderr drained to avoid pipe blocking.
@@ -128,7 +136,7 @@ matrix + upstream changelog with its refresh loop).
 | Thinking-only model answers fall back to the raw transcript (upstream types the raw content) | never type `<think>` junk |
 | AI timeout 120 s (upstream: 30 s streaming / 120 s non-streaming) | we are non-streaming; big local models are slow |
 | `max_seconds` cap (upstream: none) | runaway-recording safety; configurable |
-| Hold mode grabs the whole keyboard during the hold | X11 limitation of seeing KeyRelease; fix is roadmap |
+| Hold mode passes typed keys through natively but they do NOT end the dictation (upstream clean-tap: other keys interrupt the trigger); the held hotkey's auto-repeat pairs also reach the app | deliberate "keep typing while holding"; X11 has no per-event passthrough under an active grab — releasing the grab entirely is the only clean mechanism (live-verified) |
 | No telemetry at all (upstream has opt-in analytics) | privacy-first choice |
 
 ---
@@ -138,7 +146,16 @@ matrix + upstream changelog with its refresh loop).
 ### Near term — daily-driver polish (v0.2)
 - [ ] **Rewrite/Write mode** — selection capture, edit prompts (already
       ported verbatim), dedicated hotkey.
-- [ ] Hold-mode key passthrough (other keys interrupt, not swallow).
+- [x] **Hold-mode key passthrough** — DONE: keys typed during a push-to-talk
+      hold reach the focused app as REAL events (the XGrabKey activation is
+      released for the hold's duration; release detected via auto-repeat-proof
+      query_keymap polling; passive Escape grab keeps cancel-during-hold;
+      hotkey re-armed after). An XTEST ungrab→inject→re-grab replay design
+      was prototyped and rejected: live Xorg 21.1 drops XTEST fakes that
+      match the current key state, so replayed presses are deduped away.
+      Remaining divergence (deliberate): typed keys do not end the dictation
+      (upstream clean-tap interrupts), and the held hotkey's auto-repeats
+      reach the app.
 - [ ] Per-model language selection (one global language today).
 
 ### Wayland parity (v0.3)

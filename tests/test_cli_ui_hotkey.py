@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -202,3 +203,230 @@ class TestHotkeyListenerConstruction:
     def test_config_cancel_key_defaults_to_escape(self):
         from fluidvoice.config import DEFAULTS
         assert DEFAULTS["hotkey"]["cancel_key"] == "Escape"
+
+
+# ---------------------------------------------------------------------------
+# Hold-mode key passthrough (classify / replay / hold cycle) — no X server:
+# plain fakes with call recording.
+# ---------------------------------------------------------------------------
+
+class TestHoldClassification:
+    """classify_hold_event is a pure table: how _hold_cycle treats one
+    grabbed keyboard event."""
+
+    def test_classification_table(self):
+        from Xlib import X
+        from fluidvoice.hotkey import (_HOLD_ABORT, _HOLD_END, _HOLD_IGNORE,
+                                       _HOLD_REPLAY, classify_hold_event)
+        hotkey, escape, other, modifier = 67, 9, 38, 50  # F9, Esc, 'a', Shift
+        cases = [
+            # hotkey release ends the hold
+            (X.KeyRelease, hotkey, escape, _HOLD_END),
+            # escape press cancels the recording
+            (X.KeyPress, escape, escape, _HOLD_ABORT),
+            # any other press/release (modifiers included) is replayed
+            (X.KeyPress, other, escape, _HOLD_REPLAY),
+            (X.KeyRelease, other, escape, _HOLD_REPLAY),
+            (X.KeyPress, modifier, escape, _HOLD_REPLAY),
+            (X.KeyRelease, modifier, escape, _HOLD_REPLAY),
+            # hotkey press (auto-repeat) and escape release are ignored
+            (X.KeyPress, hotkey, escape, _HOLD_IGNORE),
+            (X.KeyRelease, escape, escape, _HOLD_IGNORE),
+            # non-key events / missing fields are ignored
+            (X.MappingNotify, hotkey, escape, _HOLD_IGNORE),
+            (None, hotkey, escape, _HOLD_IGNORE),
+            (X.KeyPress, None, escape, _HOLD_IGNORE),
+            (X.KeyRelease, None, escape, _HOLD_IGNORE),
+            # cancel disabled: escape is a normal (replayed) key
+            (X.KeyPress, escape, None, _HOLD_REPLAY),
+            (X.KeyRelease, escape, None, _HOLD_REPLAY),
+        ]
+        for etype, detail, esc, expected in cases:
+            got = classify_hold_event(etype, detail, hotkey, esc)
+            assert got == expected, (etype, detail, esc, got, expected)
+
+
+
+
+class _FakeRoot:
+    def __init__(self, display):
+        self._display = display
+        self.id = 0x4f
+        self.escape_grab_error = None
+
+    def grab_key(self, keycode, modifiers, owner_events, pointer_mode,
+                 keyboard_mode):
+        if self.escape_grab_error and keycode == self._display.escape_keycode:
+            raise self.escape_grab_error
+        self._display.calls.append(f"grab_key:{keycode}:{modifiers}")
+
+    def ungrab_key(self, keycode, modifiers):
+        self._display.calls.append(f"ungrab_key:{keycode}:{modifiers}")
+
+
+class _HoldEvent:
+    def __init__(self, etype=None, detail=None):
+        self.type = etype
+        self.detail = detail
+
+
+class _HoldFakeDisplay:
+    """Scripted keymap + event queue for _hold_cycle (no X server)."""
+
+    def __init__(self, events=(), keymaps=(), ungrab_error=None,
+                 escape_keycode=9):
+        self.events = list(events)
+        self.ungrab_error = ungrab_error
+        self.escape_keycode = escape_keycode
+        # keymaps: one 32-int state per query_keymap() call (last repeats)
+        self.keymaps = [self._keymap(kcs) for kcs in keymaps]
+        self.calls = []
+        self.root = _FakeRoot(self)
+        self.close_pending = False  # pending_events() raises when True
+
+    @staticmethod
+    def _keymap(down_keycodes):
+        km = [0] * 32
+        for kc in down_keycodes:
+            km[kc // 8] |= 1 << (kc % 8)
+        return km
+
+    def screen(self):
+        return SimpleNamespace(root=self.root)
+
+    def sync(self):
+        self.calls.append("sync")
+
+    def ungrab_keyboard(self, time):
+        self.calls.append(f"ungrab_keyboard:{time}")
+        if self.ungrab_error:
+            raise self.ungrab_error
+
+    def query_keymap(self):
+        self.calls.append("query_keymap")
+        if len(self.keymaps) > 1:
+            return self.keymaps.pop(0)
+        return self.keymaps[0] if self.keymaps else [0] * 32
+
+    def pending_events(self):
+        if self.close_pending:
+            raise RuntimeError("display closed")
+        return len(self.events)
+
+    def next_event(self):
+        if not self.events:
+            raise RuntimeError("display closed")
+        ev = self.events.pop(0)
+        self.calls.append(f"next_event:{ev.type}:{ev.detail}")
+        return ev
+
+
+def _hold_listener(toggles, cancels):
+    from fluidvoice.hotkey import HotkeyListener
+    listener = HotkeyListener("F9", [], "hold",
+                              on_toggle=lambda: toggles.append(1),
+                              on_cancel=lambda: cancels.append(1))
+    listener._escape_keycode = 9   # XK_Escape keycode (as setup() would set)
+    listener._keycode = 67         # F9
+    return listener
+
+
+class TestHoldCycle:
+    """Native-passthrough hold: the keyboard is FREED (passive-grab
+    activation released), release detection polls query_keymap, a passive
+    Escape grab is armed just for the hold, the hotkey is re-armed after."""
+
+    HOTKEY = 67   # F9
+    ESCAPE = 9
+
+    def _run(self, events=(), keymaps=(), ungrab_error=None,
+             escape_keycode=9, close_pending=False, escape_grab_error=None):
+        from Xlib import X
+        toggles, cancels = [], []
+        listener = _hold_listener(toggles, cancels)
+        listener._escape_keycode = escape_keycode
+        d = _HoldFakeDisplay(events, keymaps, ungrab_error,
+                             escape_keycode=escape_keycode)
+        d.close_pending = close_pending
+        d.root.escape_grab_error = escape_grab_error
+        listener._display = d  # so the teardown re-arm hits the fake root
+        listener._hold_cycle(d, self.HOTKEY)
+        return listener, toggles, cancels, d
+
+    def test_release_detected_via_keymap_ends_hold(self):
+        from Xlib import X
+        _, toggles, cancels, d = self._run(keymaps=[(self.HOTKEY,), (self.HOTKEY,), ()])
+        assert toggles == [1, 1]          # start + stop (transcribe) path
+        assert cancels == []
+        # the passive-grab activation was released (native passthrough)
+        assert "ungrab_keyboard:0" in d.calls
+        assert f"ungrab_key:{self.HOTKEY}:{X.AnyModifier}" in d.calls
+        # Escape armed just for the hold, disarmed at the end
+        assert f"grab_key:{self.ESCAPE}:{X.AnyModifier}" in d.calls
+        assert f"ungrab_key:{self.ESCAPE}:{X.AnyModifier}" in d.calls
+        # the hotkey passive grab is re-armed for the next dictation
+        assert f"grab_key:{self.HOTKEY}:0" in d.calls
+        # and any escape-grab activation released at teardown
+        assert d.calls.count("ungrab_keyboard:0") >= 2
+
+    def test_escape_press_aborts_and_cancels(self):
+        from Xlib import X
+        _, toggles, cancels, _ = self._run(
+            events=[_HoldEvent(X.KeyPress, self.ESCAPE)],
+            keymaps=[(self.HOTKEY,)])
+        assert cancels == [1]
+        assert toggles == [1]             # started, never stopped
+
+    def test_auto_repeat_does_not_end_hold(self):
+        # the keymap bit stays set through the ~30 Hz synthetic repeat
+        # pairs; only a real release (bit clear) ends the hold
+        _, toggles, cancels, d = self._run(
+            keymaps=[(self.HOTKEY,)] * 5 + [()])
+        assert toggles == [1, 1]
+        assert cancels == []
+        assert d.calls.count("query_keymap") >= 5
+
+    def test_display_closed_ends_hold_via_stop(self):
+        _, toggles, cancels, _ = self._run(keymaps=[(self.HOTKEY,)],
+                                           close_pending=True)
+        assert toggles == [1, 1]          # stop path, not cancel
+        assert cancels == []
+
+    def test_ungrab_failure_degrades_to_swallow(self):
+        # keyboard stays grabbed -> typed keys are delivered to us and
+        # silently drained (the pre-passthrough behavior); hold still works
+        from Xlib import X
+        _, toggles, cancels, _ = self._run(
+            events=[_HoldEvent(X.KeyPress, 38), _HoldEvent(X.KeyRelease, 38)],
+            keymaps=[(self.HOTKEY,), (self.HOTKEY,), ()],
+            ungrab_error=RuntimeError("ungrab failed"))
+        assert toggles == [1, 1]
+        assert cancels == []
+
+    def test_escape_grab_failure_tolerated(self):
+        _, toggles, cancels, _ = self._run(
+            keymaps=[(self.HOTKEY,), ()],
+            escape_grab_error=RuntimeError("cannot grab escape"))
+        assert toggles == [1, 1]
+        assert cancels == []
+
+    def test_no_escape_keycode_skips_escape_grab(self):
+        from Xlib import X
+        _, toggles, cancels, d = self._run(keymaps=[(self.HOTKEY,), ()],
+                                           escape_keycode=None)
+        assert toggles == [1, 1]
+        assert not any(c.startswith(f"grab_key:{self.ESCAPE}:") for c in d.calls)
+
+    def test_hotkey_and_typed_events_drained_not_aborting(self):
+        # in degraded (still-grabbed) mode these arrive at us: repeats of
+        # the held hotkey and typed keys must never cancel or mis-end
+        from Xlib import X
+        _, toggles, cancels, d = self._run(
+            events=[_HoldEvent(X.KeyPress, self.HOTKEY),     # repeat press
+                    _HoldEvent(X.KeyRelease, self.HOTKEY),   # repeat release
+                    _HoldEvent(X.KeyPress, 38),              # typed 'a'
+                    _HoldEvent(X.KeyRelease, 38)],
+            keymaps=[(self.HOTKEY,), (self.HOTKEY,), ()])
+        assert toggles == [1, 1]
+        assert cancels == []
+        assert any(c.startswith(f"next_event:{X.KeyPress}:{self.HOTKEY}") for c in d.calls)
