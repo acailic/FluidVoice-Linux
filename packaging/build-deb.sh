@@ -116,6 +116,7 @@ fi
 #    via the systemd unit we enable above
 if command -v systemctl >/dev/null 2>&1 && [ -n "${SUDO_USER:-}" ]; then
     su -s /bin/sh "$SUDO_USER" -c '
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
         systemctl --user daemon-reload 2>/dev/null || true
         systemctl --user enable fluidvoice.service 2>/dev/null || true
         if systemctl --user is-active --quiet fluidvoice.service 2>/dev/null; then
