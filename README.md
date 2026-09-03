@@ -61,20 +61,29 @@ hotkey ─▶ pw-record 16k mono ─▶ faster-whisper (CUDA/int8) ─▶ filler
 
 ## Installation
 
-### Option A — .deb package (the "Mac app" experience)
+### Option A — one-shot installer
 
 One download + one command, then FluidVoice appears in your app launcher,
-autostarts at login, and needs no terminal:
+autostarts at login, and needs no terminal. The default install is
+**user-space and needs no sudo at all** (`~/.local/...` + a systemd user
+unit that shadows any system unit); it only asks for sudo if a required
+system package (GTK/pygobject, xdotool, ...) is missing:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/acailic/FluidVoice-Linux/linux/scripts/install-one-shot.sh | bash
 ```
 
+Prefer the classic system-wide .deb (root-owned, `/opt` runtime)?
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/acailic/FluidVoice-Linux/linux/scripts/install-one-shot.sh | bash -s -- --system
+```
+
 Or manually (download + install):
 
 ```bash
-curl -LO https://github.com/acailic/FluidVoice-Linux/releases/download/v0.1.0/fluidvoice-linux_0.1.0-1_amd64.deb
-sudo apt install ./fluidvoice-linux_0.1.0-1_amd64.deb
+curl -LO https://github.com/acailic/FluidVoice-Linux/releases/download/v0.3.0/fluidvoice-linux_0.3.0-2_amd64.deb
+sudo apt install ./fluidvoice-linux_0.3.0-2_amd64.deb
 ```
 
 Grab a specific version from the [releases page](https://github.com/acailic/FluidVoice-Linux/releases).
