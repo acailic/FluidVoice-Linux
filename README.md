@@ -14,6 +14,35 @@ a local Ollama).
 
 [![Status](https://img.shields.io/badge/status-v0.1%20MVP-green)]() [![License](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 
+## Screenshots
+
+The dictation pill — live waveform, streaming transcription, bottom-center
+of your screen (shown mid-dictation and while the final pass runs):
+
+<p>
+<img src="docs/screenshots/overlay-pill.png" width="420" alt="dictation pill overlay with live waveform and streaming text">
+&nbsp;
+<img src="docs/screenshots/overlay-processing.png" width="420" alt="pill in processing state">
+</p>
+
+The native GTK app — the History window (live status, search, replay,
+ZIP export) and the Settings pages:
+
+<p>
+<img src="docs/screenshots/history-window.png" width="380" alt="History window: status header, search, entry list with replay">
+</p>
+
+<p>
+<img src="docs/screenshots/settings-general.png" width="300" alt="Settings: General">
+<img src="docs/screenshots/settings-models.png" width="300" alt="Settings: Models with one-click switch and GGUF downloads">
+<img src="docs/screenshots/settings-ai.png" width="300" alt="Settings: AI polish">
+</p>
+<p>
+<img src="docs/screenshots/settings-dictation.png" width="300" alt="Settings: Dictation with hotkey capture and mic picker">
+<img src="docs/screenshots/settings-history.png" width="300" alt="Settings: History retention">
+<img src="docs/screenshots/settings-about.png" width="300" alt="Settings: About">
+</p>
+
 ## What it does
 
 1. **Global hotkey** (default: Right Ctrl, toggle mode) starts recording — 16 kHz mono via PipeWire.
