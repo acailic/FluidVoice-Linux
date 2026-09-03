@@ -109,10 +109,22 @@ fi
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
     gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
 fi
-# enable the systemd user unit for the installing desktop user, if possible
+# enable + (re)start the daemon for the installing desktop user:
+#  - systemd-managed: daemon-reload + try-restart so upgrades take effect
+#    immediately (no manual restart or logout needed)
+#  - daemon autostarted via XDG (outside systemd): stop it and take over
+#    via the systemd unit we enable above
 if command -v systemctl >/dev/null 2>&1 && [ -n "${SUDO_USER:-}" ]; then
-    su -s /bin/sh "$SUDO_USER" -c \
-        'systemctl --user daemon-reload 2>/dev/null; systemctl --user enable fluidvoice.service 2>/dev/null' || true
+    su -s /bin/sh "$SUDO_USER" -c '
+        systemctl --user daemon-reload 2>/dev/null || true
+        systemctl --user enable fluidvoice.service 2>/dev/null || true
+        if systemctl --user is-active --quiet fluidvoice.service 2>/dev/null; then
+            systemctl --user try-restart fluidvoice.service 2>/dev/null || true
+        elif pgrep -f "/opt/fluidvoice-linux/.*/python -m fluidvoice daemon" >/dev/null 2>&1; then
+            pkill -f "/opt/fluidvoice-linux/.*/python -m fluidvoice daemon" 2>/dev/null || true
+            sleep 1
+            systemctl --user start fluidvoice.service 2>/dev/null || true
+        fi' || true
 fi
 exit 0
 POST

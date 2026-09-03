@@ -68,8 +68,8 @@ else
 
   FluidVoice installed! One more thing: log out and back in once so the
   daemon autostarts and the launcher entry appears.
-  (Upgrading an already-running install? No logout needed, just:
-    systemctl --user restart fluidvoice.service)
+  (Upgrading? The daemon restarts itself automatically - just close and
+  reopen the settings window if you had it open.)
 
   Then:
     - press Right Ctrl, speak, press Right Ctrl again -> text is typed
