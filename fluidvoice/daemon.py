@@ -25,6 +25,7 @@ from .ai.prompts import default_dictation_prompt
 from .audio_utils import duration_seconds, is_silent
 from .config import load_config
 from .media import MediaController
+from .micmon import match_priority as micmon_match_priority
 from .processing import post_process
 from .processing.per_app import match_app_prompt, system_prompt_for
 from .recorder import Recorder, RecorderError
@@ -246,6 +247,8 @@ class Daemon:
         self._closing_display: Any = None
         self._tray: Any = None
         self._media = MediaController(log=log)
+        self._micmon: Any = None  # input-device watcher (micmon.MicMonitor)
+        self._mic_missing_logged = False  # warn-once latch for reselects
         self.warmup: dict = {"running": False, "error": None, "model": None}
         self._warmup_lock = threading.Lock()
         self._lock = threading.Lock()
@@ -286,6 +289,7 @@ class Daemon:
             self._start_hotkey()
 
         self._start_tray()
+        self._start_micmon()
         self._maybe_first_run_onboard()
 
         ready = threading.Event()
@@ -348,7 +352,9 @@ class Daemon:
                  "checked": not device,
                  "action": lambda: self._set_device("")}]
         from .tray import list_microphones
-        for m in list_microphones():
+        from .micmon import sort_by_priority
+        mic_names = self.cfg["recording"].get("mic_priority") or []
+        for m in sort_by_priority(list_microphones(), mic_names):
             mics.append({"kind": "check", "label": m["description"],
                          "checked": device == m["name"],
                          "action": lambda n=m["name"]: self._set_device(n)})
@@ -412,6 +418,59 @@ class Daemon:
             self._rebuild_recorder()
             log(f"microphone set to {device or 'auto'}")
 
+    # -- input-device monitoring (mic auto-switch) ---------------------------
+
+    def _start_micmon(self, poll=None, interval=None) -> None:
+        """Best-effort input-device watcher (like the tray): diff-polls
+        pactl sources and auto-switches when the configured device vanishes
+        and a `recording.mic_priority` pattern matches (see micmon.py).
+        poll/interval overrides exist for tests."""
+        from .micmon import MicMonitor
+        kwargs: dict = {}
+        if poll is not None:
+            kwargs["poll"] = poll
+        if interval is not None:
+            kwargs["interval"] = interval
+        mon = MicMonitor(on_change=self._on_sources_changed, log=log, **kwargs)
+        if not mon.start():
+            return  # already logged "mic monitoring unavailable"
+        self._micmon = mon
+        log("mic monitoring active")
+        self._mic_reselect(mon.last_names)  # startup recovery
+
+    def _on_sources_changed(self, added, removed, current) -> None:
+        if added or removed:
+            log(f"audio sources: +{', '.join(added) or '—'} "
+                f"-{', '.join(removed) or '—'}")
+        with self._lock:
+            idle = not self.recording and not self.busy
+        if not idle:
+            return  # mid-dictation safety: retried on the next idle poll
+        self._mic_reselect(current)
+
+    def _mic_reselect(self, names: list[str]) -> None:
+        """Auto-switch ONLY when the configured device is absent and a
+        priority match exists. device == "" (auto) is never touched; a
+        working configured device is never upgraded (no preemptive
+        switching on connect)."""
+        device = self.cfg["recording"].get("device", "")
+        if not device:
+            return
+        if device in names:
+            self._mic_missing_logged = False  # reset the warn-once latch
+            return
+        patterns = self.cfg["recording"].get("mic_priority") or []
+        best = micmon_match_priority(patterns, names)
+        if best is None:
+            if not self._mic_missing_logged:
+                log(f"microphone '{device}' unavailable and no priority match")
+                self._mic_missing_logged = True
+            return
+        self._mic_missing_logged = False
+        self._set_device(best)  # existing path: lock re-check, save, rebuild
+        ui.notify("FluidVoice", f"Microphone switched to {best}",
+                  enabled=self.cfg["notifications"]["enabled"])
+
     def _quit_gracefully(self) -> None:
         log("quit requested from menu")
         import os
@@ -464,6 +523,9 @@ class Daemon:
             self.recording = False
         if self._watchdog:
             self._watchdog.cancel()
+        if self._micmon:
+            self._micmon.stop()
+            self._micmon = None
         self._stop_preview()
         self._close_closing_display()
         self.cancel_pending_command()  # pill + Escape grab gone before hotkeys

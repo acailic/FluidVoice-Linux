@@ -88,6 +88,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._combo_values: dict[tuple[str, str], list] = {}
         self._rule_rows: list[dict] = []  # per-app prompt editors
         self._dict_rows: list[dict] = []  # custom-dictionary editors
+        self._mic_prio_rows: list[dict] = []  # mic-priority pattern editors
         self._save_groups: list[Adw.PreferencesGroup] = []
         self._save_rows: list[Adw.ActionRow] = []
         self._model_rows: list[Adw.ActionRow] = []
@@ -245,6 +246,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._load_rules(self.cfg.get("ai", {}).get("per_app_prompts") or [])
         self._load_dictionary(self.cfg.get("processing", {}).get("dictionary")
                               or [])
+        self._load_mic_priority(
+            list(self.cfg.get("recording", {}).get("mic_priority") or []))
         self._dirty = False
         self._loading = False
         self._sync_save_rows()
@@ -279,8 +282,10 @@ class SettingsWindow(Adw.PreferencesWindow):
         rules = self._collect_rules()
         if rules is not None:
             body.setdefault("ai", {})["per_app_prompts"] = rules
-        body.setdefault("processing", {})["dictionary"] = \
+        body.setdefault("processing", {})['dictionary'] = \
             self._collect_dictionary()
+        body.setdefault("recording", {})["mic_priority"] = \
+            self._collect_mic_priority()  # empty list is meaningful: removals
         return body
 
     def save(self) -> bool:
@@ -727,6 +732,68 @@ class SettingsWindow(Adw.PreferencesWindow):
                            "and instructions)")
         return rules
 
+    # -- microphone priority list (auto-switch patterns) ----------------------
+
+    def _load_mic_priority(self, patterns: list) -> None:
+        for ref in list(self._mic_prio_rows):
+            self.mic_prio_group.remove(ref["row"])
+        self._mic_prio_rows = []
+        for pattern in patterns:
+            self._add_mic_prio(str(pattern))
+
+    def _add_mic_prio(self, value: str) -> None:
+        row = Adw.EntryRow(title="Pattern")
+        row.set_text(value)
+        row.connect("changed", lambda *_: self._touch())
+        up = Gtk.Button(icon_name="go-up-symbolic", css_classes=["flat"],
+                        tooltip_text="Move up")
+        down = Gtk.Button(icon_name="go-down-symbolic", css_classes=["flat"],
+                          tooltip_text="Move down")
+        rm = Gtk.Button(icon_name="user-trash-symbolic",
+                        css_classes=["flat", "destructive-action"],
+                        tooltip_text="Remove this pattern")
+        ref = {"row": row, "up": up, "down": down}
+        up.connect("clicked", lambda *_: self._move_mic_prio(ref, -1))
+        down.connect("clicked", lambda *_: self._move_mic_prio(ref, 1))
+        rm.connect("clicked", lambda *_: self._remove_mic_prio(ref))
+        row.add_suffix(up)
+        row.add_suffix(down)
+        row.add_suffix(rm)
+        self._mic_prio_rows.append(ref)
+        self._rebuild_mic_prio()
+
+    def _move_mic_prio(self, ref: dict, delta: int) -> None:
+        i = self._mic_prio_rows.index(ref)
+        j = i + delta
+        if not 0 <= j < len(self._mic_prio_rows):
+            return  # already at the edge
+        self._mic_prio_rows[i], self._mic_prio_rows[j] = \
+            self._mic_prio_rows[j], self._mic_prio_rows[i]
+        self._rebuild_mic_prio()
+
+    def _rebuild_mic_prio(self) -> None:
+        # the same widgets are re-added, so entered text survives
+        for ref in list(self._mic_prio_rows):
+            self.mic_prio_group.remove(ref["row"])
+        self.mic_prio_group.remove(self._mic_prio_add_row)
+        self.mic_prio_group.add(self._mic_prio_add_row)
+        for ref in self._mic_prio_rows:
+            self.mic_prio_group.add(ref["row"])
+        last = len(self._mic_prio_rows) - 1
+        for i, ref in enumerate(self._mic_prio_rows):
+            ref["up"].set_sensitive(i > 0)
+            ref["down"].set_sensitive(i < last)
+
+    def _remove_mic_prio(self, ref: dict) -> None:
+        self.mic_prio_group.remove(ref["row"])
+        self._mic_prio_rows.remove(ref)
+        self._rebuild_mic_prio()
+        self._touch()
+
+    def _collect_mic_priority(self) -> list[str]:
+        return [r["row"].get_text().strip() for r in self._mic_prio_rows
+                if r["row"].get_text().strip()]
+
     # -- custom dictionary (upstream Custom Dictionary) ---------------------------
 
     def _load_dictionary(self, entries: list) -> None:
@@ -832,6 +899,19 @@ class SettingsWindow(Adw.PreferencesWindow):
         mic.add(self._switch("recording", "pause_media", "Pause media",
                              "Pause MPRIS players while dictating"))
         page.add(mic)
+
+        self.mic_prio_group = Adw.PreferencesGroup(
+            title="Microphone priority",
+            description="Ordered name patterns (e.g. bluez for a Bluetooth "
+                        "headset). When the chosen microphone disappears, "
+                        "the first available match is used.")
+        self._mic_prio_add_row = Adw.ActionRow(title="Add pattern")
+        add_p_btn = Gtk.Button(icon_name="list-add-symbolic",
+                               css_classes=["flat"])
+        add_p_btn.connect("clicked", lambda *_: self._add_mic_prio(""))
+        self._mic_prio_add_row.add_suffix(add_p_btn)
+        self.mic_prio_group.add(self._mic_prio_add_row)
+        page.add(self.mic_prio_group)
 
         preview = Adw.PreferencesGroup(
             title="Live preview",

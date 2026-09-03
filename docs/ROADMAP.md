@@ -57,8 +57,12 @@ sources. Everything below is a known, classified gap — see
 - [ ] Insertion hardening: paste-verification before clipboard restore,
       transient marks so clipboard managers ignore dictation, per-app paste
       quirks (terminals), AT-SPI insertion fallback.
-- [ ] Input-device monitoring / Bluetooth auto-switch (playerctl MPRIS media
-      pause too).
+- [x] Input-device monitoring / Bluetooth auto-switch — DONE: mic priority
+      list (`recording.mic_priority`) + a 3 s pactl source diff poll that
+      switches to the first priority match when the configured mic vanishes
+      (never mid-take; auto device untouched). The MPRIS media pause half
+      shipped earlier. Drag-to-reorder in the settings editor stays a
+      polish item (up/down buttons for now).
 - [ ] Custom-dictionary auto-learning from post-insertion corrections.
 - [x] Audio-history ZIP export; local usage stats — DONE: `fluidvoice
       history --export PATH.zip` (history + retained audio; audio outside the

@@ -37,6 +37,7 @@ DEFAULTS: dict[str, Any] = {
     "recording": {
         "command": "auto",  # auto | pw-record | parecord
         "device": "",  # optional PipeWire target / PulseAudio device
+        "mic_priority": [],  # ordered name patterns for auto mic switching
         "max_seconds": 300,
         "skip_silent": False,  # skip obviously-silent recordings <= 4s
         "first_pcm_timeout": 2.0,  # fail fast if the mic sends no audio (0 = off)
@@ -162,6 +163,15 @@ cancel_key = ""
 command = "auto"
 # Optional PipeWire node target (pw-record --target) / PulseAudio source.
 device = ""
+# Ordered microphone priority patterns — case-insensitive substrings of
+# the PulseAudio/PipeWire source name, first match wins, e.g.
+#   ["bluez", "usb-cam"]   # Bluetooth headset first, then a USB webcam
+# When the configured `device` above disappears, FluidVoice switches to
+# the first available match and notifies you. Switching never happens
+# mid-dictation: the take finishes on the still-open stream and the
+# fallback applies within a few seconds after it. With device = ""
+# ("auto") the system default is followed and never overridden.
+mic_priority = []
 max_seconds = 300
 # Skip recordings <= 4s that are pure silence
 skip_silent = false
@@ -260,7 +270,8 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
     "general": ["language", "copy_to_clipboard", "tray_enabled"],
     "hotkey": ["key", "modifiers", "mode", "cancel_key", "rewrite_key",
                 "command_key"],
-    "recording": ["command", "device", "max_seconds", "skip_silent",
+    "recording": ["command", "device", "mic_priority", "max_seconds",
+                  "skip_silent",
                   "first_pcm_timeout", "spoken_send_enabled", "spoken_send_phrase",
                   "spoken_send_key", "preview_enabled", "preview_mode",
                   "preview_interval", "preview_min_audio",
@@ -387,12 +398,13 @@ SETTING_BOOLS = {("general", "copy_to_clipboard"), ("general", "tray_enabled"),
                  ("model", "eager_warmup")}
 # list-valued pass-through keys the UI owns
 SETTING_LISTS = (("processing", "filler_words"), ("processing", "dictionary"),
-                 ("hotkey", "modifiers"))
+                 ("hotkey", "modifiers"), ("recording", "mic_priority"))
 ALLOWED_SETTINGS: dict[str, set] = {
     "general": {"language", "copy_to_clipboard", "tray_enabled"},
     "hotkey": {"key", "modifiers", "mode", "cancel_key", "rewrite_key",
                "command_key"},
-    "recording": {"command", "device", "max_seconds", "skip_silent",
+    "recording": {"command", "device", "mic_priority", "max_seconds",
+                  "skip_silent",
                   "first_pcm_timeout", "spoken_send_enabled",
                   "spoken_send_phrase", "spoken_send_key",
                   "preview_enabled", "preview_mode", "preview_interval",
@@ -447,6 +459,8 @@ def coerce_setting(section: str, key: str, value: Any) -> tuple[bool, Any]:
             return (True, num)
         except (TypeError, ValueError):
             return (False, value)
+    if (section, key) == ("recording", "mic_priority"):
+        return _coerce_mic_priority(value)
     if (section, key) in SETTING_LISTS:
         if not isinstance(value, list):
             return (False, value)
@@ -465,6 +479,31 @@ def coerce_setting(section: str, key: str, value: Any) -> tuple[bool, Any]:
                     return (False, value)
         return (True, value)
     return (False, value)  # unknown key -> reject
+
+
+def _coerce_mic_priority(value: Any) -> tuple[bool, Any]:
+    """recording.mic_priority: ordered case-insensitive source-name
+    substrings. Entries are stripped and empties dropped; >64-char entries
+    or >20 patterns reject the whole list; duplicates (case-insensitive)
+    keep the first occurrence."""
+    if not isinstance(value, list) \
+            or any(not isinstance(p, str) for p in value):
+        return (False, value)
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in value:
+        pattern = raw.strip()
+        if not pattern:
+            continue
+        if len(pattern) > 64:
+            return (False, value)
+        if pattern.lower() in seen:
+            continue
+        seen.add(pattern.lower())
+        cleaned.append(pattern)
+    if len(cleaned) > 20:
+        return (False, value)
+    return (True, cleaned)
 
 
 def _coerce_per_app_prompts(value: Any) -> tuple[bool, Any]:

@@ -75,7 +75,7 @@ new that Linux doesn't have" a one-command answer.
 | Today-usage stats | ✅ | History window header line, `fluidvoice status` `today:` line (local midnight) |
 | Adaptive light/dark theming | ✅ | native GTK window follows the system theme |
 | Auto-updates + beta channel | ⏳ | today: .deb / GitHub releases; AUR/nix on roadmap |
-| Mic priority list, Bluetooth auto-switch | ⏳ | roadmap: input-device monitoring |
+| Mic priority list, Bluetooth auto-switch | ✅ | pactl 3 s source poll + `recording.mic_priority` patterns (tray menu ordered, settings editor rows); drag-to-reorder later |
 | Speaker labeling (diarization) for file transcription | ⏳ | not started; timestamps/JSON export shipped via `transcribe --json`; diarization pending |
 | API keys in Keychain | ➖ | substitute: `FLUIDVOICE_API_KEY` env var + 0600 config.toml |
 | Opt-in telemetry | ➖ | intentionally none (privacy divergence, see STATUS.md) |
@@ -107,7 +107,7 @@ new that Linux doesn't have" a one-command answer.
 |---|---|---|
 | Custom-dictionary spoken formatting (insert new line/paragraph/tab/punctuation via trigger word) | ❓ | our dictionary does plain replacement only — triage |
 | Mic alerts not shown on routine startup + disable option | ⏳ | assumes macOS permission flow |
-| Fixes: 3.5mm external mics, Bluetooth route changes, clamshell mode | ⏳ | roadmap: input-device monitoring |
+| Fixes: 3.5mm external mics, Bluetooth route changes, clamshell mode | ✅ / ⏳ | Bluetooth route changes covered by source monitoring; 3.5mm/clamshell ⏳ |
 | Speaker-labeled transcription drops no trailing audio | ⏳ | with diarization |
 
 ### v1.6.8 (2026-08-11)
@@ -115,7 +115,7 @@ new that Linux doesn't have" a one-command answer.
 | Upstream change | Linux | Notes |
 |---|---|---|
 | Offline speaker labeling (timestamps, speaker-aware history, text/JSON export) | ⏳ | candidate feature; pyannote-class models exist on Linux |
-| Microphone priority list, drag-to-reorder, device history | ⏳ | roadmap: input-device monitoring |
+| Microphone priority list, drag-to-reorder, device history | ✅ / ⏳ | priority list + auto-switch shipped (up/down reorder buttons); drag-to-reorder and device history remain ⏳ |
 | Fix: modifier-only shortcuts firing after Shift combos | ❓ | we handle lock-mask variants; verify shift-combos |
 | Fix: temperature ignored for some OpenAI-compatible models | ✅ | our client always sends temperature (audit-verified) |
 

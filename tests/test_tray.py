@@ -126,6 +126,35 @@ class TestMenuModel:
         d._set_device("")
         assert d.recorder.device == ""
 
+    def test_menu_orders_mics_by_priority(self, monkeypatch):
+        import copy
+
+        import fluidvoice.tray as tray_mod
+        import fluidvoice.daemon as dm
+        from fluidvoice.config import DEFAULTS
+        from tests.test_daemon import StubRecorder
+
+        BLUEZ = "bluez_source.00_11_22_33_44_55.headset-mono"
+        USBCAM = "alsa_input.usb-Cam.mono-fallback"
+        PCI = "alsa_input.pci.analog-stereo"
+        monkeypatch.setattr(tray_mod, "list_microphones", lambda: [
+            {"name": PCI, "description": "Built-in Analog"},
+            {"name": BLUEZ, "description": "BT Headset"},
+            {"name": USBCAM, "description": "USB Cam Mono"}])
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["recording"]["device"] = BLUEZ
+        cfg["recording"]["mic_priority"] = ["bluez", "usb-cam"]
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: None,
+                      use_hotkey=False, use_sounds=False)
+        mic = next(i for i in d._build_tray_menu()
+                   if i.get("label") == "Microphone")
+        assert [c["label"] for c in mic["children"]] == \
+            ["Auto (system default)", "BT Headset", "USB Cam Mono",
+             "Built-in Analog"]
+        checked = [c for c in mic["children"] if c.get("checked")]
+        assert [c["label"] for c in checked] == ["BT Headset"]
+
 
 class TestFallback:
     def test_start_fails_cleanly_without_dbus(self, monkeypatch):

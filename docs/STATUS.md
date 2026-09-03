@@ -1,6 +1,6 @@
 # FluidVoiceLinux — Status Ledger
 
-Last updated: 2026-09-03 · v0.1.0 · **467 automated tests** (439 offline + 28 integration)
+Last updated: 2026-09-03 · v0.1.0 · **537 automated tests** (509 offline + 28 integration)
 · verified against upstream `altic-dev/FluidVoice` by a 5-agent audit
 (prompts/AI, punctuation rules, daemon pipeline, models, security).
 
@@ -45,6 +45,18 @@ matrix + upstream changelog with its refresh loop).
   ("literal send it" escape honored); configurable phrase/key-combo.
 - **GAAV mode**: optional lowercase-first + trailing-period strip for
   search-box/casual dictation.
+- **Mic priority list + input-device monitoring** (`recording.mic_priority`):
+  a 3 s `pactl list short sources` diff poll notices connects/disconnects;
+  when the configured microphone disappears and a priority pattern matches
+  (case-insensitive substring, first pattern wins — e.g. `bluez` for a
+  Bluetooth headset), FluidVoice switches and notifies. Switching never
+  happens mid-dictation (the take finishes on the still-open stream, the
+  fallback lands ≤ 3 s after it), `device = ""` (auto) is never overridden,
+  and a working device is never preemptively upgraded. Same reselect runs
+  once at daemon start (restart while the mic is disconnected → fallback
+  instead of a first_pcm_timeout failure). The tray Microphone submenu is
+  ordered by the same priority list; the Settings → Dictation page edits it
+  (add/move/remove rows).
 
 ### Text processing (upstream-faithful, audit-verified)
 - Filler removal — upstream split/trim semantics, default word list identical.
@@ -153,7 +165,11 @@ matrix + upstream changelog with its refresh loop).
 - [ ] Slash-command/mention literal formatting + terminal autocomplete spacing.
 - [ ] Insertion hardening: paste verification, transient clipboard marks,
       per-app paste quirks, AT-SPI fallback.
-- [ ] Input-device monitoring / Bluetooth auto-switch; MPRIS media pause.
+- [x] Input-device monitoring / Bluetooth auto-switch — DONE: mic priority
+      list (`recording.mic_priority`, tray + settings editor) + pactl source
+      monitoring (3 s diff poll) with vanished-device auto-switch (bluez
+      pattern example in README); never mid-take, auto never overridden.
+      MPRIS media pause shipped earlier.
 - [ ] Dictionary auto-learning; updater; local OpenAI-style HTTP API;
       packaging (AUR/nix/deb/pipx).
 
@@ -173,6 +189,7 @@ matrix + upstream changelog with its refresh loop).
 | Daemon state machine & pipeline | stub-based tests (toggle/cancel/busy/watchdogs/races) |
 | Command mode (JSON protocol, agent loop, run_shell, daemon confirm/cancel/timeout) | stub-AIClient unit + integration-style daemon tests (pill overlay, Escape, history file) |
 | Socket config actions (get/set-config, select-model) + apply_settings | unit (fake backend factory) + real-daemon socket integration |
+| Mic monitoring (pactl poll/diff/priority matching, daemon auto-switch, tray ordering) | unit (fake pactl runner, stub recorder daemon) |
 | Recorder / insertion / history / backends | stub or subprocess-mock tests |
 | End-to-end speech | JFK sample through GPU transcription (pytest `-m slow`) |
 | Live hardware loop | mic→GPU transcription via speaker playback; hotkey grab on X11; acoustic JFK transcription verified verbatim |

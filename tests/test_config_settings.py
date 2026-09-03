@@ -12,8 +12,9 @@ import os
 
 import pytest
 
-from fluidvoice.config import (DEFAULTS, RESTART_REQUIRED, apply_settings,
-                               load_config, save_config)
+from fluidvoice.config import (DEFAULTS, RESTART_REQUIRED, TEMPLATE,
+                               apply_settings, coerce_setting, load_config,
+                               save_config)
 
 
 class TestSaveConfig:
@@ -148,6 +149,58 @@ class TestApplySettings:
     def test_restart_required_is_only_model_warmup_now(self):
         # the [server] section retired with the web UI
         assert RESTART_REQUIRED == {"model.eager_warmup"}
+
+
+class TestMicPriority:
+    """recording.mic_priority: ordered patterns for auto mic switching."""
+
+    def test_defaults_and_template_documented(self):
+        assert DEFAULTS["recording"]["mic_priority"] == []
+        assert "mic_priority" in TEMPLATE  # cheap doc-guard
+
+    def test_clean_strips_empties_and_keeps_order(self):
+        ok, cleaned = coerce_setting(
+            "recording", "mic_priority", [" bluez ", "", "USB-Cam"])
+        assert ok is True and cleaned == ["bluez", "USB-Cam"]
+
+    def test_dedupes_case_insensitively_first_wins(self):
+        ok, cleaned = coerce_setting(
+            "recording", "mic_priority", ["BlueZ", "bluez", " BLUEZ "])
+        assert ok is True and cleaned == ["BlueZ"]
+
+    @pytest.mark.parametrize("bad", [
+        "bluez",            # not a list
+        [42],                # non-str entry
+        ["x" * 65],          # single entry over 64 chars
+        [f"p{i}" for i in range(21)],  # 21 entries (max 20)
+    ])
+    def test_rejects_bad_values(self, bad):
+        ok, out = coerce_setting("recording", "mic_priority", bad)
+        assert ok is False and out == bad
+
+    def test_twenty_entries_accepted(self):
+        ok, cleaned = coerce_setting(
+            "recording", "mic_priority", [f"p{i}" for i in range(20)])
+        assert ok is True and len(cleaned) == 20
+
+    def test_empty_list_is_valid(self):
+        ok, cleaned = coerce_setting("recording", "mic_priority", [])
+        assert ok is True and cleaned == []
+
+    def test_apply_settings_applies_and_reports(self, cfg):
+        changed, rejected = apply_settings(
+            cfg, {"recording": {"mic_priority": ["bluez"]}})
+        assert rejected == [] and "recording.mic_priority" in changed
+        assert cfg["recording"]["mic_priority"] == ["bluez"]
+
+    def test_save_whitelist_roundtrip(self, tmp_path, monkeypatch):
+        from fluidvoice import paths as p
+        monkeypatch.setattr(p, "config_file", lambda: tmp_path / "c.toml")
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["recording"]["mic_priority"] = ["bluez", "usb-cam"]
+        save_config(cfg)
+        loaded = load_config(tmp_path / "c.toml")
+        assert loaded["recording"]["mic_priority"] == ["bluez", "usb-cam"]
 
 
 class TestCommandSettings:

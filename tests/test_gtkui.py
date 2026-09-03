@@ -53,6 +53,7 @@ class StubClient(Client):
         cfg["processing"]["dictionary"] = [
             {"triggers": ["miro board"], "replacement": "Miro board"}]
         cfg["processing"]["filler_words"] = ["um", "uh", "eh"]
+        cfg["recording"]["mic_priority"] = ["bluez", "usb-cam"]
         cfg["general"]["language"] = "sl"
         return cfg, True
 
@@ -330,6 +331,34 @@ class TestSettingsWindow:
                 "replacement": "Miro board"} not in remaining
         assert remaining == [{"triggers": ["k8s"],
                               "replacement": "Kubernetes"}]
+        w.close()
+
+    def test_mic_priority_editor(self, loop):
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        c = StubClient()
+        w = SettingsWindow(client=c)
+        w.present()
+        pump(loop)
+        assert len(w._mic_prio_rows) == 2  # loaded from cfg
+        assert w._collect()["recording"]["mic_priority"] == \
+            ["bluez", "usb-cam"]
+        w._add_mic_prio("")
+        w._mic_prio_rows[2]["row"].set_text("pci")
+        assert w._collect()["recording"]["mic_priority"] == \
+            ["bluez", "usb-cam", "pci"]
+        assert w._dirty is True
+        w._move_mic_prio(w._mic_prio_rows[2], -1)
+        assert w._collect()["recording"]["mic_priority"] == \
+            ["bluez", "pci", "usb-cam"]
+        w._move_mic_prio(w._mic_prio_rows[0], -1)  # edge: ignored
+        assert w._collect()["recording"]["mic_priority"] == \
+            ["bluez", "pci", "usb-cam"]
+        w._remove_mic_prio(w._mic_prio_rows[1])
+        assert w._collect()["recording"]["mic_priority"] == \
+            ["bluez", "usb-cam"]
+        w.save()
+        assert c.saved[-1]["recording"]["mic_priority"] == \
+            ["bluez", "usb-cam"]
         w.close()
 
     def test_unknown_language_stays_selectable(self, loop):
