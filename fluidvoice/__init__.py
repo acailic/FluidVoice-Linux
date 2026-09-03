@@ -5,4 +5,4 @@ global-hotkey dictation -> local speech-to-text -> optional AI polish ->
 text inserted into the focused app. GPLv3.
 """
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
