@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import time
@@ -74,8 +75,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "daemon":
         from .daemon import Daemon
         cfg = load_config(args.config)
-        Daemon(cfg, use_hotkey=not args.no_hotkey,
-               use_sounds=not args.no_sounds).run()
+        lock = _acquire_daemon_lock()
+        if lock is None:
+            print("fluidvoice daemon is already running - second instance "
+                  "exiting", file=sys.stderr)
+            return 0
+        try:
+            Daemon(cfg, use_hotkey=not args.no_hotkey,
+                   use_sounds=not args.no_sounds).run()
+        finally:
+            lock.close()
+            _DAEMON_LOCK_FILE.unlink(missing_ok=True)
         return 0
 
     if args.cmd in ("toggle", "cancel", "status", "paste-last"):
@@ -192,6 +202,30 @@ def main(argv: list[str] | None = None) -> int:
         return doctor_mod.run()
 
     return 0
+
+
+_DAEMON_LOCK_FILE = None
+
+
+def _acquire_daemon_lock():
+    """Singleton guard: the deb starts the daemon via XDG autostart AND a
+    systemd unit - at login both fire. First instance holds an flock on
+    ~/.config/fluidvoice/daemon.lock; the second exits immediately."""
+    import fcntl
+    from .paths import config_dir
+    global _DAEMON_LOCK_FILE
+    path = config_dir() / "daemon.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return None
+    fh.write(str(os.getpid()))
+    fh.flush()
+    _DAEMON_LOCK_FILE = path
+    return fh
 
 
 def _describe(resp: dict) -> str:
