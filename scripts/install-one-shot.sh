@@ -50,6 +50,8 @@ else
     TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
     DEB="$TMP/$(basename "$URL")"
     curl -fL --progress-bar -o "$DEB" "$URL"
+    # let apt's sandboxed _apt user read the package (mktemp dir is 0700)
+    chmod 755 "$TMP"; chmod 644 "$DEB"
     # sanity: a real package is tens of MB; an error page is a few KB
     SIZE="$(stat -c%s "$DEB")"
     [ "$SIZE" -gt 10000000 ] || die "downloaded file looks wrong (${SIZE} bytes) - not installing it"
@@ -66,6 +68,8 @@ else
 
   FluidVoice installed! One more thing: log out and back in once so the
   daemon autostarts and the launcher entry appears.
+  (Upgrading an already-running install? No logout needed, just:
+    systemctl --user restart fluidvoice.service)
 
   Then:
     - press Right Ctrl, speak, press Right Ctrl again -> text is typed
