@@ -150,14 +150,63 @@ def _roll_back(run, path: str, before: dict[str, str], after: dict[str, str]) ->
         return "REVERTED-BY-AGENT (uncommitted work lost, cannot restore)" \
             if path not in after else "left as-is (was already modified)"
     if after.get(path) == "untracked":
-        try:
-            (Path(run.repo_root) / path).unlink()
-            return "deleted"
-        except OSError as error:
-            return f"could not delete ({error})"
+        # An untracked file has no git object behind it: unlinking it is not a
+        # rollback, it is destruction of the only copy. Name it and stop.
+        return "left in place (untracked — remove manually if unwanted)"
     result = subprocess.run(["git", "checkout", "--", path],
                             cwd=run.repo_root, capture_output=True, text=True)
     return "rolled back" if result.returncode == 0 else "could not roll back"
+
+
+# Bash tokens that turn a command naming a path into a write to it. Reads,
+# ls, grep, and `git diff` name paths too — a mention alone is not a write.
+_BASH_WRITE_TOKENS = (">", ">>", "tee ", "cp ", "mv ", "rm ", "rmdir ", "touch ",
+                      "sed -i", "git checkout", "git restore", "git stash",
+                      "git clean", "pip install", "pip uninstall", "unzip",
+                      "tar ", "chmod ", "chown ", "truncate ", "dd ")
+
+
+def _agent_wrote(run, agent: AgentConfig, path: str) -> bool:
+    """Did the agent's own recorded tool calls WRITE this path?
+
+    pi streams every tool call into raw_output.jsonl as it happens. A path is
+    attributed to the agent only when a write-shaped call names it: a
+    write/edit tool call carrying the path in its arguments, or a bash
+    command containing both the path and a write-ish token. Anything else —
+    a read, an ls, a grep hit — is not authorship.
+
+    This exists because the working tree is shared with the engineer (and,
+    on this repo, with concurrent runs): the snapshot diff alone cannot say
+    WHO changed a path, and blaming the agent for a path it only looked at
+    has rolled back and destroyed work that was never the agent's — twice.
+    No record at all means the agent produced no tool calls, so it cannot
+    have written anything either.
+    """
+    raw = run.session_dir / agent.name / "raw_output.jsonl"
+    if not raw.exists():
+        return False
+    import json
+    try:
+        lines = raw.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        if path not in line:
+            continue  # cheap pre-filter before parsing
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "tool_execution_start":
+            continue
+        tool = event.get("toolName") or ""
+        args = str(event.get("args") or "")
+        if tool in ("write", "edit", "multiedit") and path in args:
+            return True
+        if tool == "bash" and path in args \
+                and any(token in args for token in _BASH_WRITE_TOKENS):
+            return True
+    return False
 
 
 def enforce(run, phase, agent: AgentConfig, before: dict[str, str]) -> list[str]:
@@ -166,15 +215,25 @@ def enforce(run, phase, agent: AgentConfig, before: dict[str, str]) -> list[str]
     Returns the paths it legitimately changed, so the trace records what an
     agent actually touched rather than only what it claimed in its envelope.
 
-    Detection alone would leave the repo holding the unauthorized change while
-    reporting a failure, so anything the agent introduced outside its allowlist
-    is rolled back before the phase dies. What it cannot undo, it names.
+    A changed path is only treated as the agent's doing when the agent's own
+    tool-call record shows a write to it. Anything else changed under us —
+    the engineer editing mid-phase, or a second run sharing the tree — is
+    another lane's business: it is never rolled back and never fails this
+    phase. When the tree is shared, attribution by authorship beats
+    attribution by timing.
+
+    For paths the agent did write outside its allowlist: tracked content is
+    restored with git checkout (reconstructible); untracked content is LEFT
+    IN PLACE and named in the error, because deleting an unreconstructible
+    file to "undo" its creation destroys work precisely the way this module
+    exists to prevent. The phase still fails either way.
     """
     after = snapshot(run)
     touched = changed_paths(before, after)
-    breaches = [p for p in touched if not permitted(p, agent, run.cfg)]
+    breaches = [p for p in touched
+                if not permitted(p, agent, run.cfg) and _agent_wrote(run, agent, p)]
     if not breaches:
-        return touched
+        return [p for p in touched if permitted(p, agent, run.cfg)]
 
     outcomes = {p: _roll_back(run, p, before, after) for p in breaches}
     scope = ("read-only" if agent.writes == []
