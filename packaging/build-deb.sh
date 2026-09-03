@@ -53,8 +53,11 @@ install -Dm644 packaging/fluidvoice-linux.desktop \
     "$STAGE/usr/share/applications/fluidvoice-linux.desktop"
 install -Dm644 packaging/autostart.desktop \
     "$STAGE/etc/xdg/autostart/fluidvoice-linux.desktop"
-install -Dm644 packaging/icon.svg \
-    "$STAGE/usr/share/icons/hicolor/scalable/apps/fluidvoice-linux.svg"
+# hicolor PNG sizes rendered from the macOS app icon (exact brand asset)
+for png in packaging/icons/hicolor/*x*/apps/fluidvoice-linux.png; do
+    install -Dm644 "$png" \
+        "$STAGE/usr/share/icons/hicolor/${png#packaging/icons/hicolor/}"
+done
 
 # 4. systemd user unit (optional alternative to XDG autostart) -------------
 mkdir -p "$STAGE/usr/lib/systemd/user"

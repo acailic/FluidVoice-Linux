@@ -71,8 +71,8 @@ new that Linux doesn't have" a one-command answer.
 | Per-app prompt sets | ⏳ v0.2 | frontmost-app hint already captured |
 | Smart typing via accessibility APIs | ✅ / 🚧 | xdotool on X11 ✅; Wayland insertion 🚧 v0.3 (ydotool/wtype); AT-SPI fallback ⏳ |
 | Menu bar + notch overlay | ✅ (equivalent) | tray/panel icon via StatusNotifierItem (`tray.py`): click = toggle, right-click = settings, recording badge, tooltip w/ hotkey; notch ➖ N/A |
-| Audio history (budget, retention) | ✅ | history JSONL + GB budget; searchable History page w/ inline replay, delete, clear; ZIP export ⏳ |
-| Today-usage stats | ⏳ | not started |
+| Audio history (budget, retention) | ✅ | history JSONL + GB budget; searchable History page w/ inline replay, delete, clear; ZIP export ✅ (history + retained audio) |
+| Today-usage stats | ✅ | History window header line, `fluidvoice status` `today:` line (local midnight) |
 | Adaptive light/dark theming | ✅ | native GTK window follows the system theme |
 | Auto-updates + beta channel | ⏳ | today: .deb / GitHub releases; AUR/nix on roadmap |
 | Mic priority list, Bluetooth auto-switch | ⏳ | roadmap: input-device monitoring |

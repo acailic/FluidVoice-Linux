@@ -35,7 +35,8 @@ fluidvoice = "fluidvoice.cli:main"
 include = ["fluidvoice*"]
 
 [tool.setuptools.package-data]
-"fluidvoice" = ["assets/sfx/*", "assets/icon.png"]
+"fluidvoice" = ["assets/sfx/*", "assets/icon.png",
+                "assets/icons/*", "assets/providers/*"]
 
 [tool.pytest.ini_options]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')", "integration: real-subsystem tests (mic, GPU, daemon process, network)", "desktop: live-interactive-session tests (X grabs, screen pixels) - excluded from default runs"]

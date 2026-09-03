@@ -133,3 +133,12 @@ class Client:
 
     def history_audio(self, ts: float) -> Any:
         return history_mod.audio_path_for(ts)
+
+    def today_stats(self) -> dict:
+        return history_mod.today_stats(history_mod.read_all())
+
+    def export_zip(self, path) -> tuple[int, list[str]]:
+        """(entries exported, notes about skipped/refused audio)."""
+        notes: list[str] = []
+        n = history_mod.export_zip(path, on_note=notes.append)
+        return n, notes

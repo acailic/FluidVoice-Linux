@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
 import struct
 import threading
@@ -693,6 +694,21 @@ class TestSocketConfigActions:
         resp = d.handle_request({"action": "status"})
         assert "warmup" in resp and resp["warmup"]["running"] is False
         assert "active_model" in resp
+
+    def test_status_includes_today(self, cfg, quiet_ui, tmp_path, monkeypatch):
+        h = tmp_path / "today.jsonl"
+        h.write_text(
+            json.dumps({"ts": time.time(), "text": "now",
+                        "duration_s": 2.0}) + "\n"
+            + json.dumps({"ts": time.time() - 86400, "text": "old",
+                          "duration_s": 5.0}) + "\n", encoding="utf-8")
+        monkeypatch.setattr(dm.history_mod.paths, "history_file", lambda: h)
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: None,
+                      use_hotkey=False, use_sounds=False)
+        d.backend = StubBackend("x")
+        resp = d.handle_request({"action": "status"})
+        assert resp["today"] == {"dictations": 1, "seconds": 2.0, "words": 1}
 
     def test_mics_action(self, cfg, quiet_ui, monkeypatch):
         # daemon imports list_microphones inside the handler, so patch the source

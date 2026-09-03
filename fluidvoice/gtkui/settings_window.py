@@ -102,6 +102,8 @@ class SettingsWindow(Adw.PreferencesWindow):
 
         self.install_action("settings.save", None,
                             lambda w, _n, _p: w.save())
+        Adw.StyleManager.get_default().connect(
+            "notify::dark", lambda *_: self._update_provider_logo())
         ctrl = Gtk.ShortcutController()
         ctrl.add_shortcut(Gtk.Shortcut(
             trigger=Gtk.ShortcutTrigger.parse_string("<primary>s"),
@@ -245,6 +247,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._loading = False
         self._sync_save_rows()
         self._refresh_models()
+        self._update_provider_logo()
 
     _loading_first_done = False
 
@@ -474,7 +477,13 @@ class SettingsWindow(Adw.PreferencesWindow):
             description="Any OpenAI-compatible endpoint — Ollama, LM Studio, "
                         "OpenAI, Groq…")
         grp.add(self._switch("ai", "enabled", "Enabled"))
-        grp.add(self._entry("ai", "base_url", "Base URL — http://localhost:11434/v1"))
+        url_row = self._entry("ai", "base_url",
+                              "Base URL — http://localhost:11434/v1")
+        self.provider_img = Gtk.Image(pixel_size=18)
+        self.provider_img.set_valign(Gtk.Align.CENTER)
+        url_row.add_prefix(self.provider_img)
+        url_row.connect("changed", lambda *_: self._update_provider_logo())
+        grp.add(url_row)
         grp.add(self._entry("ai", "model", "Model — e.g. qwen3:8b"))
         grp.add(self._entry("ai", "api_key_env", "API key env var (preferred)"))
         grp.add(self._spin("ai", "temperature", "Temperature", 0.0, 2.0, 0.1,
@@ -516,6 +525,23 @@ class SettingsWindow(Adw.PreferencesWindow):
         page.add(cmd)
         page.add(self._save_group())
         self.add(page)
+
+    def _update_provider_logo(self) -> None:
+        """Show the macOS-style provider logo matching the AI base URL."""
+        from .logos import logo_path, provider_for
+        row = self._rows.get(("ai", "base_url"))
+        text = row.get_text() if row is not None else ""
+        dark = Adw.StyleManager.get_default().get_dark()
+        path = logo_path(provider_for(text), dark)
+        if path:
+            try:
+                self.provider_img.set_from_paintable(
+                    Gdk.Texture.new_from_filename(path))
+                self.provider_img.set_visible(True)
+                return
+            except Exception:
+                pass
+        self.provider_img.set_visible(False)
 
     def _test_ai(self, _btn) -> None:
         self.test_out.set_text("testing…")
@@ -872,7 +898,7 @@ class SettingsWindow(Adw.PreferencesWindow):
     def _show_about_dialog(self, *_args) -> None:
         dlg = Adw.AboutDialog(
             application_name="FluidVoice Linux",
-            application_icon="audio-input-microphone",
+            application_icon="fluidvoice-linux",
             version=APP_VERSION,
             website="https://github.com/acailic/FluidVoice-Linux",
             issue_url="https://github.com/acailic/FluidVoice-Linux/issues",

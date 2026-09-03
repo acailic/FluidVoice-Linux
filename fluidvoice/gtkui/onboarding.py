@@ -28,7 +28,7 @@ class OnboardingWindow(Adw.ApplicationWindow):
             description="A one-pass setup, same as on the Mac: check your mic, "
                         "the engine, then try a real dictation. Nothing gets "
                         "typed into your apps.",
-            icon_name="audio-input-microphone-symbolic", vexpand=True)
+            icon_name="fluidvoice-linux", vexpand=True)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
                       margin_start=24, margin_end=24, margin_bottom=18)
         page.set_child(box)

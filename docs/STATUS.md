@@ -142,8 +142,8 @@ matrix + upstream changelog with its refresh loop).
 - [ ] Insertion hardening: paste verification, transient clipboard marks,
       per-app paste quirks, AT-SPI fallback.
 - [ ] Input-device monitoring / Bluetooth auto-switch; MPRIS media pause.
-- [ ] Dictionary auto-learning; audio ZIP export; usage stats;
-      updater; local OpenAI-style HTTP API; packaging (AUR/nix/deb/pipx).
+- [ ] Dictionary auto-learning; updater; local OpenAI-style HTTP API;
+      packaging (AUR/nix/deb/pipx).
 
 ### Non-goals
 - Cohere Transcribe (CoreML-only artifacts, no Linux runtime).

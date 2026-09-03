@@ -9,9 +9,33 @@ from __future__ import annotations
 import sys
 
 APP_ID = "dev.fluidvoicelinux.FluidVoice"
+APP_ICON_NAME = "fluidvoice-linux"
 
 GTK_HINT = ("GTK 4 / libadwaita not available - install with:\n"
             "  apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1")
+
+
+def _register_bundled_icons() -> None:
+    """Make the bundled `fluidvoice-linux` icon resolvable by icon name.
+
+    The deb installs it into hicolor; for git/pip runs we point the icon
+    theme at assets/icons so About/onboarding/window icons work everywhere.
+    """
+    try:
+        from importlib import resources
+
+        import gi
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Gdk", "4.0")
+        from gi.repository import Gdk, Gtk
+
+        base = resources.files("fluidvoice.assets")
+        with resources.as_file(base.joinpath("icons")) as path:
+            theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+            if theme is not None:
+                theme.add_search_path(str(path))
+    except Exception:
+        pass  # icon-name lookups degrade to theme fallbacks
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -51,6 +75,9 @@ def run(argv: list[str] | None = None) -> int:
             return 0
 
         def do_activate(self) -> None:  # noqa: N802
+            from gi.repository import Gtk  # versions pinned in run()
+            _register_bundled_icons()
+            Gtk.Window.set_default_icon_name(APP_ICON_NAME)
             if self._onboard:
                 self.show_onboarding()
             elif self._open == "settings":

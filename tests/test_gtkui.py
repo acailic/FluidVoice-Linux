@@ -81,6 +81,13 @@ class StubClient(Client):
         self.entries = []
         return n
 
+    def today_stats(self):
+        return {"dictations": 2, "seconds": 6.5, "words": 9}
+
+    def export_zip(self, path):
+        self.exported_to = path
+        return len(self.entries), ["skipped missing audio: x.wav"]
+
     def test_dictation(self, seconds=3.0):
         return {"ok": True, "text": "hello world", "duration_s": 3.0}
 
@@ -129,6 +136,91 @@ class TestHistoryWindow:
         assert w.state_lbl.get_text() == "recording"
         w._apply_status(None)
         assert w.down_banner.get_revealed() is True
+        w.close()
+
+    def test_today_line_renders(self, loop):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        w = HistoryWindow(client=StubClient(ENTRIES))
+        w.present()
+        pump(loop)
+        assert w.today_lbl.get_text() == "today: 2 dictations, 0:06 minutes, 9 words"
+        w._load_history()  # refresh path updates it too
+        assert w.today_lbl.get_text() == "today: 2 dictations, 0:06 minutes, 9 words"
+        w.close()
+
+    def test_today_line_survives_client_error(self, loop):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        c = StubClient(ENTRIES)
+
+        def boom():
+            raise RuntimeError("unreadable")
+
+        c.today_stats = boom
+        w = HistoryWindow(client=c)
+        w.present()
+        pump(loop)
+        assert w.today_lbl.get_text() == ""  # unset, not a crash
+        w.close()
+
+    def test_export_action_registered(self, loop, monkeypatch):
+        from fluidvoice.gtkui import main_window as mw
+        installed = {}
+
+        def spy(self, name, param, handler):
+            installed[name] = handler  # record; no need to install here
+
+        monkeypatch.setattr(mw.HistoryWindow, "install_action", spy)
+        w = mw.HistoryWindow(client=StubClient(ENTRIES))
+        w.present()
+        pump(loop)
+        # GTK 4.14 offers no lookup for widget-installed actions, so the
+        # registration is verified through the install call itself
+        assert callable(installed.get("hist.export"))
+        assert installed["hist.export"] == w._on_export
+        assert w._exporting is False
+        # user-visible wiring: the menu offers Export… -> win.hist.export
+        assert w.menu_model.get_n_items() == 2
+        s = GLib.VariantType.new("s")
+        label = w.menu_model.get_item_attribute_value(0, "label", s).get_string()
+        action = w.menu_model.get_item_attribute_value(0, "action", s).get_string()
+        assert label == "Export…" and action == "win.hist.export"
+        w.close()
+
+    def test_export_smoke(self, loop, tmp_path):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        c = StubClient(ENTRIES)
+        w = HistoryWindow(client=c)
+        w.present()
+        pump(loop)
+        enabled: list[tuple[str, bool]] = []
+        w.action_set_enabled = lambda name, on: enabled.append((name, on))
+        target = tmp_path / "h.zip"
+        w._export_to(str(target))
+        assert w._exporting is True  # busy until the idle callback runs
+        assert enabled == [("hist.export", False)]
+        pump(loop)  # run the idle callback
+        assert c.exported_to == str(target)
+        assert w._exporting is False
+        assert enabled == [("hist.export", False), ("hist.export", True)]
+        w.close()
+
+    def test_export_failure_toasts_and_reenables(self, loop, tmp_path):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        c = StubClient(ENTRIES)
+
+        def broken(path):
+            raise OSError("no space")
+
+        c.export_zip = broken
+        w = HistoryWindow(client=c)
+        w.present()
+        pump(loop)
+        enabled: list[tuple[str, bool]] = []
+        w.action_set_enabled = lambda name, on: enabled.append((name, on))
+        w._export_to(str(tmp_path / "h.zip"))
+        pump(loop)
+        assert w._exporting is False  # released even on failure
+        assert enabled[-1] == ("hist.export", True)
         w.close()
 
 

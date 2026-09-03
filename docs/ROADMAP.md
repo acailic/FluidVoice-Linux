@@ -55,7 +55,10 @@ sources. Everything below is a known, classified gap — see
 - [ ] Input-device monitoring / Bluetooth auto-switch (playerctl MPRIS media
       pause too).
 - [ ] Custom-dictionary auto-learning from post-insertion corrections.
-- [ ] Audio-history ZIP export; local usage stats.
+- [x] Audio-history ZIP export; local usage stats — DONE: `fluidvoice
+      history --export PATH.zip` (history + retained audio; audio outside the
+      audio dir refused, missing skipped), History-window Export… menu item,
+      today line in the window header + `fluidvoice status` (local midnight).
 - [ ] Auto-updater (or packaged releases); onboarding.
 - [x] Settings UI — done as a native GTK 4 + libadwaita app
       (`fluidvoice app`; History/Settings/onboarding windows over the

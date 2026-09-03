@@ -104,6 +104,54 @@ class TestCliHistory:
         assert "[AI]: hello" in out
         assert "world" in out and "[AI]" not in out.split("world")[0].split("\n")[-1]
 
+    def test_history_export(self, tmp_path, monkeypatch, capsys):
+        from fluidvoice import history
+        seen = {}
+
+        def fake_export(path, on_note=None):
+            seen["path"] = path
+            if on_note:
+                on_note("skipped missing audio: x.wav")
+            return 3
+
+        monkeypatch.setattr(history, "export_zip", fake_export)
+        target = tmp_path / "t.zip"
+        assert cli.main(["history", "--export", str(target)]) == 0
+        assert seen["path"] == target
+        out = capsys.readouterr()
+        assert "exported 3 entries" in out.out
+        assert "skipped missing audio" in out.err  # notes go to stderr
+
+    def test_history_export_oserror_fails(self, tmp_path, monkeypatch, capsys):
+        from fluidvoice import history
+
+        def broken(path, on_note=None):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(history, "export_zip", broken)
+        assert cli.main(["history", "--export", str(tmp_path / "t.zip")]) == 1
+        err = capsys.readouterr().err
+        assert "error: disk full" in err
+
+    def test_status_prints_today(self, monkeypatch, capsys):
+        from fluidvoice import control
+        monkeypatch.setattr(
+            control, "request",
+            lambda action, **kw: {"ok": True, "recording": False,
+                                  "today": {"dictations": 2, "seconds": 75.0,
+                                            "words": 6}})
+        assert cli.main(["status"]) == 0
+        out = capsys.readouterr().out
+        assert "stopped" in out
+        assert "today: 2 dictations, 1:15 minutes, 6 words" in out
+
+    def test_toggle_without_today_unchanged(self, monkeypatch, capsys):
+        from fluidvoice import control
+        monkeypatch.setattr(control, "request",
+                            lambda action, **kw: {"ok": True, "recording": False})
+        assert cli.main(["toggle"]) == 0
+        assert capsys.readouterr().out.strip() == "stopped"
+
     def test_no_args_prints_help(self, capsys):
         assert cli.main([]) == 0
         assert "daemon" in capsys.readouterr().out

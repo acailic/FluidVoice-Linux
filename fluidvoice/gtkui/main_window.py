@@ -7,11 +7,13 @@ status/toggle need the daemon and degrade to a banner when it is down.
 from __future__ import annotations
 
 import subprocess
+import time
 from datetime import datetime
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from .. import history as history_mod
+from ..history import format_today
 from .client import Client
 
 
@@ -24,7 +26,7 @@ class AudioReplayer(Gtk.Box):
         self.path = path
         self.media = None
         self._tick = 0
-        self.play_btn = Gtk.ToggleButton(icon_name="media-playback-start")
+        self.play_btn = Gtk.ToggleButton(icon_name="media-playback-start-symbolic")
         self.play_btn.connect("toggled", self._on_toggle)
         self.pos = Gtk.Label(label="0:00", css_classes=["dim-label"])
         self.append(self.play_btn)
@@ -45,7 +47,8 @@ class AudioReplayer(Gtk.Box):
         self.media = None
         self.play_btn.set_visible(False)
         self.pos.set_visible(False)
-        btn = Gtk.Button(label="Open audio", css_classes=["flat"])
+        btn = Gtk.Button(label="Open audio", icon_name="folder-open-symbolic",
+                         css_classes=["flat"])
         btn.connect("clicked", lambda *_: subprocess.Popen(
             ["xdg-open", str(self.path)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
@@ -66,7 +69,8 @@ class AudioReplayer(Gtk.Box):
         if self.play_btn.get_active() != playing:
             self.play_btn.set_active(playing)
         self.play_btn.set_icon_name(
-            "media-playback-pause" if playing else "media-playback-start")
+            "media-playback-pause-symbolic" if playing
+            else "media-playback-start-symbolic")
         if not playing and self._tick:
             GLib.source_remove(self._tick)
             self._tick = 0
@@ -155,10 +159,12 @@ class HistoryWindow(Adw.ApplicationWindow):
         header.pack_start(self.mic_btn)
 
         menu = Gio.Menu()
+        menu.append("Export…", "win.hist.export")
         menu.append("Clear All…", "win.hist.clear")
+        self.menu_model = menu
         header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic",
                                        menu_model=menu, tooltip_text="Menu"))
-        settings_btn = Gtk.Button(icon_name="settings-symbolic",
+        settings_btn = Gtk.Button(icon_name="preferences-system-symbolic",
                                   tooltip_text="Settings")
         settings_btn.connect("clicked", self._open_settings)
         header.pack_end(settings_btn)
@@ -186,9 +192,10 @@ class HistoryWindow(Adw.ApplicationWindow):
         self.model_lbl = Gtk.Label(css_classes=["dim-label"])
         self.warmup_spinner = Gtk.Spinner()
         self.warmup_lbl = Gtk.Label(css_classes=["dim-label"])
+        self.today_lbl = Gtk.Label(css_classes=["dim-label"])
         for w in (self.state_dot, self.state_lbl, self.backend_lbl,
                   self.gpu_lbl, self.model_lbl, self.warmup_spinner,
-                  self.warmup_lbl):
+                  self.warmup_lbl, self.today_lbl):
             status.append(w)
         vbox.append(status)
 
@@ -205,7 +212,7 @@ class HistoryWindow(Adw.ApplicationWindow):
         self.listbox.set_placeholder(Adw.StatusPage(
             title="No dictations yet",
             description="Press your hotkey and speak — transcripts land here.",
-            icon_name="audio-input-microphone-symbolic",
+            icon_name="fluidvoice-linux",
             vexpand=True))
         scroll.set_child(self.listbox)
 
@@ -214,6 +221,9 @@ class HistoryWindow(Adw.ApplicationWindow):
         vbox.append(self.count_lbl)
 
         self.install_action("hist.clear", None, self._on_clear_all)
+        self.install_action("hist.export", None, self._on_export)
+        self._exporting = False
+        self._export_dlg = None
         self._load_history()
         self.refresh()
         GLib.timeout_add_seconds(2, self._poll)
@@ -253,6 +263,14 @@ class HistoryWindow(Adw.ApplicationWindow):
         self.count_lbl.set_text(
             f"{n} ent{'ry' if n == 1 else 'ries'}"
             + (" (showing latest 200)" if n >= 200 else ""))
+        self._update_today()
+
+    def _update_today(self) -> None:
+        try:
+            st = self.c.today_stats()
+        except Exception:
+            return
+        self.today_lbl.set_text("today: " + format_today(st))
 
     # -- actions ----------------------------------------------------------------
 
@@ -305,6 +323,49 @@ class HistoryWindow(Adw.ApplicationWindow):
             self._toast(str(e))
         GLib.timeout_add(150, self.refresh)
 
+    # -- export ------------------------------------------------------------------
+
+    def _on_export(self, *_args) -> None:
+        dlg = Gtk.FileChooserNative.new(
+            "Export history", self, Gtk.FileChooserAction.SAVE,
+            "_Export", "_Cancel")
+        dlg.set_current_name(
+            f"fluidvoice-history-{time.strftime('%Y%m%d-%H%M%S')}.zip")
+        dlg.connect("response", self._on_export_response)
+        self._export_dlg = dlg  # keep alive while it runs its own loop
+        dlg.show()
+
+    def _on_export_response(self, dlg, response) -> None:
+        self._export_dlg = None
+        if response != Gtk.ResponseType.ACCEPT:
+            return
+        f = dlg.get_file()
+        path = f.get_path() if f is not None else None
+        if path:
+            self._export_to(path)
+
+    def _export_to(self, path: str) -> None:
+        """Enter the busy state, let one frame paint, then write the zip
+        from an idle callback (everything stays on the main thread)."""
+        self._exporting = True
+        self.action_set_enabled("hist.export", False)
+        self._toast("Exporting…")
+        GLib.idle_add(self._export_now, path)
+
+    def _export_now(self, path: str) -> bool:
+        try:
+            n, notes = self.c.export_zip(path)
+            msg = f"Exported {n} entries"
+            if notes:
+                msg += f", {len(notes)} audio files skipped"
+            self._toast(msg)
+        except Exception as e:  # noqa: BLE001 - surfaced as a toast
+            self._toast(f"export failed: {e}")
+        finally:
+            self._exporting = False
+            self.action_set_enabled("hist.export", True)
+        return False  # GLib.SOURCE_REMOVE - stop the idle source
+
     def _open_settings(self, _btn) -> None:
         app = self.get_application()
         if app is not None:
@@ -317,6 +378,7 @@ class HistoryWindow(Adw.ApplicationWindow):
 
     def refresh(self) -> bool:
         self._apply_status(self.c.status())
+        self._update_today()  # a fresh dictation may have just landed
         return False
 
     def _poll(self) -> bool:

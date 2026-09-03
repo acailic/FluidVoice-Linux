@@ -40,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("history", help="show recent transcriptions")
     p.add_argument("-n", type=int, default=10)
+    p.add_argument("--export", type=Path, metavar="PATH.zip",
+                   help="write history + retained audio to a zip")
 
     p = sub.add_parser("config", help="show/init the config file")
     p.add_argument("action", nargs="?", default="path", choices=["path", "init", "print"])
@@ -97,6 +99,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "history":
         from . import history
+        if args.export:
+            def _note(m):
+                print(m, file=sys.stderr)
+            try:
+                n = history.export_zip(args.export, on_note=_note)
+            except OSError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 1
+            print(f"exported {n} entries to {args.export}")
+            return 0
         for entry in history.tail(args.n):
             ts = entry.get("ts")
             when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts else "?"
@@ -134,7 +146,11 @@ def main(argv: list[str] | None = None) -> int:
 def _describe(resp: dict) -> str:
     if "recording" in resp:
         state = "recording" if resp["recording"] else "stopped"
-        return f"{state}" + (" (cancelled)" if resp.get("cancelled") else "")
+        text = f"{state}" + (" (cancelled)" if resp.get("cancelled") else "")
+        if "today" in resp:
+            from . import history
+            text += "\ntoday: " + history.format_today(resp["today"])
+        return text
     return json.dumps(resp)
 
 

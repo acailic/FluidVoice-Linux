@@ -2,10 +2,13 @@
 that never loads the whole file."""
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import time
+import zipfile
 from pathlib import Path
+from typing import Callable
 
 from . import paths
 
@@ -78,7 +81,10 @@ def tail(n: int = 20) -> list[dict]:
     return out
 
 
-def _read_all() -> list[dict]:
+def read_all() -> list[dict]:
+    """Every parseable entry, oldest first (small: file is capped at
+    MAX_ENTRIES). tail() reads only the last 128 KB, so anything that must
+    see the whole file (search, stats, export, rewrite) comes here."""
     try:
         lines = paths.history_file().read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -98,7 +104,7 @@ def search(query: str = "", limit: int = 100) -> list[dict]:
     if not q:
         return tail(limit)
     out = []
-    for entry in reversed(_read_all()):
+    for entry in reversed(read_all()):
         if len(out) >= limit:
             break
         hay = f"{entry.get('text', '')} {entry.get('raw', '')} " \
@@ -109,7 +115,7 @@ def search(query: str = "", limit: int = 100) -> list[dict]:
 
 
 def audio_path_for(ts: float) -> Path | None:
-    for entry in _read_all():
+    for entry in read_all():
         if abs(entry.get("ts", 0) - ts) < 1e-6:
             p = entry.get("audio")
             if p and Path(p).exists():
@@ -120,7 +126,7 @@ def audio_path_for(ts: float) -> Path | None:
 def _rewrite(keep, drop_audio: bool) -> int:
     """Keep entries matching `keep`; delete the rest (+ their audio)."""
     hpath = paths.history_file()
-    entries = _read_all()
+    entries = read_all()
     kept_lines = []
     removed_audio: list[Path] = []
     removed = 0
@@ -152,3 +158,67 @@ def clear(drop_audio: bool = True) -> int:
         for f in adir.glob("*.wav"):
             f.unlink(missing_ok=True)
     return _rewrite(lambda e: False, drop_audio=False)
+
+
+# -- today-usage stats ---------------------------------------------------------
+
+def today_stats(entries: list[dict], now: float | None = None) -> dict:
+    """Dictations/seconds/words since local midnight over `entries`."""
+    now = time.time() if now is None else now
+    # isdst=-1 lets mktime pick the right DST offset for local midnight
+    midnight = time.mktime(time.localtime(now)[:3] + (0, 0, 0, 0, 0, -1))
+    today = [e for e in entries if e.get("ts", 0) >= midnight]
+    seconds = sum(float(e.get("duration_s") or 0) for e in today)
+    words = sum(len(str(e.get("text") or e.get("raw") or "").split())
+                for e in today)
+    return {"dictations": len(today), "seconds": float(seconds), "words": words}
+
+
+def format_today(stats: dict) -> str:
+    """`"N dictations, M:SS minutes, K words"` (shared by CLI + GTK)."""
+    total = int(stats.get("seconds", 0))  # truncate, never round up
+    return (f"{stats.get('dictations', 0)} dictations, "
+            f"{total // 60}:{total % 60:02d} minutes, "
+            f"{stats.get('words', 0)} words")
+
+
+# -- ZIP export ----------------------------------------------------------------
+
+def export_zip(path: Path, on_note: Callable[[str], None] | None = None) -> int:
+    """Zip history + retained audio. Returns the number of entries exported.
+
+    Every entry lands in `history.jsonl`; audio is included only when it
+    resolves inside paths.audio_dir() and exists. Skipped/refused audio is
+    reported through `on_note`, never raised; OSError from the zip write
+    itself propagates to the caller.
+    """
+    note = on_note or (lambda m: None)
+    entries = read_all()
+    adir = paths.audio_dir().resolve()
+    seen: set[str] = set()
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        with zf.open("history.jsonl", "w") as fh, \
+                io.TextIOWrapper(fh, encoding="utf-8") as out:
+            for entry in entries:
+                out.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        for entry in entries:
+            audio = entry.get("audio")
+            if not audio:
+                continue
+            p = Path(audio)
+            try:
+                inside = p.resolve().is_relative_to(adir)
+            except OSError:  # unresolvable path: treat as outside
+                inside = False
+            if not inside:
+                note(f"refused audio outside audio dir: {audio}")
+                continue
+            if not p.is_file():
+                note(f"skipped missing audio: {audio}")
+                continue
+            arcname = f"audio/{p.name}"
+            if arcname in seen:
+                continue
+            seen.add(arcname)
+            zf.write(p, arcname=arcname)
+    return len(entries)

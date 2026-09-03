@@ -681,7 +681,8 @@ class Daemon:
                     "backend": self.backend.name if self.backend else None,
                     "version": __version__,
                     "warmup": dict(self.warmup),
-                    "active_model": self._active_model_name()}
+                    "active_model": self._active_model_name(),
+                    "today": history_mod.today_stats(history_mod.read_all())}
         if action == "shutdown":
             self._quit_gracefully()
             return {"ok": True}
