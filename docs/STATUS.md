@@ -1,6 +1,6 @@
 # FluidVoiceLinux — Status Ledger
 
-Last updated: 2026-09-02 · v0.1.0 · **359 automated tests** (331 offline + 28 integration)
+Last updated: 2026-09-02 · v0.1.0 · **410 automated tests** (382 offline + 28 integration)
 · verified against upstream `altic-dev/FluidVoice` by a 5-agent audit
 (prompts/AI, punctuation rules, daemon pipeline, models, security).
 
@@ -132,7 +132,11 @@ matrix + upstream changelog with its refresh loop).
 - [ ] whisper.cpp GGUF auto-download; model manager.
 
 ### Later
-- [ ] Command mode (voice → terminal agent, upstream tool schema + confirmations).
+- [x] Command mode **v1 shipped**: dedicated `hotkey.command_key`, strict-JSON
+      one-command-at-a-time agent loop over the configured AI endpoint, pill
+      awaiting-confirmation state, Escape cancel + confirm timeout, per-command
+      history entries. (Native tool_calls, chat persistence, multi-tool schema
+      stay later.)
 - [ ] GAAV + continuous-dictation formatting (needs caret text via AT-SPI).
 - [ ] Slash-command/mention literal formatting + terminal autocomplete spacing.
 - [ ] Insertion hardening: paste verification, transient clipboard marks,
@@ -155,6 +159,7 @@ matrix + upstream changelog with its refresh loop).
 | Processing engines (punctuation/fillers/dictionary) | 60+ unit tests incl. upstream-fidelity cases |
 | AI client (params/endpoints/think-strip/retries) | unit tests with mocked transport + live Ollama session |
 | Daemon state machine & pipeline | stub-based tests (toggle/cancel/busy/watchdogs/races) |
+| Command mode (JSON protocol, agent loop, run_shell, daemon confirm/cancel/timeout) | stub-AIClient unit + integration-style daemon tests (pill overlay, Escape, history file) |
 | Socket config actions (get/set-config, select-model) + apply_settings | unit (fake backend factory) + real-daemon socket integration |
 | Recorder / insertion / history / backends | stub or subprocess-mock tests |
 | End-to-end speech | JFK sample through GPU transcription (pytest `-m slow`) |

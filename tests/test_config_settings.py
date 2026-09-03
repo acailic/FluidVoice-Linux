@@ -148,3 +148,63 @@ class TestApplySettings:
     def test_restart_required_is_only_model_warmup_now(self):
         # the [server] section retired with the web UI
         assert RESTART_REQUIRED == {"model.eager_warmup"}
+
+
+class TestCommandSettings:
+    """Command mode keys: hotkey.command_key + the [command] section."""
+
+    def test_defaults(self, cfg):
+        assert cfg["hotkey"]["command_key"] == ""
+        assert cfg["command"] == {"max_turns": 4, "working_dir": "",
+                                  "timeout_seconds": 60.0,
+                                  "confirm_timeout_s": 120.0}
+
+    def test_apply_accepts_command_keys(self, cfg):
+        changed, rejected = apply_settings(cfg, {
+            "hotkey": {"command_key": "F9"},
+            "command": {"max_turns": 6, "working_dir": "/tmp",
+                        "timeout_seconds": 30, "confirm_timeout_s": 60},
+        })
+        assert rejected == []
+        assert set(changed) == {"hotkey.command_key", "command.max_turns",
+                                "command.working_dir",
+                                "command.timeout_seconds",
+                                "command.confirm_timeout_s"}
+        assert cfg["hotkey"]["command_key"] == "F9"
+        assert cfg["command"]["max_turns"] == 6
+        assert cfg["command"]["working_dir"] == "/tmp"
+        assert cfg["command"]["timeout_seconds"] == 30.0
+        assert cfg["command"]["confirm_timeout_s"] == 60.0
+
+    def test_apply_rejects_bad_values(self, cfg):
+        before = copy.deepcopy(cfg["command"])
+        _, rejected = apply_settings(cfg, {
+            "command": {"max_turns": 0, "working_dir": "x" * 5000,
+                        "timeout_seconds": 0}})
+        _, rejected2 = apply_settings(cfg, {
+            "command": {"max_turns": 21}})
+        _, rejected3 = apply_settings(cfg, {
+            "command": {"max_turns": "four"}})
+        assert "command.max_turns" in rejected  # 0
+        assert "command.working_dir" in rejected
+        assert "command.timeout_seconds" in rejected
+        assert "command.max_turns" in rejected2  # 21
+        assert "command.max_turns" in rejected3  # "four"
+        assert cfg["command"] == before  # untouched
+
+    def test_save_whitelist_writes_command_section(self, tmp_path, monkeypatch):
+        from fluidvoice import paths as p
+        monkeypatch.setattr(p, "config_file", lambda: tmp_path / "c.toml")
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["hotkey"]["command_key"] = "F9"
+        cfg["command"].update(max_turns=6, working_dir="/tmp",
+                              timeout_seconds=30, confirm_timeout_s=60)
+        save_config(cfg)
+        text = (tmp_path / "c.toml").read_text()
+        assert "[command]" in text
+        assert "command_key = \"F9\"" in text
+        assert "max_turns = 6" in text
+        loaded = load_config(tmp_path / "c.toml")
+        assert loaded["command"] == {"max_turns": 6, "working_dir": "/tmp",
+                                     "timeout_seconds": 30.0,
+                                     "confirm_timeout_s": 60.0}

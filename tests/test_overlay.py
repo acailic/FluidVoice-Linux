@@ -4,6 +4,8 @@ from __future__ import annotations
 import math
 import struct
 
+import pytest
+
 from fluidvoice.overlay import (BAR_COUNT, BAR_MAX_H, BAR_MIN_H, PILL_H,
                                 PILL_RADIUS, AudioLevels,
                                 PillRenderer, head_truncate)
@@ -182,6 +184,36 @@ class TestFluidOverlayFallback:
         o.start()               # no-op without a display
         o.set_state("processing")
         o.close()               # must not raise
+
+
+class TestConfirmState:
+    def test_confirmation_pill_text(self):
+        from fluidvoice.overlay import confirmation_pill_text
+        text = confirmation_pill_text("ls -la", "list files")
+        assert text.startswith("$ ls -la")
+        assert "list files" in text
+        assert "Esc" in text
+        assert "hotkey" in text
+
+    def test_confirmation_pill_text_without_purpose(self):
+        from fluidvoice.overlay import confirmation_pill_text
+        text = confirmation_pill_text("pwd")
+        assert text == "$ pwd\nhotkey = run · Esc = cancel"
+
+    def test_headless_set_state_records_and_validates(self, monkeypatch):
+        import fluidvoice.overlay as ov
+
+        def boom(*a, **k):
+            raise OSError("no display")
+
+        monkeypatch.setattr("Xlib.display.Display", boom)
+        o = ov.FluidOverlay()
+        assert o.using_overlay is False
+        o.set_state("confirm")
+        assert o._state == "confirm"
+        with pytest.raises(ValueError):
+            o.set_state("nonsense")
+        o.close()  # fallback path, must not crash
 
 
 class TestConfig:

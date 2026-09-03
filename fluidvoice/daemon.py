@@ -108,6 +108,15 @@ class DictationPipeline:
              "app": None, "mode": "rewrite"}, wav)
         return out
 
+    def _command(self, instruction: str, raw: str,
+                 duration: float, wav: Path) -> dict:
+        """Command mode turn 0: hand the instruction back to the daemon (the
+        CommandSession inserts nothing, polishes nothing and writes history
+        only for EXECUTED commands, later)."""
+        self.log(f"command instruction ({len(instruction)} chars): {instruction[:120]}")
+        return {"mode": "command", "text": instruction, "raw": raw,
+                "duration_s": round(duration, 2)}
+
     def _after_ai_formatting(self, text: str) -> str:
         """GAAV + spoken-send stripping (upstream post-AI steps)."""
         from .processing.extra_formats import apply_gaav, parse_spoken_send
@@ -180,6 +189,8 @@ class DictationPipeline:
             text = post_process(raw, self.cfg, app_hint=app_hint)
             if mode == "rewrite":
                 return self._rewrite(text, rewrite_context, raw, duration, wav)
+            if mode == "command":
+                return self._command(text, raw, duration, wav)
             polished, ai_used = self._polish(text, app_hint=app_hint)
             polished = self._after_ai_formatting(polished)
             strategy = self._insert(polished)
@@ -204,6 +215,7 @@ class Daemon:
                  recorder: Recorder | None = None,
                  backend_factory: BackendFactory = backends.load_backend,
                  pipeline_factory=DictationPipeline,
+                 command_session_factory=None,
                  use_hotkey: bool = True, use_sounds: bool = True):
         self.cfg = cfg or load_config()
         self.use_hotkey = use_hotkey
@@ -214,6 +226,7 @@ class Daemon:
             sample_rate=self.cfg["recording"].get("sample_rate", 16000))
         self._backend_factory = backend_factory
         self._pipeline_factory = pipeline_factory
+        self._command_session_factory = command_session_factory
         self.backend: Any = None  # lazy: loads model on first use
         self.recording = False
         self.busy = False  # transcription/insertion in flight
@@ -221,6 +234,13 @@ class Daemon:
         self._app_hint: str | None = None
         self._rewrite_context: str | None = None
         self._rewrite_mode = False
+        # Command mode: recording flag + the awaiting-confirmation state
+        self._command_mode = False
+        self._command_session = None
+        self._command_pending = False
+        self._command_display = None
+        self._command_timer: threading.Timer | None = None
+        self._command_hotkey = None
         self._watchdog: threading.Timer | None = None
         self._preview: Any = None
         self._closing_display: Any = None
@@ -446,12 +466,15 @@ class Daemon:
             self._watchdog.cancel()
         self._stop_preview()
         self._close_closing_display()
+        self.cancel_pending_command()  # pill + Escape grab gone before hotkeys
         if self._tray:
             self._tray.stop()
         if self._hotkey:
             self._hotkey.stop()
         if self._rewrite_hotkey:
             self._rewrite_hotkey.stop()
+        if self._command_hotkey:
+            self._command_hotkey.stop()
         if self._srv:
             try:
                 self._srv.close()
@@ -508,6 +531,21 @@ class Daemon:
                 self._rewrite_hotkey = None
                 log(f"WARN rewrite hotkey unavailable: {e}")
                 error = error or str(e)
+        command_key = (hk.get("command_key") or "").strip()
+        if command_key:
+            try:
+                self._command_hotkey = HotkeyListener(
+                    key=command_key, modifiers=[], mode="toggle",
+                    on_toggle=self._on_command_hotkey,
+                    on_cancel=self.cancel_pending_command,
+                    cancel_key=hk.get("cancel_key", "Escape"))
+                self._command_hotkey.start()
+                for line in self._command_hotkey.summary:
+                    log(line)
+            except HotkeyError as e:
+                self._command_hotkey = None
+                log(f"WARN command hotkey unavailable: {e}")
+                error = error or str(e)
         return error
 
     def _restart_hotkey(self) -> None:
@@ -515,7 +553,7 @@ class Daemon:
         first). Raises on failure so the settings UI can surface it."""
         if not self.use_hotkey:
             return
-        for attr in ("_hotkey", "_rewrite_hotkey"):
+        for attr in ("_hotkey", "_rewrite_hotkey", "_command_hotkey"):
             listener = getattr(self, attr)
             if listener is not None:
                 try:
@@ -720,6 +758,31 @@ class Daemon:
             log(f"rewrite mode (context: {len(context or '')} chars)")
             self._start_recording_locked()
 
+    def start_command(self) -> None:
+        """Command hotkey: start recording the spoken instruction."""
+        from . import command as command_mod
+        with self._lock:
+            if self.recording or self.busy or self._command_pending:
+                return
+        ready = command_mod.command_mode_ready(self.cfg)
+        if ready:
+            log(ready)
+            ui.notify("FluidVoice", f"Command mode unavailable: {ready}",
+                      enabled=self.cfg["notifications"]["enabled"])
+            return
+        with self._lock:
+            self._command_mode = True
+            log("command mode")
+            self._start_recording_locked()
+
+    def _on_command_hotkey(self) -> None:
+        """Command hotkey router: a second press CONFIRMS a pending proposal
+        (the only execution trigger); otherwise it starts a recording."""
+        if self._command_pending:
+            self._confirm_pending_command()
+        else:
+            self.start_command()  # guards make this a no-op mid-recording
+
     def toggle(self) -> bool:
         with self._lock:
             if self.recording:
@@ -869,13 +932,17 @@ class Daemon:
         self._media.resume()
         if wav is None or not Path(wav).exists() or Path(wav).stat().st_size < 200:
             log("no audio captured")
+            self._rewrite_mode = False
+            self._command_mode = False
             self._close_closing_display()
             if wav:
                 Path(wav).unlink(missing_ok=True)
             return
-        mode = "rewrite" if self._rewrite_mode else "dictate"
+        mode = "rewrite" if self._rewrite_mode else \
+            "command" if self._command_mode else "dictate"
         context = self._rewrite_context
         self._rewrite_mode = False
+        self._command_mode = False
         self._rewrite_context = None
         self._process_thread = threading.Thread(
             target=self._process,
@@ -894,6 +961,8 @@ class Daemon:
             self.recording = False
             self._tray_recording(False)
             self._media.resume()
+            self._rewrite_mode = False
+            self._command_mode = False
         log("cancelled")
         ui.notify("FluidVoice", "Cancelled", enabled=self.cfg["notifications"]["enabled"])
 
@@ -979,6 +1048,7 @@ class Daemon:
     def _process(self, wav: Path, app_hint: str | None,
                  mode: str = "dictate", rewrite_context: str | None = None) -> None:
         self.busy = True
+        out: dict = {}
         try:
             try:
                 backend = self._ensure_backend()
@@ -989,8 +1059,192 @@ class Daemon:
                 wav.unlink(missing_ok=True)
                 return
             pipeline = self._pipeline_factory(self.cfg, backend)
-            self.last_result = pipeline.run(wav, app_hint, mode=mode,
-                                            rewrite_context=rewrite_context) or {}
+            out = pipeline.run(wav, app_hint, mode=mode,
+                               rewrite_context=rewrite_context) or {}
+            self.last_result = out
         finally:
             self.busy = False
             self._close_closing_display()
+        # Turn 1 runs AFTER busy clears, so there is no busy-flag race with
+        # the hotkey-confirm handoff below.
+        if mode == "command" and out.get("mode") == "command":
+            self._begin_command(str(out.get("text", "")))
+
+    # -- command mode ---------------------------------------------------------
+
+    def _begin_command(self, instruction: str) -> None:
+        """Turn 1: ask the model for the first proposal (background thread;
+        the user is not blocked - not even by the LLM latency)."""
+        from . import command as command_mod
+
+        def _work():
+            factory = self._command_session_factory or command_mod.CommandSession
+            session = factory(self.cfg)
+            try:
+                proposal = session.start(instruction)
+            except command_mod.CommandError as e:
+                with self._lock:
+                    self.busy = False
+                log(f"command mode failed: {e}")
+                ui.notify("FluidVoice", f"Command mode failed: {e}",
+                          enabled=self.cfg["notifications"]["enabled"])
+                return
+            if proposal is None:
+                with self._lock:
+                    self.busy = False
+                ui.notify("FluidVoice",
+                          session.summary or "Command mode: nothing to run.",
+                          enabled=self.cfg["notifications"]["enabled"])
+                return
+            with self._lock:                 # atomic handoff to the pending state
+                self._command_session = session
+                self._command_pending = True
+                self.busy = False            # waiting for the user, not busy
+            self._present_proposal(session, proposal)
+
+        def _guarded():
+            try:
+                _work()
+            except Exception as e:  # noqa: BLE001 - never strand `busy`
+                log(f"command mode failed: {e}")
+                ui.notify("FluidVoice", f"Command mode failed: {e}",
+                          enabled=self.cfg["notifications"]["enabled"])
+                self._end_command_session()
+
+        with self._lock:
+            if self.busy or self._command_pending:
+                return
+            self.busy = True
+        threading.Thread(target=_guarded, name="fluidvoice-command",
+                         daemon=True).start()
+
+    def _present_proposal(self, session, proposal) -> None:
+        """Awaiting-confirmation UX: pill, armed Escape grab, notification,
+        confirm watchdog. Call with no lock held."""
+        try:
+            from .overlay import FluidOverlay, confirmation_pill_text
+            rcfg = self.cfg["recording"]
+            ov = FluidOverlay(raw_path=None,
+                              bottom_offset=int(rcfg.get("preview_bottom_offset", 64)),
+                              size="large")
+            if ov.using_overlay:
+                ov.show(confirmation_pill_text(proposal.command,
+                                               proposal.purpose))
+                ov.set_state("confirm")
+                ov.start()
+                self._command_display = ov
+            else:
+                ov.close()  # headless: the notification carries everything
+        except Exception as e:  # noqa: BLE001 - never block confirmation
+            log(f"WARN command pill unavailable: {e}")
+        if self._command_hotkey:
+            try:
+                self._command_hotkey.set_recording(True)  # arm Escape grab
+            except Exception:
+                pass
+        purpose = proposal.purpose or ""
+        body = (f"{purpose}\n" if purpose else "") \
+            + f"$ {proposal.command}\n" \
+            + "Press the command hotkey to run · Esc to cancel"
+        ui.notify("FluidVoice — run this command?", body,
+                  enabled=self.cfg["notifications"]["enabled"])
+        self._command_timer = threading.Timer(
+            float(self.cfg["command"].get("confirm_timeout_s", 120.0)),
+            self._on_confirm_timeout)
+        self._command_timer.daemon = True
+        self._command_timer.start()
+
+    def _confirm_pending_command(self) -> None:
+        """Hotkey-confirmed: execute (the only path into CommandSession.confirm),
+        then either present the next proposal or finish."""
+        with self._lock:
+            if not self._command_pending or self.busy or self.recording:
+                return
+            self._command_pending = False
+            self.busy = True                 # atomic with the flag clear
+        session = self._command_session      # never None while pending
+        self._teardown_pending_ux()
+
+        def _work():
+            from . import command as command_mod
+            try:
+                proposal = session.confirm()
+            except command_mod.CommandError as e:
+                log(f"command mode failed: {e}")
+                ui.notify("FluidVoice", f"Command mode failed: {e}",
+                          enabled=self.cfg["notifications"]["enabled"])
+                self._end_command_session()
+                return
+            outcome = session.executed[-1] if session.executed else None
+            if outcome is not None:          # result via notification + history
+                brief = (outcome.output or outcome.error or "").strip()[:200]
+                ui.notify("FluidVoice",
+                          f"$ {outcome.command} → exit {outcome.exit_code}"
+                          + (f"\n{brief}" if brief else ""),
+                          enabled=self.cfg["notifications"]["enabled"])
+            if proposal is None:
+                ui.notify("FluidVoice",
+                          (session.summary or "Command finished.")
+                          + (" (step limit reached)" if session.exhausted
+                             else ""),
+                          enabled=self.cfg["notifications"]["enabled"])
+                self._end_command_session()
+                return
+            with self._lock:
+                self._command_pending = True
+                self.busy = False
+            self._present_proposal(session, proposal)
+
+        def _guarded():
+            try:
+                _work()
+            except Exception as e:  # noqa: BLE001 - never strand `busy`
+                log(f"command mode failed: {e}")
+                ui.notify("FluidVoice", f"Command mode failed: {e}",
+                          enabled=self.cfg["notifications"]["enabled"])
+                self._end_command_session()
+
+        threading.Thread(target=_guarded, name="fluidvoice-command",
+                         daemon=True).start()
+
+    def cancel_pending_command(self) -> None:
+        """Escape on a pending proposal (or a test): nothing executes."""
+        with self._lock:
+            if not self._command_pending:
+                return
+            self._command_pending = False
+        session, self._command_session = self._command_session, None
+        self._teardown_pending_ux()
+        if session is not None:
+            session.cancel()
+        ui.notify("FluidVoice", "Command cancelled",
+                  enabled=self.cfg["notifications"]["enabled"])
+
+    def _on_confirm_timeout(self) -> None:
+        if self._command_pending:
+            self.cancel_pending_command()
+            ui.notify("FluidVoice", "Command mode: confirmation timed out",
+                      enabled=self.cfg["notifications"]["enabled"])
+
+    def _teardown_pending_ux(self) -> None:
+        if self._command_timer:
+            self._command_timer.cancel()
+            self._command_timer = None
+        if self._command_hotkey:
+            try:
+                self._command_hotkey.set_recording(False)
+            except Exception:
+                pass
+        display, self._command_display = self._command_display, None
+        if display is not None:
+            try:
+                display.close()
+            except Exception:
+                pass
+
+    def _end_command_session(self) -> None:
+        with self._lock:
+            self._command_pending = False
+            self.busy = False
+        self._command_session = None
+        self._teardown_pending_ux()

@@ -67,7 +67,7 @@ new that Linux doesn't have" a one-command answer.
 | Spoken punctuation ("literal …") | ✅ | full live rule table (108 aliases, spacing semantics) |
 | Filler removal + custom dictionary | ✅ | same defaults and matching semantics |
 | Spoken-send ("send it" → Enter) | ✅ | configurable phrase; upstream's terminal-blocklist not ported ⏳ |
-| Command mode (voice → actions) | ⏳ | roadmap "later": voice → terminal agent + confirmations |
+| Command mode (voice → actions) | ✅ v1 | strict-JSON single-tool protocol (no native tool_calls), every command confirmed, pill overlay instead of notch; chat store/tool schema later |
 | Per-app prompt sets | ⏳ v0.2 | frontmost-app hint already captured |
 | Smart typing via accessibility APIs | ✅ / 🚧 | xdotool on X11 ✅; Wayland insertion 🚧 v0.3 (ydotool/wtype); AT-SPI fallback ⏳ |
 | Menu bar + notch overlay | ✅ (equivalent) | tray/panel icon via StatusNotifierItem (`tray.py`): click = toggle, right-click = settings, recording badge, tooltip w/ hotkey; notch ➖ N/A |

@@ -32,6 +32,7 @@ DEFAULTS: dict[str, Any] = {
         # nothing typed). Grabbed ONLY while recording; "none" disables.
         "cancel_key": "Escape",
         "rewrite_key": "",  # optional keysym for Rewrite mode (needs [ai])
+        "command_key": "",  # optional keysym for Command mode (needs [ai])
     },
     "recording": {
         "command": "auto",  # auto | pw-record | parecord
@@ -101,6 +102,12 @@ DEFAULTS: dict[str, Any] = {
         "save": True,
         "save_audio": False,
         "audio_budget_gb": 4.0,
+    },
+    "command": {
+        "max_turns": 4,           # agent loop bound (upstream: 20)
+        "working_dir": "",       # "" -> $HOME
+        "timeout_seconds": 60.0,  # per-command subprocess timeout
+        "confirm_timeout_s": 120.0,  # auto-cancel a pending confirmation
     },
 }
 
@@ -250,7 +257,8 @@ def write_template(path: Path | None = None) -> Path:
 
 _SAVE_WHITELIST: dict[str, list[str]] = {
     "general": ["language", "copy_to_clipboard", "tray_enabled"],
-    "hotkey": ["key", "modifiers", "mode", "cancel_key", "rewrite_key"],
+    "hotkey": ["key", "modifiers", "mode", "cancel_key", "rewrite_key",
+                "command_key"],
     "recording": ["command", "device", "max_seconds", "skip_silent",
                   "first_pcm_timeout", "spoken_send_enabled", "spoken_send_phrase",
                   "spoken_send_key", "preview_enabled", "preview_mode",
@@ -268,6 +276,8 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
     "sounds": ["enabled", "volume"],
     "notifications": ["enabled"],
     "history": ["save", "save_audio", "audio_budget_gb"],
+    "command": ["max_turns", "working_dir", "timeout_seconds",
+                "confirm_timeout_s"],
 }
 
 
@@ -330,6 +340,11 @@ SETTING_RANGES: dict[tuple[str, str], Any] = {
     ("hotkey", "key"): ("str", 64),
     ("hotkey", "cancel_key"): ("str", 64),
     ("hotkey", "rewrite_key"): ("str", 64),
+    ("hotkey", "command_key"): ("str", 64),
+    ("command", "max_turns"): ("int", (1, 20)),
+    ("command", "working_dir"): ("str", 4096),
+    ("command", "timeout_seconds"): ("float", (1, 3600)),
+    ("command", "confirm_timeout_s"): ("float", (5, 600)),
     ("recording", "device"): ("str", 256),
     ("recording", "max_seconds"): ("float", (1, 86400)),
     ("recording", "spoken_send_phrase"): ("str", 64),
@@ -374,7 +389,8 @@ SETTING_LISTS = (("processing", "filler_words"), ("processing", "dictionary"),
                  ("hotkey", "modifiers"))
 ALLOWED_SETTINGS: dict[str, set] = {
     "general": {"language", "copy_to_clipboard", "tray_enabled"},
-    "hotkey": {"key", "modifiers", "mode", "cancel_key", "rewrite_key"},
+    "hotkey": {"key", "modifiers", "mode", "cancel_key", "rewrite_key",
+               "command_key"},
     "recording": {"command", "device", "max_seconds", "skip_silent",
                   "first_pcm_timeout", "spoken_send_enabled",
                   "spoken_send_phrase", "spoken_send_key",
@@ -393,6 +409,8 @@ ALLOWED_SETTINGS: dict[str, set] = {
     "sounds": {"enabled", "volume"},
     "notifications": {"enabled"},
     "history": {"save", "save_audio", "audio_budget_gb"},
+    "command": {"max_turns", "working_dir", "timeout_seconds",
+                "confirm_timeout_s"},
 }
 RESTART_REQUIRED = {"model.eager_warmup"}
 ENGINE_KEYS = {"model.backend", "model.device", "model.compute",

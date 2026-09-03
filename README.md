@@ -121,6 +121,20 @@ With Ollama: `ollama pull qwen3:8b`. No key needed for local endpoints; for clou
 providers set `api_key_env = "FLUIDVOICE_API_KEY"` and export the variable
 (keys are never written to disk by the tooling).
 
+### Command mode (voice → terminal agent)
+
+Set `command_key` under `[hotkey]` to a spare keysym (e.g. `F10`); like the
+rewrite key it needs `[ai]` enabled with a base URL and model. Press it and
+dictate an instruction ("list the biggest files in my downloads folder");
+stop the recording with the main dictation key. The model then proposes one
+shell command at a time — shown in the pill overlay in an
+awaiting-confirmation state — and you press the command hotkey again to run
+it; `Escape` cancels. Every command requires that explicit confirmation
+before anything executes; output is fed back to the model and the loop
+continues (bounded by `[command] max_turns`). The `[command]` section also
+tunes `working_dir`, `timeout_seconds` and `confirm_timeout_s`; executed
+commands are recorded in History.
+
 ## Features vs. upstream FluidVoice
 
 | Feature | macOS (upstream) | Linux port v0.1 |
@@ -134,7 +148,7 @@ providers set `api_key_env = "FLUIDVOICE_API_KEY"` and export the variable
 | Start/stop sounds | ✅ | ✅ (same GPLv3 SFX) |
 | Live streaming preview overlay | ✅ | ✅ Mac-style pill overlay (bottom-center, live waveform) |
 | Write/Rewrite selected text | ✅ (⌥R) | ✅ dedicated rewrite hotkey |
-| Command mode (voice → terminal agent) | ✅ | 🚧 roadmap |
+| Command mode (voice → terminal agent) | ✅ | ✅ (v1) dedicated hotkey, pill confirmation, JSON agent loop |
 | Per-app prompt sets | ✅ | 🚧 roadmap (app hint is already captured) |
 | Settings UI with model picker | ✅ | ✅ native GTK app (`fluidvoice app`): Settings + History windows |
 | Onboarding (setup + tryout) | ✅ | ✅ opens once on first launch (`fluidvoice app --onboard`) |

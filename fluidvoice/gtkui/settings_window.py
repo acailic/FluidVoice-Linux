@@ -502,6 +502,18 @@ class SettingsWindow(Adw.PreferencesWindow):
         add_row.add_suffix(add_btn)
         self.rules_group.add(add_row)
         page.add(self.rules_group)
+
+        cmd = Adw.PreferencesGroup(
+            title="Command mode",
+            description="Voice → terminal agent. Every command needs confirmation.")
+        cmd.add(self._spin("command", "max_turns", "Max agent turns", 1, 20, 1))
+        cmd.add(self._entry("command", "working_dir",
+                            "Working directory (empty = home)"))
+        cmd.add(self._spin("command", "timeout_seconds", "Command timeout (s)",
+                           1, 3600, 5, digits=1))
+        cmd.add(self._spin("command", "confirm_timeout_s",
+                           "Confirmation timeout (s)", 5, 600, 5, digits=1))
+        page.add(cmd)
         page.add(self._save_group())
         self.add(page)
 
@@ -650,6 +662,8 @@ class SettingsWindow(Adw.PreferencesWindow):
                            capture=True))
         hk.add(self._entry("hotkey", "rewrite_key", "Rewrite key (optional, needs AI)",
                            capture=True))
+        hk.add(self._entry("hotkey", "command_key",
+                           "Command key (optional, needs AI)", capture=True))
         mods = Adw.ActionRow(title="Extra modifiers",
                              subtitle="held in addition to the dictation key")
         for mod in ("ctrl", "alt", "shift", "super"):

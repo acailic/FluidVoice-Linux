@@ -144,6 +144,14 @@ class TestSettingsWindow:
                 "ai", "insertion", "sounds", "notifications",
                 "history"} <= fams
         assert len(w._rows) >= 40
+        # command mode rows: hotkey capture + the [command] group (AI page)
+        titles = {r.get_title() for r in w._rows.values()
+                  if hasattr(r, "get_title")}
+        assert any("Command key" in t for t in titles)
+        assert any("Max agent turns" in t for t in titles)
+        assert any("Working directory" in t for t in titles)
+        assert ("command", "max_turns") in w._rows
+        assert ("command", "confirm_timeout_s") in w._rows
         # About page reflects the daemon status poll (spec: backend, CUDA)
         assert w.about_backend_row.get_title() == "Backend"
         assert w.about_backend_row.get_subtitle() == "faster-whisper"

@@ -448,6 +448,15 @@ class AudioLevels:
                 self._h[i] * 0.70 + t * 0.30  # ~150 ms release at 30 fps
 
 
+def confirmation_pill_text(command: str, purpose: str | None = None) -> str:
+    """Text shown in the pill while a command proposal awaits confirmation."""
+    lines = [f"$ {command}"]
+    if purpose:
+        lines.append(purpose)
+    lines.append("hotkey = run · Esc = cancel")
+    return "\n".join(lines)
+
+
 class FluidOverlay:
     """The pill window. Falls back to NotifyPreview when X11/Pillow fail."""
 
@@ -536,13 +545,17 @@ class FluidOverlay:
             self._last_sig = None  # force redraw + possible resize
 
     def set_state(self, state: str) -> None:
-        """'recording' (bars follow audio) or 'processing' (flat + shimmer)."""
-        if self._d is None:
-            return  # notifications have no processing visual
+        """'recording' (bars follow audio), 'processing' (flat bars +
+        shimmer) or 'confirm' (static bars while the user decides whether
+        to run the proposed command)."""
+        if state not in ("recording", "processing", "confirm"):
+            raise ValueError(f"unknown overlay state {state!r}")
         with self._lock:
             self._state = state
             self._state_since = time.monotonic()
             self._last_sig = None
+        if self._d is None:
+            return  # notifications have no processing visual
 
     def close(self) -> None:
         self._stop.set()
