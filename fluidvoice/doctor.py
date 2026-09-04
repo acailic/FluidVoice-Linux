@@ -217,6 +217,42 @@ def _hotkey_grab_line() -> list[str]:
     return ["  hotkey grab: ok"]
 
 
+def _mouse_ptt_lines(cfg: dict) -> list[str]:
+    """Mouse push-to-talk resolution: config -> button + modifiers, plus
+    the live arm state from the daemon when one is running (the same
+    status surface _hotkey_grab_line uses)."""
+    from . import control
+    from .hotkey import HotkeyError, parse_button_spec
+    rcfg = cfg.get("recording", {}) or {}
+    spec = str(rcfg.get("push_to_talk_button") or "").strip()
+    try:
+        button = parse_button_spec(spec)
+    except HotkeyError as e:
+        return [f"  push-to-talk button: INVALID: {e}"]
+    if button is None:
+        return ["  push-to-talk button: not configured "
+                "(keyboard hotkey only)"]
+    mods = rcfg.get("push_to_talk_modifiers") or []
+    mods_txt = "+".join(mods) if mods else "none"
+    lines = [f"  push-to-talk button: button{button} "
+             f"(XGrabButton on button {button}, modifiers {mods_txt})"]
+    try:
+        if not paths.socket_path().exists():
+            return lines  # daemon down: report the resolution only
+        status = control.request("status")
+    except Exception:  # noqa: BLE001 - daemon down / older daemon / timeout
+        return lines
+    state = status.get("mouse_ptt_grabbed")
+    if state is False:
+        lines.append("  push-to-talk arm: BLOCKED (another client holds it "
+                     "- daemon is retrying)")
+    elif state is True:
+        lines.append("  push-to-talk arm: ok")
+    else:
+        lines.append("  push-to-talk arm: disabled (daemon not running it)")
+    return lines
+
+
 def run() -> int:
     print(f"SayItErmano v{__version__} doctor\n")
     ok = True
@@ -293,6 +329,8 @@ def run() -> int:
     print(f"\ncontrol socket: {paths.socket_path()} "
           f"({'alive' if paths.socket_path().exists() else 'daemon not running'})")
     print("\n".join(_hotkey_grab_line()))
+    for line in _mouse_ptt_lines(cfg):
+        print(line)
     if _gtk_available():
         print("settings app: GTK 4 + libadwaita OK (`sayit-ermano app`)")
     else:

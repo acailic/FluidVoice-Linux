@@ -344,3 +344,222 @@ class TestOverlayLive:
             assert light > 20, "no bright text/bar pixels inside the pill"
         finally:
             overlay.close()
+
+
+@requires_x11
+class TestMousePTTLive:
+    """Mouse push-to-talk against the live X server (XGrabButton press +
+    XI2 raw release, upstream macOS PR #939 parity). Every XTEST fake is
+    balanced: teardowns always mouseup 8 - a stray held button silently
+    poisons later grabs (state-matching fakes are dropped by Xorg)."""
+
+    def _status(self):
+        try:
+            return control.request("status")
+        except Exception:
+            return {}
+
+    def _wait(self, predicate, timeout, interval=0.1):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate(self._status()):
+                return True
+            time.sleep(interval)
+        return False
+
+    def _mouse_up_8(self):
+        subprocess.run(["xdotool", "mouseup", "8"], timeout=5,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _pointer_pos(self):
+        out = subprocess.run(["xdotool", "getmouselocation", "--shell"],
+                             capture_output=True, text=True, timeout=5).stdout
+        pos = {}
+        for line in out.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                pos[k] = int(v)
+        return pos.get("X", 0), pos.get("Y", 0)
+
+    def test_hold_passthrough_and_release(self, daemon_mouse_ptt):
+        from tests.integration.conftest import skip_if_gpu_busy
+        skip_if_gpu_busy()  # the take is transcribed (real model) at release
+        from Xlib import X
+        from Xlib.display import Display
+
+        # 1. arm: retry window - a previous test daemon's grabs can release
+        #    lazily after its X connection drops
+        assert self._wait(lambda s: s.get("mouse_ptt_grabbed") is True, 10), \
+            "button 8 grab never became healthy"
+
+        d = Display()
+        win = None
+        prev_focus = prev_pointer = None
+        try:
+            root = d.screen().root
+            # receiver window (probe pattern): override-redirect, button events
+            win = root.create_window(
+                200, 200, 240, 120, 1, X.CopyFromParent, X.InputOutput,
+                X.CopyFromParent, override_redirect=True,
+                event_mask=X.ButtonPressMask | X.ButtonReleaseMask)
+            win.map()
+            d.sync()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if win.get_attributes().map_state == X.IsViewable:
+                    break
+                time.sleep(0.05)
+            assert win.get_attributes().map_state == X.IsViewable
+            prev_focus = d.get_input_focus().focus
+            prev_pointer = self._pointer_pos()
+            win.set_input_focus(X.RevertToParent, X.CurrentTime)
+            subprocess.run(["xdotool", "mousemove", "260", "240"],
+                           check=True, timeout=5)
+            d.sync()
+
+            # 2. mousedown 8 -> hold starts (retry: lazy grab release)
+            recording = False
+            for _ in range(3):
+                subprocess.run(["xdotool", "mousedown", "8"], check=True,
+                               timeout=5)
+                if self._wait(lambda s: s.get("recording"), 1.5, 0.1):
+                    recording = True
+                    break
+                self._mouse_up_8()
+                time.sleep(0.5)
+            assert recording, "button 8 grab did not start recording"
+
+            try:
+                # the hold's ungrab_pointer landed: clicks reach the window
+                # under the pointer as REAL events (send_event False).
+                # Re-park first: this is the LIVE session - the operator's
+                # physical mouse can move the pointer mid-hold (desktop-
+                # layer flake), and the click lands wherever it is.
+                time.sleep(0.2)
+                subprocess.run(["xdotool", "mousemove", "260", "240"],
+                               check=True, timeout=5)
+                subprocess.run(["xdotool", "click", "1"], check=True,
+                               timeout=5)
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline and d.pending_events() < 2:
+                    time.sleep(0.05)
+                clicks = []
+                while d.pending_events():
+                    ev = d.next_event()
+                    if ev.type in (X.ButtonPress, X.ButtonRelease) \
+                            and not ev.send_event:
+                        clicks.append((ev.type, ev.detail))
+                assert (X.ButtonPress, 1) in clicks \
+                    and (X.ButtonRelease, 1) in clicks, \
+                    f"click did not reach the window under the pointer: {clicks}"
+
+                # 3. mouseup 8 -> release detected (raw XI2): stop & transcribe
+                subprocess.run(["xdotool", "mouseup", "8"], check=True,
+                               timeout=5)
+                assert self._wait(
+                    lambda s: not s.get("recording") and s.get("ok"), 10), \
+                    "hold did not end on button release"
+            finally:
+                self._mouse_up_8()
+                try:
+                    control.request("cancel")
+                except Exception:
+                    pass
+
+            # best-effort: let the take transcribe while focus is the
+            # harmless receiver window (no assertion - GPU timing)
+            self._wait(lambda s: not s.get("recording") and not s.get("busy"),
+                       30, 0.5)
+        finally:
+            self._mouse_up_8()
+            if prev_pointer is not None:
+                subprocess.run(["xdotool", "mousemove", str(prev_pointer[0]),
+                                str(prev_pointer[1])], timeout=5)
+            if win is not None:
+                try:
+                    if prev_focus is not None:
+                        prev_focus.set_input_focus(X.RevertToParent,
+                                                   X.CurrentTime)
+                except Exception:
+                    pass
+                try:
+                    win.unmap()
+                    win.destroy()
+                    d.sync()
+                except Exception:
+                    pass
+            d.close()
+
+    def test_escape_cancels_hold(self, daemon_mouse_ptt):
+        assert self._wait(lambda s: s.get("mouse_ptt_grabbed") is True, 10)
+        try:
+            subprocess.run(["xdotool", "mousedown", "8"], check=True,
+                           timeout=5)
+            assert self._wait(lambda s: s.get("recording"), 2), \
+                "button 8 grab did not start recording"
+            time.sleep(0.3)  # the hold's Escape grab must be established
+            subprocess.run(["xdotool", "key", "Escape"], check=True, timeout=5)
+            assert self._wait(
+                lambda s: not s.get("recording") and s.get("ok"), 3), \
+                "Escape did not cancel the mouse hold"
+        finally:
+            self._mouse_up_8()
+            try:
+                control.request("cancel")
+            except Exception:
+                pass
+
+    def _close_quietly(self, display):
+        try:
+            display.close()
+        except Exception:
+            pass
+
+    def test_blocked_arm_then_recovery(self, daemon_mouse_ptt, tmp_path):
+        from tests.integration.conftest import _spawn_and_wait, _stop_daemon
+        from Xlib import X
+        from Xlib.display import Display
+
+        from fluidvoice.hotkey import _LOCK_MASKS
+
+        # 1. tear the fixture's daemon down FIRST (it holds the button-8
+        #    grabs); its X connection drop frees them
+        daemon_mouse_ptt.terminate()
+        try:
+            daemon_mouse_ptt.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            daemon_mouse_ptt.kill()
+            daemon_mouse_ptt.wait(timeout=5)
+        # 2. pre-hold EVERY lock-mask combo of button 8, then spawn: the
+        #    daemon must report the arm blocked (grab refusal as data)
+        holder = Display()
+        for extra in _LOCK_MASKS:
+            holder.screen().root.grab_button(
+                8, extra, False,
+                X.ButtonPressMask | X.ButtonReleaseMask,
+                X.GrabModeAsync, X.GrabModeAsync, X.NONE, X.NONE)
+        holder.sync()
+        log_path = tmp_path / "blocked.log"
+        proc = _spawn_and_wait(tmp_path, ["--no-sounds"], log_to=log_path)
+        try:
+            assert self._wait(lambda s: s.get("mouse_ptt_grabbed") is False,
+                              5), "arm should report BLOCKED while held"
+            assert "grab refused" in log_path.read_text()
+            # 3. holder lets go (X frees passive grabs on disconnect) ->
+            #    the ~10ms retry loop re-takes within ~1 s
+            self._close_quietly(holder)
+            assert self._wait(
+                lambda s: s.get("mouse_ptt_grabbed") is True, 5), \
+                "arm did not recover after the holder released"
+            # 4. the re-taken grab actually fires
+            subprocess.run(["xdotool", "mousedown", "8"], check=True,
+                           timeout=5)
+            assert self._wait(lambda s: s.get("recording"), 2)
+        finally:
+            self._mouse_up_8()
+            try:
+                control.request("cancel")
+            except Exception:
+                pass
+            self._close_quietly(holder)
+            _stop_daemon(proc, tmp_path)

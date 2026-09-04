@@ -1,6 +1,6 @@
 # SayItErmano — Status Ledger
 
-Last updated: 2026-09-04 · v0.5.0 · **854 automated tests** (821 offline + 33 integration)
+Last updated: 2026-09-05 · v0.5.0 · **1114 automated tests** (1077 offline + 37 integration)
 · verified against upstream `altic-dev/FluidVoice` by a 5-agent audit
 (prompts/AI, punctuation rules, daemon pipeline, models, security).
 
@@ -210,6 +210,43 @@ matrix + upstream changelog with its refresh loop).
   closing its connection the grab was re-taken, `status` flipped true and
   a synthetic F9 press toggled recording — no restart
   (`tests/integration/test_live_x11.py::TestHotkeyGrabRecovery`).
+- **Mouse-button push-to-talk** (`recording.push_to_talk_button`, e.g.
+  `"button8"`; buttons 6–255, click/scroll buttons 1–5 refused by
+  validation, optional `push_to_talk_modifiers`): a spare mouse button
+  held = dictation, released = stop & transcribe; CLICKS during the hold
+  reach the window under the pointer as real events. Mechanism
+  (hotkey.MousePTTListener, the pointer twin of the keyboard hold):
+  XGrabButton passive grabs on all 8 lock-mask combos
+  (owner_events=False, GrabModeAsync, refusals as data + ~10 ms retry —
+  the keyboard pattern); the press activation is released with
+  ungrab_pointer so clicks pass through natively, and the passive grab
+  SURVIVES it (buttons have no auto-repeat, so no re-arm dance unlike
+  keys); the release is detected from XI2 RawButtonRelease events on all
+  master pointers, parsed from python-xlib's GenericEvent bytes; a
+  passive Escape grab covers cancel-during-hold. Live-verified on Xorg
+  21.1: mousedown 8 → recording; a native button-1 click reached the
+  receiver window mid-hold; mouseup 8 → stop & transcribe; Escape
+  mid-hold → cancel; a conflicting holder blocked the arm (status
+  `mouse_ptt_grabbed:false` + WARN) and releasing it re-armed within a
+  tick. Doctor reports the resolution + live arm state; `status` exposes
+  `mouse_ptt_grabbed`.
+- **Lock suppression** (`general.pause_when_locked`, default true;
+  fluidvoice/lockmon.py): while the session is locked or suspended the
+  daemon ignores every hotkey entry (keyboard, mouse PTT, tray click,
+  socket `toggle`/rewrite/command starts), cancels an active dictation
+  through the existing cancel path (watchdog off, discard, notify),
+  cancels a pending command proposal, and the tray tooltip notes
+  `paused (locked)`; `cancel` and the rest of the socket surface stay
+  available. Sources (all additive, transitions deduped): logind session
+  Lock/Unlock signals, LockedHint PropertiesChanged (GNOME's path — no
+  screensaver D-Bus name is owned there, verified live), Manager
+  PrepareForSleep (suspend counts as locked),
+  org.freedesktop/org.gnome ScreenSaver ActiveChanged where a DE owns
+  the names, plus a 5 s LockedHint reconcile poll. Without D-Bus, logind
+  or a resolvable session the watch is off with one WARN (headless boxes).
+  Live-verified: the monitor subscribes and reconciles against the real
+  logind session; the transition state machine is unit-pinned and the
+  lock flow has a documented manual check (below).
 
 ---
 
@@ -231,6 +268,12 @@ matrix + upstream changelog with its refresh loop).
 | D6: token-level difflib over the whole edit, not upstream's anchored in-range character diff expanded to token boundaries | our edit boundary is one whole History entry (a single edit event), so anchoring is trivially satisfied |
 | D7: no config toggle (upstream `automaticDictionaryLearningEnabled`, default on) | upstream's toggle gates an interruptive overlay; a passive list that only records what the user already typed needs no gate — `history.save = false` disables the signal at the source |
 | D1 corollary: suggest-only, unlike the Windows port which silently auto-adds (windows-v0.0.8: "FluidVoice adds it to your custom dictionary, with a card to undo") | silent dictionary growth degrades trust (research §5) — nothing enters without an explicit Accept |
+| Mouse PTT release detection is XI2 raw-event-driven, not button-state polling | core XQueryPointer's CARD16 mask only carries buttons 1–5 — the canonical thumb buttons (8/9) are invisible to it; XI2 RawButtonRelease is grab-independent and non-consuming (needs XI ≥ 2.1, negotiated as 2.2 directly because python-xlib hardcodes 2.0 and live Xorg then withholds release events — setup refuses to start below 2.1 rather than never fire) |
+| Mouse PTT buttons 1–5 refused outright (config validation) | a primary/wheel button PTT would swallow every click/scroll while armed — breaking the desktop; the doctor/WARN surfaces explain it |
+| Suspend is treated as locked (PrepareForSleep flips the same gate) | a suspended screen with a live dictation is exactly the bug pause_when_locked fixes |
+| GNOME lock detection goes through the logind LockedHint property, not the screensaver D-Bus name | on this GNOME neither org.freedesktop.ScreenSaver nor org.gnome.ScreenSaver is ever owned — ActiveChanged alone would miss every lock; the screensaver sources remain as fallbacks where a DE owns the names |
+| Lock latency = signal + ≤ 5 s reconcile | signals are instant for logind-locking DEs and GNOME; a pathological DE could lag to the poll — the recording-under-locked-screen bug is still fixed |
+| A pointer vanishing mid-hold (USB unplug) ends the take via the max_seconds watchdog, not instantly | no raw release ever fires; the listener stays healthy and re-arms for the next press |
 
 ---
 
@@ -329,5 +372,8 @@ c      catalog (v2 English / v3 multilingual, int8) with sha256-verified
 | Mic monitoring (pactl poll/diff/priority matching, daemon auto-switch, tray ordering) | unit (fake pactl runner, stub recorder daemon) |
 | Recorder / insertion / history / backends | stub or subprocess-mock tests |
 | Hotkey grab self-healing (error routing, retry state machine, warn cap, status/tooltip/notify/doctor surfaces) | fake-Display unit tests (no X server) + live X11 conflicting-holder recovery (blocked → WARN → release → re-take → F9 fires) |
+| Mouse push-to-talk (button parsing, XI gate, grab routing, hold-cycle state machine, daemon wiring, doctor lines) | fake-X unit tests (no X server) + live X11: arm/hold with native click passthrough/release-transcribe/Escape-cancel/blocked-arm recovery (`test_live_x11.py::TestMousePTTLive`, desktop-marked) |
+| Lock suppression (lockmon dedup/sources/session resolution, daemon gate: toggle ignored, recording cancelled, pending command cancelled, log-once, pause_when_locked flip) | unit state machine (handlers driven directly, no bus) + live monitor start/reconcile against the real logind session |
+| Manual lock check (the live lock flow cannot be exercised by CI — locking the session locks the operator's desktop) | with a running daemon and `push_to_talk_button = "button8"`: 1) start a dictation, 2) lock the session (Super+L or `loginctl lock-session`) → log shows `screen locked - hotkeys paused`, the recording is cancelled ("Cancelled" notification), tray tooltip reads `… - paused (locked)`; 3) press the dictation hotkey while locked → nothing happens; 4) unlock → `screen unlocked - hotkeys resumed`, dictation works again |
 | End-to-end speech | JFK sample through GPU transcription (pytest `-m slow`) |
 | Live hardware loop | mic→GPU transcription via speaker playback; hotkey grab on X11; acoustic JFK transcription verified verbatim |

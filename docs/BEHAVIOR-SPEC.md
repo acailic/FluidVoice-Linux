@@ -267,6 +267,23 @@ mode, mode-switch-while-recording, paste-last-transcription hotkey and
 Escape-cancel (default Escape semantics) are roadmap. Divergence: the port
 caps recordings at `max_seconds` (300 s default) where upstream has no cap.
 
+Additional ported hotkey surfaces (beyond the primary key):
+
+- **Mouse push-to-talk** (upstream PR #939 parity): ✅
+  `recording.push_to_talk_button` (e.g. `"button8"`; 6–255, click/scroll
+  buttons 1–5 refused; optional modifier qualifier) — hold the button to
+  dictate, release to stop & transcribe. Clicks during the hold reach the
+  window under the pointer as real events (the XGrabButton activation is
+  ungrab_pointer'd for the hold; the passive grab survives it). Release
+  detection is XI2 RawButtonRelease (core XQueryPointer cannot see
+  buttons > 5); Escape cancels mid-hold, same as keyboard holds.
+- **Locked-screen suppression**: ✅ `general.pause_when_locked` (default
+  true) — while the session is locked/suspended every hotkey entry is
+  ignored (logged once per transition), an active dictation is cancelled
+  (discarded, not transcribed), and the tray tooltip notes
+  `paused (locked)`; logind Lock/Unlock + LockedHint + PrepareForSleep +
+  screensaver fallback (fluidvoice/lockmon.py).
+
 ---
 
 ## 5. Text insertion

@@ -330,6 +330,9 @@ class Daemon:
         self._warmup_lock = threading.Lock()
         self._lock = threading.Lock()
         self._hotkey = None
+        self._mouse_ptt: Any = None  # MousePTTListener when configured
+        self._locked = False  # session locked/suspended (lockmon flips)
+        self._lockmon: Any = None  # lockmon.LockMonitor when active
         self._rewrite_hotkey = None
         self._srv: Any = None
         self._process_thread: threading.Thread | None = None
@@ -364,9 +367,11 @@ class Daemon:
 
         if self.use_hotkey:
             self._start_hotkey()
+        self._start_mouse_ptt()
 
         self._start_tray()
         self._start_micmon()
+        self._start_lockmon()
         self._maybe_first_run_onboard()
 
         ready = threading.Event()
@@ -515,6 +520,55 @@ class Daemon:
         log("mic monitoring active")
         self._mic_reselect(mon.last_names)  # startup recovery
 
+    # -- session lock / suspend watch (pause_when_locked) --------------------
+
+    def _start_lockmon(self) -> None:
+        """Best-effort lock/suspend watch (the tray/micmon contract): while
+        the session is locked or suspended, hotkey entries are ignored and
+        an active dictation is cancelled (see lockmon.py for the sources)."""
+        if not self.cfg.get("general", {}).get("pause_when_locked", True):
+            return  # feature disabled
+        from .lockmon import LockMonitor
+        mon = LockMonitor(on_change=self._on_locked, log=log)
+        if not mon.start():
+            return  # already logged why (headless / no logind session)
+        self._lockmon = mon
+        log("lock watch active (hotkeys pause while the screen is locked)")
+
+    def _on_locked(self, locked: bool) -> None:
+        """lockmon callback - transitions only (the monitor dedups). The
+        transition logs once here; per-press gating in toggle() stays
+        quiet so a locked screen with a stuck hotkey cannot spam."""
+        if locked:
+            log("screen locked - hotkeys paused")
+            with self._lock:
+                was_recording = self.recording
+            if was_recording:
+                self.cancel()  # existing path: watchdog off, discard, notify
+            if self._command_pending:
+                self.cancel_pending_command()
+            self._refresh_tray()
+        else:
+            log("screen unlocked - hotkeys resumed")
+            self._refresh_tray()
+
+    def _apply_lock_setting(self) -> None:
+        """general.pause_when_locked flipped live: start/stop the monitor.
+        Stopping also clears the paused state (hotkeys resume at once)."""
+        enabled = bool(self.cfg.get("general", {})
+                       .get("pause_when_locked", True))
+        if enabled:
+            if self._lockmon is None:
+                self._start_lockmon()
+            return
+        if self._lockmon is not None:
+            self._lockmon.stop()
+            self._lockmon = None
+        if self._locked:
+            self._locked = False
+            log("lock pause disabled - hotkeys resume")
+        self._refresh_tray()
+
     def _on_sources_changed(self, added, removed, current) -> None:
         if added or removed:
             log(f"audio sources: +{', '.join(added) or '—'} "
@@ -562,6 +616,11 @@ class Daemon:
                 self._hotkey.set_recording(recording)  # Escape grab while up
             except Exception:
                 pass
+        if self._mouse_ptt is not None:
+            try:
+                self._mouse_ptt.set_recording(recording)
+            except Exception:
+                pass
 
     def _tray_tooltip(self) -> str:
         with self._lock:
@@ -577,6 +636,8 @@ class Daemon:
         hotkey = self._hotkey  # snapshot: the tray thread reads this too
         if hotkey is not None and not hotkey.hotkey_grabbed:
             tip += " - hotkey blocked!"
+        if self._locked:
+            tip += " - paused (locked)"
         return tip
 
     def _spawn_app(self, *args: str) -> None:
@@ -607,6 +668,9 @@ class Daemon:
         if self._micmon:
             self._micmon.stop()
             self._micmon = None
+        if self._lockmon:
+            self._lockmon.stop()
+            self._lockmon = None
         self._stop_preview()
         self._close_closing_display()
         self.cancel_pending_command()  # pill + Escape grab gone before hotkeys
@@ -614,6 +678,8 @@ class Daemon:
             self._tray.stop()
         if self._hotkey:
             self._hotkey.stop()
+        if self._mouse_ptt:
+            self._mouse_ptt.stop()
         if self._rewrite_hotkey:
             self._rewrite_hotkey.stop()
         if self._command_hotkey:
@@ -743,6 +809,80 @@ class Daemon:
             raise RuntimeError(f"hotkey re-bind failed: {error} "
                                "(fix the key and save again)")
 
+    def _start_mouse_ptt(self) -> str | None:
+        """(Re-)arm mouse push-to-talk (XGrabButton press + XI2 raw
+        release detection, see hotkey.MousePTTListener). Empty config =
+        off (silent skip). Failures WARN + notify but never kill the
+        daemon - the keyboard hotkey keeps working. Returns the first
+        error, if any."""
+        from .hotkey import HotkeyError, MousePTTListener, parse_button_spec
+        spec = (self.cfg["recording"].get("push_to_talk_button") or "").strip()
+        try:
+            button = parse_button_spec(spec)
+        except HotkeyError as e:
+            log(f"WARN mouse PTT unavailable: {e}")
+            ui.notify("SayItErmano",
+                      f"Mouse push-to-talk unavailable: {e}\n"
+                      "Fix recording.push_to_talk_button in the config.",
+                      timeout_ms=8000,
+                      enabled=self.cfg["notifications"]["enabled"])
+            return str(e)
+        if button is None:
+            return None  # not configured: keyboard hotkey only
+        try:
+            self._mouse_ptt = MousePTTListener(
+                button=button,
+                modifiers=self.cfg["recording"].get(
+                    "push_to_talk_modifiers", []),
+                on_toggle=self.toggle,
+                on_cancel=self.cancel,
+                cancel_key=self.cfg["hotkey"].get("cancel_key", "Escape"),
+                log=log,
+                on_grab_change=lambda healthy: self._refresh_tray())
+            self._mouse_ptt.start()
+            for line in self._mouse_ptt.summary:
+                log(line)
+            self._log_mouse_grab_state(self._mouse_ptt)
+        except HotkeyError as e:
+            self._mouse_ptt = None
+            log(f"WARN mouse PTT unavailable: {e}")
+            ui.notify("SayItErmano", f"Mouse push-to-talk unavailable: {e}",
+                      timeout_ms=8000,
+                      enabled=self.cfg["notifications"]["enabled"])
+            return str(e)
+        return None
+
+    def _log_mouse_grab_state(self, listener) -> None:
+        """Startup honesty for the button grab (see _log_grab_state): a
+        refused combo set is loud instead of a silently dead button."""
+        try:
+            healthy = listener.button_grabbed
+        except Exception:
+            return
+        if healthy:
+            return
+        log(f"WARN mouse PTT button {listener.button} grab refused - "
+            "held by another client, will retry")
+        ui.notify("SayItErmano",
+                  "Mouse button grab refused — another app holds it; "
+                  "retrying automatically", timeout_ms=8000,
+                  enabled=self.cfg["notifications"]["enabled"])
+
+    def _restart_mouse_ptt(self) -> None:
+        """Re-arm mouse PTT after a settings change (frees the old grab
+        first). Raises on failure so the settings UI can surface it - the
+        same contract as _restart_hotkey."""
+        if self._mouse_ptt is not None:
+            try:
+                self._mouse_ptt.stop()
+            except Exception as e:
+                log(f"WARN stopping old mouse PTT grab failed: {e}")
+            self._mouse_ptt = None
+        error = self._start_mouse_ptt()
+        if error:
+            raise RuntimeError(f"mouse push-to-talk re-bind failed: {error} "
+                               "(fix the button and save again)")
+
     def _rebuild_recorder(self) -> None:
         """New Recorder from the current cfg (command/device changed)."""
         rcfg = self.cfg["recording"]
@@ -775,6 +915,9 @@ class Daemon:
 
         if any(k.startswith("hotkey.") for k in changed):
             _try("hotkeys", self._restart_hotkey)
+        if any(k in ("recording.push_to_talk_button",
+                     "recording.push_to_talk_modifiers") for k in changed):
+            _try("mouse push-to-talk", self._restart_mouse_ptt)
         if "recording.command" in changed:
             _try("recorder", self._rebuild_recorder)
         if "recording.device" in changed:
@@ -786,6 +929,8 @@ class Daemon:
             _try("microphone", _set_mic)
         if "general.tray_enabled" in changed:
             _try("tray", self._apply_tray_setting)
+        if "general.pause_when_locked" in changed:
+            _try("lock pause", self._apply_lock_setting)
         return {"applied": applied, "errors": errors}
 
     # -- model warmup / hot-swap (native-app spec: select-model over socket) ----
@@ -906,6 +1051,12 @@ class Daemon:
                     # lock-mask combo not held (blocked, daemon retrying)
                     "hotkey_grabbed": (self._hotkey.hotkey_grabbed
                                        if self._hotkey is not None else None),
+                    # None = no button configured (or unavailable); False =
+                    # the button grab is refused and being retried
+                    "mouse_ptt_grabbed": (self._mouse_ptt.button_grabbed
+                                          if self._mouse_ptt is not None
+                                          else None),
+                    "locked": self._locked,
                     "warmup": dict(self.warmup),
                     "active_model": self._active_model_name(),
                     "active_model_key": backends.backend_model_key(self.backend)
@@ -976,6 +1127,8 @@ class Daemon:
 
     def start_rewrite(self) -> None:
         """Rewrite hotkey: capture the selection, then record the instruction."""
+        if self._locked:
+            return  # session locked: hotkey entries ignored
         from . import rewrite as rewrite_mod
         with self._lock:
             if self.recording or self.busy:
@@ -992,6 +1145,8 @@ class Daemon:
 
     def start_command(self) -> None:
         """Command hotkey: start recording the spoken instruction."""
+        if self._locked:
+            return  # session locked: hotkey entries ignored
         from . import command as command_mod
         with self._lock:
             if self.recording or self.busy or self._command_pending:
@@ -1016,6 +1171,10 @@ class Daemon:
             self.start_command()  # guards make this a no-op mid-recording
 
     def toggle(self) -> bool:
+        if self._locked:
+            # session locked: ignore the press quietly (the transition was
+            # logged once; do not swallow into a recording state)
+            return False
         with self._lock:
             if self.recording:
                 self._stop_recording_locked()

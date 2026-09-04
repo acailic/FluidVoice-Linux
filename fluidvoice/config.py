@@ -28,6 +28,9 @@ DEFAULTS: dict[str, Any] = {
             "kitty", "wezterm", "ghostty", "foot", "tilix", "terminator",
             "guake", "yakuake", "st-256color", "warp",
         ],
+        # hotkeys ignored + active dictation cancelled while the session is
+        # locked/suspended (logind lock watch, see fluidvoice/lockmon.py)
+        "pause_when_locked": True,
     },
     "hotkey": {
         # X11 keysym name. Modifier-only keys (Right_Control, Right_Alt,
@@ -64,6 +67,12 @@ DEFAULTS: dict[str, Any] = {
         "preview_bottom_offset": 64,  # pill px above the screen bottom edge
         "preview_overlay_size": "medium",  # pill | small | medium | large (macOS sizes)
         "pause_media": True,  # pause MPRIS players while dictating (resume after)
+        # mouse push-to-talk: "button8"/"b8" (6-255; 1-5 refused - they would
+        # break the desktop). Empty = off. Independent of hotkey.mode - the
+        # button is always hold-style.
+        "push_to_talk_button": "",
+        # extra modifiers to require for the button (any of ctrl/alt/shift/super)
+        "push_to_talk_modifiers": [],
     },
     "model": {
         "backend": "auto",  # auto | faster-whisper | whisper-torch | whisper.cpp | parakeet
@@ -174,6 +183,9 @@ copy_to_clipboard = false
 # spoken-send never presses Enter (a half-typed shell line would EXECUTE)
 # and typed insertions gain one trailing space so autocomplete commits.
 terminal_apps = ["gnome-terminal", "kgx", "konsole", "xterm", "alacritty", "kitty", "wezterm", "ghostty", "foot", "tilix", "terminator", "guake", "yakuake", "st-256color", "warp"]
+# Ignore hotkeys and cancel an active dictation while the session is
+# locked/suspended (logind lock watch; tray notes "paused (locked)")
+pause_when_locked = true
 
 [hotkey]
 # X11 keysym name of the dictation hotkey. Examples:
@@ -211,6 +223,13 @@ max_seconds = 300
 skip_silent = false
 # Stop early when the microphone sends no audio at all (muted/wrong device)
 first_pcm_timeout = 2.0
+# Mouse push-to-talk: hold this button to dictate (always hold-style,
+# independent of hotkey.mode). "button8"/"b8"/"8" - buttons 6-255 only;
+# 1-5 (click/scroll) are refused, they would break the desktop. Thumb
+# buttons are usually 8/9 (6/7 on some mice). Empty = off.
+push_to_talk_button = ""
+# Extra modifiers to require for the button, e.g. ["ctrl"]
+push_to_talk_modifiers = []
 
 [model]
 # auto | faster-whisper | whisper-torch | whisper.cpp | parakeet
@@ -321,7 +340,7 @@ def write_template(path: Path | None = None) -> Path:
 
 _SAVE_WHITELIST: dict[str, list[str]] = {
     "general": ["language", "copy_to_clipboard", "tray_enabled",
-                "terminal_apps"],
+                "terminal_apps", "pause_when_locked"],
     "hotkey": ["key", "modifiers", "mode", "cancel_key", "rewrite_key",
                 "command_key"],
     "recording": ["command", "device", "mic_priority", "max_seconds",
@@ -330,7 +349,8 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
                   "spoken_send_key", "preview_enabled", "preview_mode",
                   "preview_interval", "preview_min_audio",
                   "preview_bottom_offset", "preview_overlay_size",
-                  "pause_media"],
+                  "pause_media", "push_to_talk_button",
+                  "push_to_talk_modifiers"],
     "model": ["backend", "name", "device", "compute", "whispercpp_model",
               "eager_warmup", "languages"],
     "processing": ["remove_filler_words", "filler_words", "punctuation_enabled",
@@ -353,7 +373,9 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
 # Keys where an EMPTY value is meaningful (not "keep the saved value"):
 # ai.base_prompt = "" restores the built-in prompt, so a cleared editor
 # must actually clear the file instead of carrying the old value over.
-_EMPTY_IS_MEANINGFUL = {("ai", "base_prompt")}
+_EMPTY_IS_MEANINGFUL = {("ai", "base_prompt"),
+                         # an empty button spec turns mouse PTT off
+                         ("recording", "push_to_talk_button")}
 
 
 def _toml_value(value: Any) -> str:
@@ -457,6 +479,7 @@ SETTING_ENUMS: dict[tuple[str, str], set] = {
     ("recording", "spoken_send_key"): {"enter", "shift+enter", "ctrl+enter"},
 }
 SETTING_BOOLS = {("general", "copy_to_clipboard"), ("general", "tray_enabled"),
+                 ("general", "pause_when_locked"),
                  ("recording", "pause_media"), ("recording", "preview_enabled"),
                  ("recording", "skip_silent"),
                  ("recording", "spoken_send_enabled"),
@@ -474,10 +497,11 @@ SETTING_BOOLS = {("general", "copy_to_clipboard"), ("general", "tray_enabled"),
                  ("model", "eager_warmup")}
 # list-valued pass-through keys the UI owns
 SETTING_LISTS = (("processing", "filler_words"), ("processing", "dictionary"),
-                 ("hotkey", "modifiers"), ("recording", "mic_priority"))
+                 ("hotkey", "modifiers"), ("recording", "mic_priority"),
+                 ("recording", "push_to_talk_modifiers"))
 ALLOWED_SETTINGS: dict[str, set] = {
     "general": {"language", "copy_to_clipboard", "tray_enabled",
-                "terminal_apps"},
+                "terminal_apps", "pause_when_locked"},
     "hotkey": {"key", "modifiers", "mode", "cancel_key", "rewrite_key",
                "command_key"},
     "recording": {"command", "device", "mic_priority", "max_seconds",
@@ -486,7 +510,8 @@ ALLOWED_SETTINGS: dict[str, set] = {
                   "spoken_send_phrase", "spoken_send_key",
                   "preview_enabled", "preview_mode", "preview_interval",
                   "preview_min_audio", "preview_bottom_offset",
-                  "preview_overlay_size", "pause_media"},
+                  "preview_overlay_size", "pause_media",
+                  "push_to_talk_button", "push_to_talk_modifiers"},
     "model": {"backend", "name", "device", "compute", "whispercpp_model",
               "eager_warmup", "languages"},
     "processing": {"remove_filler_words", "filler_words",
@@ -528,6 +553,8 @@ def coerce_setting(section: str, key: str, value: Any) -> tuple[bool, Any]:
         # empty IS valid here (clearing the editor restores the built-in
         # prompt), unlike the str-range rule below which rejects ""
         return (isinstance(value, str) and len(value) <= 8000, value)
+    if (section, key) == ("recording", "push_to_talk_button"):
+        return _coerce_button_spec(value)
     rule = SETTING_RANGES.get((section, key))
     if rule:
         kind, bound = rule
@@ -551,8 +578,10 @@ def coerce_setting(section: str, key: str, value: Any) -> tuple[bool, Any]:
     if (section, key) in SETTING_LISTS:
         if not isinstance(value, list):
             return (False, value)
-        if key == "modifiers" and any(m not in ("ctrl", "alt", "shift", "super")
-                                      for m in value):
+        if (section, key) in (("hotkey", "modifiers"),
+                              ("recording", "push_to_talk_modifiers")) \
+                and any(m not in ("ctrl", "alt", "shift", "super")
+                        for m in value):
             return (False, value)
         if key == "filler_words" and any(not isinstance(w, str) or len(w) > 64
                                          or not w.strip() for w in value):
@@ -566,6 +595,21 @@ def coerce_setting(section: str, key: str, value: Any) -> tuple[bool, Any]:
                     return (False, value)
         return (True, value)
     return (False, value)  # unknown key -> reject
+
+
+def _coerce_button_spec(value: Any) -> tuple[bool, Any]:
+    """recording.push_to_talk_button: "" (off) or a button spec such as
+    "button8"/"b8"/"8". Normalized to the canonical "button<N>" form via
+    hotkey.parse_button_spec; buttons 1-5 (click/scroll), > 255 and
+    unparsable values reject the whole setting."""
+    if not isinstance(value, str) or len(value) > 32:
+        return (False, value)
+    from .hotkey import HotkeyError, parse_button_spec
+    try:
+        button = parse_button_spec(value)
+    except HotkeyError:
+        return (False, value)
+    return (True, "" if button is None else f"button{button}")
 
 
 def _coerce_mic_priority(value: Any) -> tuple[bool, Any]:

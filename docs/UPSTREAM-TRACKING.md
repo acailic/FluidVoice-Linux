@@ -89,9 +89,9 @@ new that Linux doesn't have" a one-command answer.
 
 | Upstream change | Linux | Notes |
 |---|---|---|
-| Mouse-button hotkeys: event-tap isolation, interrupted mouse holds, press lifecycle (3 fixes, PR #939) | ⏳ | our hotkeys are keyboard-only (XGrabKey); mouse-button push-to-talk (XGrabButton + button-state polling) is a parity candidate on ROADMAP Later |
+| Mouse-button hotkeys: event-tap isolation, interrupted mouse holds, press lifecycle (3 fixes, PR #939) | ✅ | `recording.push_to_talk_button` arms XGrabButton (all lock-mask combos); mechanism mapping — event-tap isolation = the grab activation is ungrab_pointer'd for the hold so clicks pass through natively (and the passive grab SURVIVES it, no re-arm needed); interrupted mouse holds = release detection via XI2 RawButtonRelease + Escape cancel-during-hold; press lifecycle = full press/hold/release state machine (hotkey.MousePTTListener) |
 | Ignored microphones stay removed after reconnect (fixes #933) | ✅ | nothing to port: our `recording.mic_priority` is a static pattern list — there is no per-device suppression set that could resurrect on reconnect; removals persist by design |
-| Locked-screen shortcut suppression + dock visibility | ➖ / ⏳ | dock is macOS-only; suppressing hotkeys while the screen is locked is a small candidate (X11 lock-state check) |
+| Locked-screen shortcut suppression + dock visibility | ➖ / ✅ | dock stays macOS-only; hotkey suppression while locked is DONE via fluidvoice/lockmon.py — logind session Lock/Unlock + LockedHint PropertiesChanged (GNOME's path, no screensaver name is owned there), PrepareForSleep (suspend counts as locked), screensaver ActiveChanged fallback, ≤5 s LockedHint reconcile; active dictations cancel, tray notes `paused (locked)` (`general.pause_when_locked`) |
 | Debug-preferences test isolation | ➖ | upstream test-only |
 
 ### Unreleased upstream (after v1.6.9 → `b60a302`, 2026-08-19 → 09-01)

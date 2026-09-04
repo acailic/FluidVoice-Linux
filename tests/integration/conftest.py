@@ -135,6 +135,23 @@ def daemon_hold_hotkey(isolated_env, tmp_path):
 
 
 @pytest.fixture()
+def daemon_mouse_ptt(isolated_env, tmp_path):
+    """A real daemon with mouse push-to-talk armed on button 8 (a spare
+    thumb button; 1-5 are click/scroll and refused by validation)."""
+    isolated_env.write_text(
+        isolated_env.read_text().replace(
+            'first_pcm_timeout = 0\n',
+            'first_pcm_timeout = 0\npush_to_talk_button = "button8"\n'))
+    proc = _spawn_and_wait(tmp_path, ["--no-sounds"])
+    yield proc
+    # a stray held button poisons later grabs (XTEST state dedup): always
+    # mouseup defensively before the daemon goes away
+    subprocess.run(["xdotool", "mouseup", "8"], timeout=5,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _stop_daemon(proc, tmp_path)
+
+
+@pytest.fixture()
 def daemon_blocked_hotkey(isolated_env, tmp_path):
     """A real daemon whose F9 grab is refused by a deliberate conflicting
     holder: this fixture pre-grabs ALL lock-mask combos of F9 on the root

@@ -232,6 +232,8 @@ converts via ffmpeg since `whisper-cli` reliably reads WAV only.
 | Push hotkey → dictate → text in any app | ✅ (Right ⌥) | ✅ (Right Ctrl / any key) |
 | 100% local transcription | ✅ (Parakeet/Nemotron/Whisper/Apple) | ✅ (faster-whisper/whisper.cpp/Parakeet TDT via ONNX; `backend = "parakeet"`) |
 | Toggle & hold (push-to-talk) modes | ✅ | ✅ toggle; hold for non-modifier keys (other keys pass through while held) |
+| Mouse-button push-to-talk | ✅ (PR #939) | ✅ spare button 6–255 (`recording.push_to_talk_button = "button8"`; clicks pass through while held; buttons 1–5 refused) |
+| Hotkeys pause while the screen is locked | ✅ | ✅ `general.pause_when_locked` (logind watch; active dictation cancels, tray notes `paused (locked)`) |
 | Filler-word removal + custom dictionary | ✅ | ✅ (same defaults) |
 | Spoken punctuation ("literal comma") | ✅ full rule table | ✅ ported (dot/slash/at-sign contexts included) |
 | AI polish with the original prompt | ✅ (local Fluid Intelligence or cloud) | ✅ (any OpenAI-compatible endpoint; no bundled local LLM yet) |
@@ -280,6 +282,13 @@ terminal_apps = ["gnome-terminal", "kgx", "konsole", "xterm", "alacritty", "kitt
 [recording]
 mic_priority = ["bluez", "usb-cam"]  # fallback order when the chosen mic vanishes
 # (Bluetooth headset first, then a USB webcam; switch never happens mid-take)
+# Mouse push-to-talk: hold a spare button to dictate (always hold-style,
+# independent of hotkey.mode). Thumb buttons are usually 8/9; 1–5 refused.
+push_to_talk_button = "button8"  # "" = off
+
+[general]
+# Ignore hotkeys + cancel active dictation while the session is locked
+pause_when_locked = true
 
 [processing]
 dictionary = [ { triggers = ["miro board"], replacement = "Miro board" } ]

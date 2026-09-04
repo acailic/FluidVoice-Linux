@@ -14,6 +14,21 @@
   live Xorg 21.1 silently drops XTEST fakes that match the current key
   state - the original event already flipped it - so replayed presses
   are deduped away and never reach the app.)
+- "MousePTTListener": mouse-button push-to-talk via XGrabButton. The press
+  is a core passive grab (all lock-mask combos, owner_events=False); the
+  grab activation is released with ungrab_pointer so CLICKS during the
+  hold pass through to the focused window natively, and the passive grab
+  SURVIVES that ungrab (buttons have no auto-repeat, unlike keys, so no
+  re-arm dance is needed). Release detection is XI2 RawButtonRelease:
+  core XQueryPointer's CARD16 mask only carries buttons 1-5, which cannot
+  see the canonical thumb buttons (8/9), so the listener subscribes to raw
+  events on all master pointers and parses them from python-xlib's
+  GenericEvent bytes (RawButtonRelease is not registered in the ge table).
+  RawButtonRelease requires a negotiated XI version > 2.0 - python-xlib
+  hardcodes XIQueryVersion(2,0) and live Xorg then silently withholds the
+  release events - so XI 2.2 is negotiated directly as the connection's
+  FIRST XI2 request (the version is fixed per client at first ask).
+  A passive Escape grab covers cancel-during-hold, like keyboard holds.
 """
 from __future__ import annotations
 
@@ -21,6 +36,7 @@ import threading
 
 from Xlib import X, XK
 from Xlib.display import Display
+from Xlib.ext import xinput as _xi_ext
 
 MODIFIER_MASKS = {
     "ctrl": X.ControlMask,
@@ -55,11 +71,97 @@ class HotkeyError(RuntimeError):
     pass
 
 
+# Mouse push-to-talk button range: 1-3 are click buttons, 4-5 are scroll
+# (wheel) buttons - grabbing any of those would break the desktop, so the
+# parser refuses them. X's button detail is a CARD8 (<= 255).
+MOUSE_PTT_MIN_BUTTON = 6
+MOUSE_PTT_MAX_BUTTON = 255
+
+
+def parse_button_spec(name: str) -> int | None:
+    """Config value -> X button number for mouse push-to-talk.
+
+    None for ""/blank/"none" (feature off). Accepts "button8", "b8", "8",
+    "Button 8" (case/space insensitive, leading zeros stripped). Buttons
+    1-5 raise HotkeyError (a click/scroll button would break the desktop:
+    the grab would swallow every primary click while armed); so does
+    anything unparsable or outside the 6-255 CARD8 range."""
+    raw = (name or "").strip()
+    if not raw or raw.lower() in ("none", "off", "disabled"):
+        return None
+    normalized = raw.lower().replace(" ", "")
+    if normalized.startswith("button"):
+        normalized = normalized[len("button"):]
+    elif normalized.startswith("b"):
+        normalized = normalized[1:]
+    if not normalized.isdigit():
+        raise HotkeyError(f"invalid mouse button '{name}' (expected e.g. "
+                          "'button8', 'b8' or '8')")
+    button = int(normalized)
+    if not MOUSE_PTT_MIN_BUTTON <= button <= MOUSE_PTT_MAX_BUTTON:
+        if 1 <= button <= 3:
+            kind = "primary/click button"
+        elif 4 <= button <= 5:
+            kind = "scroll/wheel button"
+        else:
+            raise HotkeyError(f"mouse button '{name}' out of range "
+                              f"({MOUSE_PTT_MIN_BUTTON}-"
+                              f"{MOUSE_PTT_MAX_BUTTON})")
+        raise HotkeyError(f"mouse button {button} is a {kind} - grabbing it "
+                          "would break the desktop; push-to-talk needs a "
+                          "spare button (thumb buttons are usually 8/9)")
+    return button
+
+
+def parse_raw_button_event(data) -> tuple[int, int] | None:
+    """(deviceid, button) from a raw XI2 GenericEvent's .data bytes, or
+    None when the payload is missing/too short/non-bytes.
+
+    python-xlib does not register RawButton{Press,Release} in its generic-
+    event table, so they arrive as GenericEvent with `.evtype` (15 = press,
+    16 = release) and `.data` = the raw wire payload past the 10-byte
+    generic header. Little-endian layout: CARD16 deviceid @ [0:2], CARD32
+    time @ [2:6], CARD32 detail (= the button number) @ [6:10]."""
+    if not isinstance(data, (bytes, bytearray)) or len(data) < 10:
+        return None
+    return (int.from_bytes(data[0:2], "little"),
+            int.from_bytes(data[6:10], "little"))
+
+
+# XI2 evtype numbers for raw events (XIRawEvent; evtype is on the
+# GenericEvent because python-xlib leaves Raw* unregistered - see above)
+_XI_RAW_BUTTON_PRESS = _xi_ext.RawButtonPress    # 15
+_XI_RAW_BUTTON_RELEASE = _xi_ext.RawButtonRelease  # 16
+
+
+def _xi_query_version(display, major: int, minor: int):
+    """XIQueryVersion built directly with a caller-chosen version.
+
+    python-xlib's Display.xinput_query_version hardcodes (2, 0), and live
+    Xorg delivers RawButtonRelease only to clients that negotiated > 2.0
+    (with 2.0 you get raw presses but never releases - verified
+    side-by-side against `xinput test-xi2 --root`). The negotiated version
+    is fixed per client at its FIRST XI2 request, so this must be called
+    before any other XI2 request on the connection."""
+    return _xi_ext.XIQueryVersion(
+        display=display,
+        opcode=display.get_extension_major(_xi_ext.extname),
+        major_version=major,
+        minor_version=minor)
+
+
 # Verdicts for one keyboard event seen during a hold cycle (see
 # classify_hold_event). In the native-passthrough design only ABORT is
 # consumed by the hold loop; REPLAY-classified keys flow straight to the
 # focused app and are never delivered to us at all.
 _HOLD_END, _HOLD_ABORT, _HOLD_REPLAY, _HOLD_IGNORE = "end", "abort", "replay", "ignore"
+# verdicts for one event seen during a MOUSE hold cycle (see
+# MousePTTListener._classify_hold_event): END = raw release of the PTT
+# button, ABORT = Escape press, REPRESS = the same button pressed again
+# mid-hold by another pointer (passive-grab re-activation; tolerated by
+# ungrabbing again), IGNORE = everything else (raw presses, other buttons,
+# motions, the aborting key's release)
+_MOUSE_HOLD_REPRESS = "re-press"
 
 
 def classify_hold_event(etype, detail, hotkey_keycode, escape_keycode) -> str:
@@ -493,6 +595,434 @@ class HotkeyListener:
             self._safe(self.on_cancel)
         else:
             self._safe(self.on_toggle)  # stop and transcribe
+
+    def _safe(self, cb) -> None:
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception:
+            pass
+
+
+class MousePTTListener:
+    """Mouse push-to-talk via XGrabButton + XI2 raw release events.
+
+    Mirrors HotkeyListener hold mode with the pointer twin of each
+    mechanism (upstream macOS PR #939 parity): press -> on_toggle (start)
+    via a passive core button grab over every lock-mask combo
+    (owner_events=False, GrabModeAsync); the grab activation is released
+    with ungrab_pointer immediately so CLICKS during the hold pass through
+    to the window under the pointer natively - and the passive grab
+    SURVIVES that ungrab (buttons have no auto-repeat, unlike keys, so no
+    re-arm dance is needed on hold end). Release -> on_toggle (stop &
+    transcribe), detected from XI2 RawButtonRelease events on all master
+    pointers: core XQueryPointer's CARD16 mask only carries buttons 1-5
+    and cannot see the canonical thumb buttons (8/9), and raw events are
+    grab-independent and non-consuming. Escape while holding -> on_cancel
+    via a passive key grab armed just for the hold (the keyboard twin's
+    cancel-during-hold design). Small helpers duplicate the keyboard
+    twin's battle-tested machinery on purpose - do not refactor one to
+    serve both; keycodes and buttons entangle differently."""
+
+    def __init__(self, button: int, modifiers: list[str], on_toggle,
+                 on_cancel=None, cancel_key: str | None = "Escape",
+                 display_name: str | None = None,
+                 log=None, on_grab_change=None):
+        self.button = button
+        self.on_toggle = on_toggle
+        self.on_cancel = on_cancel
+        self.cancel_key = cancel_key
+        self.display_name = display_name
+        self.log = log or (lambda m: print(f"[sayit-ermano] {m}", flush=True))
+        self._on_grab_change = on_grab_change or (lambda healthy: None)
+        self._mods = sum(MODIFIER_MASKS.get(m, 0) for m in modifiers)
+        self.modifiers = list(modifiers)
+        self._thread: threading.Thread | None = None
+        self._stop_flag = threading.Event()
+        self._display: Display | None = None
+        self._cancel_keycode: int | None = None
+        self._escape_keycode: int | None = None
+        self._want_cancel = False   # recording active -> grab the cancel key
+        self._cancel_grabbed = False
+        self._cancel_grab_warned = False
+        self._holding = False       # a hold cycle is in progress
+        self._released = False      # raw release seen for the held button
+        # Grab health per (button/keycode, full modifier mask) combo - the
+        # same refusal-as-data contract as the keyboard twin (python-xlib
+        # never raises BadAccess through grab_*; the per-request onerror
+        # closure flips the combo missing, _sync_button_grab retries).
+        self._combo_ok: dict[tuple[int, int], bool] = {}
+        self._combo_attempts: dict[tuple[int, int], int] = {}
+        self._pending: set[tuple[int, int]] = set()
+        self._refuse_warned = False
+        self._was_healthy: bool | None = None
+        self._summary: list[str] = []
+
+    # -- setup ---------------------------------------------------------------
+
+    def _keycode_for(self, keysym: int) -> int:  # the keyboard twin's helper
+        assert self._display is not None
+        code = self._display.keysym_to_keycode(keysym)
+        return code or 0
+
+    def _negotiate_xi(self, d) -> bool:
+        """XI 2.2 as the connection's FIRST XI2 request; True when the
+        server negotiates >= 2.1 (below that, RawButtonRelease is never
+        delivered and release detection would silently never fire)."""
+        try:
+            if not d.has_extension(_xi_ext.extname):
+                return False
+            reply = _xi_query_version(d.display, 2, 2)
+            major, minor = int(reply.major_version), int(reply.minor_version)
+        except Exception:
+            return False
+        return (major, minor) >= (2, 1)
+
+    def _make_grab_onerror(self, combo: tuple[int, int]):
+        """Per-request error handler for one grab combo (the keyboard
+        twin's contract): trivial, records data, returns truthy."""
+        def _onerror(_error, _request) -> int:
+            self._combo_ok[combo] = False
+            self._pending.discard(combo)
+            attempts = self._combo_attempts.get(combo, 0) + 1
+            self._combo_attempts[combo] = attempts
+            if attempts >= _MAX_GRAB_ATTEMPTS and not self._refuse_warned:
+                self._refuse_warned = True
+                self.log(f"WARN mouse PTT grab still refused after "
+                         f"{attempts} attempts - held by another client?")
+            return 1  # handled: suppress the printing default handler
+        return _onerror
+
+    def _grab_button(self, masks=None) -> None:
+        """Issue one button grab per lock-mask combo, routing refusals to
+        data (the keyboard twin's _grab contract, pointer edition)."""
+        assert self._display is not None
+        if masks is None:
+            masks = [self._mods | extra for extra in _LOCK_MASKS]
+        root = self._display.screen().root
+        for mask in masks:
+            combo = (self.button, mask)
+            self._combo_ok[combo] = True
+            self._pending.add(combo)
+            root.grab_button(self.button, mask, False,
+                             X.ButtonPressMask | X.ButtonReleaseMask,
+                             X.GrabModeAsync, X.GrabModeAsync,
+                             X.NONE, X.NONE,
+                             onerror=self._make_grab_onerror(combo))
+
+    def _grab_key(self, keycode: int, masks=None) -> None:
+        """Cancel-key grab during a recording started some other way - the
+        keyboard twin's _grab, duplicated here for the mouse connection."""
+        assert self._display is not None
+        if masks is None:
+            masks = [self._mods | extra for extra in _LOCK_MASKS]
+        root = self._display.screen().root
+        for mask in masks:
+            combo = (keycode, mask)
+            self._combo_ok[combo] = True
+            self._pending.add(combo)
+            root.grab_key(keycode, mask, False,
+                          X.GrabModeAsync, X.GrabModeAsync,
+                          onerror=self._make_grab_onerror(combo))
+
+    def _settle_grabs(self, code: int, masks=None) -> None:
+        """Pump errors for recently issued grabs (keyboard twin contract)."""
+        if masks is None:
+            masks = [self._mods | extra for extra in _LOCK_MASKS]
+        try:
+            self._display.sync()
+        except Exception:
+            return  # display dying: leave pending (reads as unresolved)
+        for mask in masks:
+            self._pending.discard((code, mask))
+
+    @property
+    def button_grabbed(self) -> bool:
+        """True = all lock-mask combos of the button are believed held.
+        Partial coverage reads False; in-flight grabs never count (the
+        keyboard twin's hotkey_grabbed semantics)."""
+        return all(
+            self._combo_ok.get((self.button, self._mods | extra), False)
+            and (self.button, self._mods | extra) not in self._pending
+            for extra in _LOCK_MASKS)
+
+    def _sync_button_grab(self) -> None:
+        """Self-heal refused button combos on the poll-loop cadence - the
+        pointer twin of _sync_hotkey_grab. A healthy grab issues zero extra
+        X traffic; a refused one retries every tick (~1 s worst case to
+        re-take after a holder releases)."""
+        try:
+            if self._display is None:
+                return
+            missing = [self._mods | extra for extra in _LOCK_MASKS
+                       if not self._combo_ok.get(
+                           (self.button, self._mods | extra), False)
+                       or (self.button, self._mods | extra) in self._pending]
+            if not missing:
+                return  # healthy: nothing to do, no X traffic
+            healthy_before = self.button_grabbed
+            self._grab_button(masks=missing)
+            self._settle_grabs(self.button, masks=missing)
+            healthy_after = self.button_grabbed
+            if healthy_after != healthy_before:
+                try:
+                    self._on_grab_change(healthy_after)
+                except Exception:
+                    pass
+            if (healthy_after and not healthy_before
+                    and self._was_healthy is not None):
+                self.log("mouse PTT grab recovered")
+                for extra in _LOCK_MASKS:
+                    self._combo_attempts.pop((self.button, self._mods | extra), None)
+                self._refuse_warned = False
+            self._was_healthy = healthy_after
+        except Exception:
+            pass  # a display closing under stop() must not kill the loop
+
+    def _resolve_cancel(self) -> str:
+        """Config value -> keysym name (the keyboard twin's semantics:
+        None/"" = the Escape default, "none"/"off" disables)."""
+        raw = "" if self.cancel_key is None else self.cancel_key.strip()
+        if not raw:
+            return DEFAULT_CANCEL_KEY
+        if raw.lower() in ("none", "off", "disabled"):
+            return ""
+        return raw
+
+    def setup(self) -> list[str]:
+        try:
+            self._display = Display(self.display_name)
+        except Exception as e:
+            raise HotkeyError(f"cannot open X display ({e}) - is this an X11 session?") from e
+        if not self._negotiate_xi(self._display):
+            raise HotkeyError(
+                "X server does not deliver raw button releases "
+                "(XI extension missing or < 2.1) - mouse push-to-talk "
+                "cannot detect the button release")
+        root = self._display.screen().root
+        # raw events on ALL master pointers: non-consuming, delivered even
+        # while the pointer is grabbed by someone else, immune to
+        # auto-repeat (buttons do not repeat). Raw presses are filtered.
+        root.xinput_select_events([(_xi_ext.AllMasterDevices,
+                                    _xi_ext.RawButtonPressMask
+                                    | _xi_ext.RawButtonReleaseMask)])
+        cancel = self._resolve_cancel()
+        self._cancel_keycode = self._keycode_for(resolve_keysym(cancel)) \
+            if cancel else None
+        self._escape_keycode = self._keycode_for(XK.XK_Escape)
+        self._sync_button_grab()
+        if not self.button_grabbed:
+            # another client holds some combos; the daemon owns the startup
+            # WARN - the listener's cap-WARN stays quiet (twin contract)
+            self._refuse_warned = True
+        self._display.sync()
+        self._summary = [f"mouse PTT button {self.button} (XGrabButton), "
+                         f"modifiers {self._mods:#x}"
+                         + (f", cancel {cancel} while holding" if cancel
+                            else ", cancel disabled")]
+        return self._summary
+
+    # -- loop ----------------------------------------------------------------
+
+    def start(self) -> None:
+        if self._thread:
+            return
+        self.setup()
+        self._thread = threading.Thread(target=self._run,
+                                        name="fluidvoice-mouse-ptt",
+                                        daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_flag.set()
+        if self._display:
+            try:
+                self._display.close()
+            except Exception:
+                pass
+
+    @property
+    def summary(self) -> list[str]:
+        return list(self._summary)
+
+    def _run(self) -> None:  # pragma: no cover - needs a real X server
+        d = self._display
+        assert d is not None
+        try:
+            while not self._stop_flag.is_set():
+                self._sync_button_grab()
+                self._sync_cancel_grab()
+                if d.pending_events() == 0:
+                    self._stop_flag.wait(0.01)
+                    continue
+                try:
+                    event = d.next_event()
+                except Exception:
+                    break
+                verdict = self._classify_idle_event(event)
+                if verdict == "cancel":
+                    self._safe(self.on_cancel)
+                elif verdict == "hold":
+                    self._hold_cycle(d)
+                # everything else (raw presses/releases, other buttons,
+                # motions) is ignored at idle
+        finally:
+            try:
+                d.close()
+            except Exception:
+                pass
+
+    def _classify_idle_event(self, event) -> str:
+        """Pure: how the idle loop treats one event. GenericEvents have no
+        .detail/.window attributes - never getattr those without a guard
+        (they arrive unregistered, see parse_raw_button_event)."""
+        evtype = getattr(event, "evtype", None)
+        if evtype is not None:
+            return "ignore"  # raw XI2 events only matter mid-hold
+        etype = getattr(event, "type", None)
+        detail = getattr(event, "detail", None)
+        if etype == X.KeyPress and detail is not None \
+                and self._cancel_keycode and detail == self._cancel_keycode:
+            return "cancel"
+        if etype == X.ButtonPress and detail == self.button \
+                and not self._holding:
+            return "hold"
+        return "ignore"
+
+    def set_recording(self, active: bool) -> None:
+        """Tell the listener dictation started/stopped (the keyboard
+        twin's contract): the cancel key is grabbed only while recording."""
+        self._want_cancel = bool(active)
+        if not active:
+            self._refuse_warned = False  # new idle period may WARN again
+
+    def _sync_cancel_grab(self) -> None:
+        """Arm/disarm the cancel-key grab (keyboard twin contract; a
+        recording started by the keyboard hotkey or the tray still gets
+        Escape-to-cancel through this connection)."""
+        if self._display is None or not self._cancel_keycode:
+            return
+        if self._want_cancel == self._cancel_grabbed:
+            return
+        root = self._display.screen().root
+        try:
+            if self._want_cancel:
+                self._grab_key(self._cancel_keycode)
+                self._settle_grabs(self._cancel_keycode)
+            else:
+                root.ungrab_key(self._cancel_keycode, X.AnyModifier)
+                self._display.sync()
+            self._cancel_grabbed = self._want_cancel
+            self._cancel_grab_warned = False
+        except Exception:
+            if self._want_cancel and not self._cancel_grab_warned:
+                self._cancel_grab_warned = True
+                self.log(f"WARN cancel key '{self.cancel_key}' "
+                         "grab failed - held by another client?")
+            # best-effort; cancel via CLI still works
+
+    def _classify_hold_event(self, event) -> str:
+        """Pure: how _hold_cycle treats one event seen during a mouse hold
+        (the pointer twin of classify_hold_event)."""
+        evtype = getattr(event, "evtype", None)
+        if evtype is not None:  # GenericEvent: raw XI2
+            if evtype == _XI_RAW_BUTTON_RELEASE:
+                parsed = parse_raw_button_event(getattr(event, "data", None))
+                if parsed and parsed[1] == self.button:
+                    return _HOLD_END
+            return _HOLD_IGNORE
+        etype = getattr(event, "type", None)
+        detail = getattr(event, "detail", None)
+        if etype == X.KeyPress and detail is not None \
+                and self._escape_keycode is not None \
+                and detail == self._escape_keycode:
+            return _HOLD_ABORT
+        if etype == X.ButtonPress and detail == self.button:
+            # the same button pressed again mid-hold by a second pointer:
+            # the surviving passive grab re-activated - tolerate it and
+            # ungrab again so the click still passes through
+            return _MOUSE_HOLD_REPRESS
+        return _HOLD_IGNORE
+
+    def _hold_cycle(self, d) -> None:
+        """Mouse push-to-talk hold with native click passthrough.
+
+        The XGrabButton passive grab that fired this hold activates a FULL
+        pointer grab for the button's press-to-release duration (X11
+        semantics). This cycle RELEASES that activation immediately
+        (ungrab_pointer), so every other click flows to the window under
+        the pointer natively: real events, no injection. The held button's
+        release is detected from XI2 RawButtonRelease events delivered to
+        the same connection; a passive Escape grab is armed just for the
+        hold so Escape still cancels the recording (upstream semantics: a
+        cancelled recording is discarded, not transcribed). Unlike the
+        keyboard twin there is no re-arm dance on the way out: the passive
+        button grab SURVIVES the activation ungrab (buttons have no
+        auto-repeat). If the pointer device vanishes mid-hold (USB unplug)
+        no release ever arrives - the daemon's max_seconds watchdog ends
+        the take and the listener stays healthy."""
+        root = d.screen().root
+        self._holding = True
+        self._released = False
+        aborted = False
+        try:
+            self._safe(self.on_toggle)  # start
+            # Free the pointer: the passive grab's activation holds it.
+            try:
+                d.ungrab_pointer(X.CurrentTime)
+            except Exception:
+                pass  # best-effort: worst case clicks stay swallowed
+            # Escape still cancels: arm a passive grab for the hold only
+            if self._escape_keycode:
+                try:
+                    root.grab_key(self._escape_keycode, X.AnyModifier, False,
+                                  X.GrabModeAsync, X.GrabModeAsync,
+                                  onerror=lambda _e, _r: 1)  # swallow refusals
+                except Exception:
+                    pass  # best-effort: cancel via CLI still works
+            try:
+                while not self._stop_flag.is_set():
+                    try:
+                        if d.pending_events():
+                            event = d.next_event()
+                            verdict = self._classify_hold_event(event)
+                            if verdict == _HOLD_END:
+                                self._released = True
+                                break
+                            if verdict == _HOLD_ABORT:
+                                aborted = True
+                                break
+                            if verdict == _MOUSE_HOLD_REPRESS:
+                                try:
+                                    d.ungrab_pointer(X.CurrentTime)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        break  # display closed / stop() - end the hold
+                    self._stop_flag.wait(0.02)  # ~50 Hz poll: stop-responsive
+            finally:
+                if self._escape_keycode:
+                    try:
+                        root.ungrab_key(self._escape_keycode, X.AnyModifier)
+                    except Exception:
+                        pass
+        finally:
+            self._holding = False
+            try:
+                # idempotent; covers the re-press path's re-activation
+                d.ungrab_pointer(X.CurrentTime)
+            except Exception:
+                pass
+            try:
+                d.ungrab_keyboard(X.CurrentTime)  # release escape activation
+            except Exception:
+                pass
+        if aborted:
+            self._safe(self.on_cancel)
+        elif self._released:
+            self._safe(self.on_toggle)  # stop and transcribe
+        # stop() ended the hold: silent end (the daemon is shutting down)
 
     def _safe(self, cb) -> None:
         if cb is None:

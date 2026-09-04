@@ -120,9 +120,22 @@ sources. Everything below is a known, classified gap — see
       audio dir refused, missing skipped), History-window Export… menu item,
       today line in the window header + `fluidvoice status` (local midnight).
 - [ ] Auto-updater (or packaged releases); onboarding.
-- [ ] Mouse-button push-to-talk (XGrabButton + button-state polling) —
-      upstream parity candidate from the 09-02 event-tap work; plus
-      suppressing hotkeys while the screen is locked.
+- [x] Mouse-button push-to-talk + lock suppression — DONE: `recording.
+      push_to_talk_button` (e.g. "button8"; 6–255, buttons 1–5 click/scroll
+      refused) arms an XGrabButton passive grab per lock-mask combo; the
+      press releases the grab activation (ungrab_pointer) so clicks during
+      the hold reach the focused window natively, and the release is
+      detected from XI2 RawButtonRelease events (core XQueryPointer cannot
+      see buttons > 5 — the wire mask is a CARD16 carrying only buttons
+      1–5; XI 2.2 is negotiated directly because python-xlib hardcodes
+      2.0 and Xorg then withholds release events). Escape cancels
+      mid-hold, same as keyboard holds. While the session is locked or
+      suspended (`general.pause_when_locked`, default true) the daemon
+      ignores hotkey presses, cancels any active dictation, and the tray
+      notes `paused (locked)` — logind session Lock/Unlock + LockedHint
+      signals (GNOME's path), PrepareForSleep, screensaver-name fallback
+      (fluidvoice/lockmon.py). X11 only; Wayland pointer protocols are a
+      separate item. Upstream PR #939 parity.
 - [x] Settings UI — done as a native GTK 4 + libadwaita app
       (`fluidvoice app`; History/Settings/onboarding windows over the
       control socket; the former web page was retired with it).
