@@ -782,8 +782,8 @@ class StubClosingDisplay:
     def set_badge(self, badge):
         self.events.append(("badge", badge))
 
-    def finish(self, badge=None):
-        self.events.append(("finish", badge))
+    def finish(self, badge=None, confidence=None):
+        self.events.append(("finish", badge, confidence))
 
     def close(self):
         self.events.append(("close", None))
@@ -808,7 +808,7 @@ class TestDoneBeat:
         disp = StubClosingDisplay()
         d._closing_display = disp
         d._process(make_wav(tmp_path / "u.wav"), "App", "dictate", None)
-        assert disp.events[-1] == ("finish", "✓")
+        assert disp.events[-1] == ("finish", "✓", None)
 
     def test_ai_polish_finishes_with_ai_badge(self, tmp_path, cfg, quiet_ui):
         d = self._daemon(cfg, polisher=lambda t: "Polished!")
@@ -816,7 +816,7 @@ class TestDoneBeat:
         disp = StubClosingDisplay()
         d._closing_display = disp
         d._process(make_wav(tmp_path / "u.wav"), "App", "dictate", None)
-        assert disp.events[-1] == ("finish", "✓ AI")
+        assert disp.events[-1] == ("finish", "✓ AI", None)
 
     def test_failure_closes_without_beat(self, tmp_path, cfg, quiet_ui):
         d = self._daemon(cfg, StubBackend(error=RuntimeError("boom")))
@@ -837,3 +837,86 @@ class TestDoneBeat:
         d._closing_display = None
         d._process(make_wav(tmp_path / "u.wav"), "App", "dictate", None)
         assert d.last_result.get("text") == "typed text"
+
+
+class TestConfidenceBand:
+    """Ordinal recognition confidence (research §5): honest 0-2 bands or
+    None when the backend cannot say."""
+
+    def test_bands_from_avg_logprob(self):
+        assert dm.confidence_band({"segments": [{"avg_logprob": -0.1},
+                                                {"avg_logprob": -0.3}]}) == 2
+        assert dm.confidence_band({"segments": [{"avg_logprob": -0.5}]}) == 1
+        assert dm.confidence_band({"segments": [{"avg_logprob": -1.2}]}) == 0
+
+    def test_unknown_when_no_evidence(self):
+        assert dm.confidence_band({}) is None
+        assert dm.confidence_band({"segments": []}) is None
+        assert dm.confidence_band({"segments": [{"text": "x"}]}) is None
+        assert dm.confidence_band({"segments": [{"avg_logprob": "bad"}]}) is None
+
+    def test_pipeline_persists_confidence(self, tmp_path, cfg, quiet_ui):
+        class SegBackend(StubBackend):
+            def transcribe(self, wav, language=None):
+                return {"text": self.text, "language": "en", "duration": 1.0,
+                        "segments": [{"text": self.text, "avg_logprob": -0.2}]}
+
+        history = []
+        pipe = dm.DictationPipeline(cfg, SegBackend("good words"),
+                                    inserter=lambda t, c: "typed",
+                                    history_writer=lambda e, w: history.append(e))
+        out = pipe.run(make_wav(tmp_path / "c.wav"), "App")
+        assert out["confidence"] == 2
+        assert history[0]["confidence"] == 2
+
+    def test_pipeline_omits_confidence_when_unknown(self, tmp_path, cfg, quiet_ui):
+        history = []
+        pipe = dm.DictationPipeline(cfg, StubBackend("plain words"),
+                                    inserter=lambda t, c: "typed",
+                                    history_writer=lambda e, w: history.append(e))
+        out = pipe.run(make_wav(tmp_path / "c.wav"), "App")
+        assert out["confidence"] is None
+        assert "confidence" not in history[0]
+
+
+class TestInsertTextAction:
+    """History-window repair path: type arbitrary text via the daemon."""
+
+    def _daemon(self, cfg):
+        backend = StubBackend("x")
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: backend,
+                      use_hotkey=False, use_sounds=False)
+        d.backend = backend
+        return d
+
+    def test_inserts_and_reports_ok(self, cfg, quiet_ui, monkeypatch):
+        typed = []
+        monkeypatch.setattr(dm.insertion, "insert_text",
+                            lambda t, c: typed.append(t))
+        d = self._daemon(cfg)
+        resp = d.handle_request({"action": "insert-text", "text": "hi there"})
+        assert resp["ok"] is True
+        assert typed == ["hi there"]
+
+    def test_busy_refuses(self, cfg, quiet_ui, monkeypatch):
+        monkeypatch.setattr(dm.insertion, "insert_text", lambda t, c: None)
+        d = self._daemon(cfg)
+        d.busy = True
+        resp = d.handle_request({"action": "insert-text", "text": "x"})
+        assert resp["ok"] is False and resp["error"] == "busy"
+
+    def test_empty_text_refuses(self, cfg, quiet_ui, monkeypatch):
+        monkeypatch.setattr(dm.insertion, "insert_text", lambda t, c: None)
+        d = self._daemon(cfg)
+        resp = d.handle_request({"action": "insert-text", "text": "   "})
+        assert resp["ok"] is False
+
+    def test_insert_error_surfaces(self, cfg, quiet_ui, monkeypatch):
+        def boom(t, c):
+            raise InsertError("no display")
+
+        monkeypatch.setattr(dm.insertion, "insert_text", boom)
+        d = self._daemon(cfg)
+        resp = d.handle_request({"action": "insert-text", "text": "x"})
+        assert resp["ok"] is False and "no display" in resp["error"]

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
@@ -87,12 +87,20 @@ class AudioReplayer(Gtk.Box):
 
 
 class HistoryEntryRow(Gtk.ListBoxRow):
-    """One dictation: meta line, text, actions, optional audio replay."""
+    """One dictation: meta line, text, actions, optional audio replay,
+    plus inline repair (edit + re-insert, research §4: correction must be
+    one step away) and honest confidence dots (research §5)."""
 
-    def __init__(self, entry, on_delete, on_copy):
+    CONFIDENCE_DOTS = {2: "●●●", 1: "●●○", 0: "●○○"}
+    CONFIDENCE_WORD = {2: "high", 1: "mixed", 0: "low"}
+
+    def __init__(self, entry, on_delete, on_copy, on_insert=None,
+                 on_edit=None):
         super().__init__(activatable=False, selectable=False,
                          css_classes=["card"])
         self.entry = entry
+        self.editor: Gtk.Box | None = None
+        self.on_edit = on_edit
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
                       margin_top=10, margin_bottom=10,
                       margin_start=14, margin_end=10)
@@ -114,12 +122,30 @@ class HistoryEntryRow(Gtk.ListBoxRow):
         if entry.get("ai"):
             meta.append(Gtk.Label(label="AI polished",
                                   css_classes=["caption", "accent"]))
+        conf = entry.get("confidence")
+        if conf in self.CONFIDENCE_DOTS:
+            meta.append(Gtk.Label(
+                label=self.CONFIDENCE_DOTS[conf],
+                tooltip_text=f"Recognition confidence: "
+                             f"{self.CONFIDENCE_WORD[conf]}",
+                css_classes=["dim-label"]))
         meta.append(Gtk.Box(hexpand=True))  # spacer
+        if on_insert is not None:
+            ins_btn = Gtk.Button(icon_name="edit-paste-symbolic",
+                                 css_classes=["flat"],
+                                 tooltip_text="Insert at cursor")
+            ins_btn.connect("clicked", on_insert, self)
+            meta.append(ins_btn)
         copy_btn = Gtk.Button(icon_name="edit-copy-symbolic",
                               css_classes=["flat"],
                               tooltip_text="Copy text")
         copy_btn.connect("clicked", on_copy, self)
         meta.append(copy_btn)
+        edit_btn = Gtk.Button(icon_name="document-edit-symbolic",
+                              css_classes=["flat"],
+                              tooltip_text="Edit text")
+        edit_btn.connect("clicked", self._start_edit)
+        meta.append(edit_btn)
         del_btn = Gtk.Button(icon_name="user-trash-symbolic",
                              css_classes=["flat", "destructive-action"],
                              tooltip_text="Delete entry")
@@ -127,15 +153,70 @@ class HistoryEntryRow(Gtk.ListBoxRow):
         meta.append(del_btn)
         box.append(meta)
 
-        text = Gtk.Label(label=str(entry.get("text") or entry.get("raw") or ""),
-                         wrap=True, xalign=0.0, hexpand=True, css_classes=["body"])
-        box.append(text)
+        self.text_lbl = Gtk.Label(
+            label=str(entry.get("text") or entry.get("raw") or ""),
+            wrap=True, xalign=0.0, hexpand=True, css_classes=["body"])
+        box.append(self.text_lbl)
 
         if entry.get("audio"):
             path = entry.get("_audio_path")
             if path:
                 box.append(AudioReplayer(path))
         self.set_child(box)
+
+    # -- inline repair ---------------------------------------------------------
+
+    def _start_edit(self, _btn) -> None:
+        if self.editor is not None:
+            return
+        parent = self.get_child()
+        self.text_lbl.set_visible(False)
+        self.editor = self._build_editor()
+        parent.append(self.editor)
+        parent.reorder_child_after(self.editor, self.text_lbl)
+
+    def _build_editor(self) -> Gtk.Box:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        view = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        view.set_size_request(-1, 72)
+        view.get_buffer().set_text(
+            str(self.entry.get("text") or self.entry.get("raw") or ""))
+        btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6,
+                       halign=Gtk.Align.END)
+        cancel = Gtk.Button(label="Cancel", css_classes=["flat"])
+        save = Gtk.Button(label="Save", css_classes=["suggested-action"])
+        btns.append(cancel)
+        btns.append(save)
+        box.append(view)
+        box.append(btns)
+        cancel.connect("clicked", lambda *_: self._end_edit(False, view))
+        save.connect("clicked", lambda *_: self._end_edit(True, view))
+        return box
+
+    def _end_edit(self, apply: bool, view: Gtk.TextView) -> None:
+        if apply and self.on_edit is not None:
+            buf = view.get_buffer()
+            new = buf.get_text(buf.get_start_iter(), buf.get_end_iter(),
+                               False).strip()
+            if new and new != str(self.entry.get("text") or ""):
+                self.on_edit(self, new)  # persists + updates entry on success
+        if self.editor is not None:
+            self.get_child().remove(self.editor)
+            self.editor = None
+        self.text_lbl.set_text(
+            str(self.entry.get("text") or self.entry.get("raw") or ""))
+        self.text_lbl.set_visible(True)
+
+
+def date_header_label(ts: float, now: datetime | None = None) -> str:
+    """"Today" / "Yesterday" / "%a %d %b" bucket label for a timestamp."""
+    day = datetime.fromtimestamp(ts).date()
+    now = now or datetime.now()
+    if day == now.date():
+        return "Today"
+    if day == (now - timedelta(days=1)).date():
+        return "Yesterday"
+    return day.strftime("%a %d %b")
 
 
 class HistoryWindow(Adw.ApplicationWindow):
@@ -254,16 +335,32 @@ class HistoryWindow(Adw.ApplicationWindow):
             nxt = row.get_next_sibling()
             self.listbox.remove(row)
             row = nxt
+        last_day = None
         for e in self._entries:
+            ts = e.get("ts") or 0
+            day = datetime.fromtimestamp(ts).date()
+            if day != last_day:  # date headers: one glance = recency bucket
+                last_day = day
+                self.listbox.append(self._header_row(date_header_label(ts)))
             if e.get("audio"):
                 e["_audio_path"] = history_mod.audio_path_for(e.get("ts", 0))
             self.listbox.append(
-                HistoryEntryRow(e, self._on_delete_row, self._on_copy_row))
+                HistoryEntryRow(e, self._on_delete_row, self._on_copy_row,
+                                self._on_insert_row, self._on_edit_row))
         n = len(self._entries)
         self.count_lbl.set_text(
             f"{n} ent{'ry' if n == 1 else 'ries'}"
             + (" (showing latest 200)" if n >= 200 else ""))
         self._update_today()
+
+    @staticmethod
+    def _header_row(label: str) -> Gtk.ListBoxRow:
+        row = Gtk.ListBoxRow(activatable=False, selectable=False)
+        row.set_child(Gtk.Label(label=label, xalign=0.0,
+                                css_classes=["heading", "dim-label"],
+                                margin_top=10, margin_bottom=2,
+                                margin_start=6))
+        return row
 
     def _update_today(self) -> None:
         try:
@@ -283,6 +380,28 @@ class HistoryWindow(Adw.ApplicationWindow):
             cb.set(Gdk.ContentProvider.new_for_bytes(
                 "text/plain;charset=utf-8", GLib.Bytes.new(text.encode())))
         self._toast("Copied")
+
+    def _on_insert_row(self, _btn, row) -> None:
+        text = str(row.entry.get("text") or "")
+        if not text:
+            return
+        try:
+            self.c.insert_text(text)
+            self._toast("Inserted at cursor")
+        except Exception as e:  # noqa: BLE001 - daemon down/busy -> toast
+            self._toast(f"Insert failed: {e}")
+
+    def _on_edit_row(self, row, new_text: str) -> None:
+        try:
+            saved = self.c.history_update_text(row.entry.get("ts", 0),
+                                               new_text)
+        except Exception:  # noqa: BLE001 - unreadable history -> toast
+            saved = False
+        if saved:
+            row.entry["text"] = new_text
+            self._toast("Saved")
+        else:
+            self._toast("Save failed")
 
     def _on_delete_row(self, _btn, row) -> None:
         def confirmed(dialog, response):

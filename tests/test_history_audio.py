@@ -133,3 +133,34 @@ class TestHistoryCapAndTail:
         monkeypatch.setattr(history, "_TAIL_WINDOW", 64)
         entries = history.tail(10)
         assert entries and all(e["text"].startswith("t") for e in entries)
+
+
+class TestUpdateText:
+    """Inline repair: rewrite one entry's text in the JSONL (research §4)."""
+
+    def test_rewrites_matching_entry(self, tmp_path, monkeypatch):
+        from fluidvoice import paths
+        hpath = tmp_path / "history.jsonl"
+        monkeypatch.setattr(paths, "history_file", lambda: hpath)
+        history.append({"ts": 111.0, "text": "before"})
+        history.append({"ts": 222.0, "text": "other"})
+        assert history.update_text(111.0, "after") is True
+        entries = {e["ts"]: e["text"] for e in history.read_all()}
+        assert entries[111.0] == "after"
+        assert entries[222.0] == "other"
+
+    def test_miss_returns_false_and_writes_nothing(self, tmp_path, monkeypatch):
+        from fluidvoice import paths
+        hpath = tmp_path / "history.jsonl"
+        monkeypatch.setattr(paths, "history_file", lambda: hpath)
+        history.append({"ts": 1.0, "text": "keep"})
+        assert history.update_text(999.0, "nope") is False
+        assert [e["text"] for e in history.read_all()] == ["keep"]
+
+    def test_audio_retention_untouched(self, tmp_path, monkeypatch):
+        from fluidvoice import paths
+        hpath = tmp_path / "history.jsonl"
+        monkeypatch.setattr(paths, "history_file", lambda: hpath)
+        history.append({"ts": 5.0, "text": "with audio", "audio": "/x/y.wav"})
+        history.update_text(5.0, "edited")
+        assert history.read_all()[0]["audio"] == "/x/y.wav"

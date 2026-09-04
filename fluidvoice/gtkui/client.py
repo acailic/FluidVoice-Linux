@@ -53,6 +53,11 @@ class Client:
     def test_dictation(self, seconds: float = 3.0) -> dict:
         return self._request("test-dictation", seconds=seconds)
 
+    def insert_text(self, text: str) -> dict:
+        """Type `text` into the focused app via the daemon (history-window
+        repair path). Raises ClientError when the daemon is down/busy."""
+        return self._request("insert-text", text=text)
+
     def select_model(self, name: str) -> dict:
         return self._request("select-model", name=name)
 
@@ -130,6 +135,10 @@ class Client:
 
     def history_clear(self) -> int:
         return history_mod.clear()
+
+    def history_update_text(self, ts: float, text: str) -> bool:
+        """Inline repair: rewrite one entry's text (research §4)."""
+        return history_mod.update_text(ts, text)
 
     def history_audio(self, ts: float) -> Any:
         return history_mod.audio_path_for(ts)

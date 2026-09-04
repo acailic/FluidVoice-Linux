@@ -151,6 +151,27 @@ def delete(ts: float, drop_audio: bool = True) -> int:
     return _rewrite(lambda e: abs(e.get("ts", 0) - ts) > 1e-6, drop_audio)
 
 
+def update_text(ts: float, text: str) -> bool:
+    """Rewrite the text of the entry with this timestamp (inline repair,
+    research §4: correction must be one step away). Returns whether a
+    matching entry was found; audio retention is untouched."""
+    hpath = paths.history_file()
+    entries = read_all()
+    changed = False
+    lines = []
+    for entry in entries:
+        if not changed and abs(entry.get("ts", 0) - ts) < 1e-6:
+            entry["text"] = text
+            changed = True
+        lines.append(json.dumps(entry, ensure_ascii=False))
+    if not changed:
+        return False
+    tmp = hpath.with_suffix(".jsonl.tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.replace(hpath)
+    return True
+
+
 def clear(drop_audio: bool = True) -> int:
     """Remove every entry (and retained audio). Returns the count removed."""
     adir = paths.audio_dir()

@@ -822,6 +822,7 @@ class FluidOverlay:
         self._thread: threading.Thread | None = None
         self._anims = animations_enabled()
         self._fade_left = 0  # fade-in frames remaining (0 = settled)
+        self._done_confidence: int | None = None
         spec = SIZE_SPECS.get(size, SIZE_SPECS[DEFAULT_SIZE])
         self._levels = AudioLevels(bars=spec.bars, lo=spec.bar_min,
                                    hi=spec.bar_max)
@@ -919,16 +920,19 @@ class FluidOverlay:
         if self._d is None:
             return  # notifications have no processing visual
 
-    def finish(self, badge: str | None = None) -> None:
+    def finish(self, badge: str | None = None,
+               confidence: int | None = None) -> None:
         """Peak-end done beat: show the success frame (badge "✓", green
-        bars) for DONE_HOLD, then the loop fades and unmaps itself.
-        Notification fallbacks just close - there is no frame to polish."""
+        bars - amber when confidence band 0) for DONE_HOLD, then the loop
+        fades and unmaps itself. Notification fallbacks just close - there
+        is no frame to polish."""
         if self._d is None:
             self.close()
             return
         with self._lock:
             if badge is not None:
                 self._badge = badge
+            self._done_confidence = confidence
             self._state = "done"
             self._state_since = time.monotonic()
             self._last_sig = None
@@ -973,7 +977,9 @@ class FluidOverlay:
             img, (w, h) = self._renderer.render(
                 self._levels.levels(), self._text,
                 phase=self._phase, alpha=alpha, mode=self._mode,
-                state=self._state, badge=self._badge)
+                state=self._state, badge=self._badge,
+                confidence=(self._done_confidence
+                            if self._state == "done" else None))
             try:
                 self._blit(img, w, h, self._text)
             except Exception:
@@ -994,6 +1000,7 @@ class FluidOverlay:
 
         elapsed = (time.monotonic() - self._state_since
                    if state == "processing" else None)
+        conf = self._done_confidence if state == "done" else None
         fade_alpha = 1.0
         if self._fade_left > 0:
             fade_alpha = (FADE_IN_FRAMES - self._fade_left + 1) / FADE_IN_FRAMES
@@ -1002,7 +1009,7 @@ class FluidOverlay:
         img, (w, h) = self._renderer.render(
             self._levels.levels(), text, phase=self._phase,
             alpha=fade_alpha, mode=mode, state=state, badge=badge,
-            elapsed=elapsed)
+            elapsed=elapsed, confidence=conf)
         sig = (w, h, state, mode, text, badge,
                tuple(round(b, 1) for b in self._levels.levels()),
                round(self._phase % SHIMMER_PERIOD, 2),

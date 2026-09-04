@@ -38,6 +38,29 @@ def log(msg: str) -> None:
 Inserter = Callable[[str, dict], str]
 BackendFactory = Callable[[dict], Any]
 
+# Ordinal confidence bands from whisper segment log-probs (research §5:
+# display honest, coarse confidence - 2 good / 1 mixed / 0 shaky; None when
+# the backend cannot say). Thresholds follow whisper.cpp quality filters.
+CONF_LOGPROB_MIXED = -0.35
+CONF_LOGPROB_LOW = -0.90
+
+
+def confidence_band(result: dict) -> int | None:
+    """0-2 ordinal recognition confidence from a transcribe result."""
+    segs = result.get("segments")
+    if not segs:
+        return None
+    vals = [s.get("avg_logprob") for s in segs if isinstance(s, dict)]
+    vals = [v for v in vals if isinstance(v, (int, float))]
+    if not vals:
+        return None
+    mean = sum(vals) / len(vals)
+    if mean >= CONF_LOGPROB_MIXED:
+        return 2
+    if mean >= CONF_LOGPROB_LOW:
+        return 1
+    return 0
+
 
 class DictationPipeline:
     """Processes one finished recording into typed text (fully injectable)."""
@@ -90,7 +113,8 @@ class DictationPipeline:
             return text, False
 
     def _rewrite(self, instruction: str, context: str | None, raw: str,
-                 duration: float, wav: Path) -> dict | None:
+                 duration: float, wav: Path,
+                 conf: int | None = None) -> dict | None:
         from . import rewrite as rewrite_mod
         try:
             rewriter = self.rewriter or rewrite_mod.run_rewrite
@@ -101,12 +125,14 @@ class DictationPipeline:
             return None
         strategy = self._insert(rewritten)
         out = {"raw": raw, "text": rewritten, "ai": True,
-               "strategy": strategy, "mode": "rewrite"}
+               "strategy": strategy, "mode": "rewrite", "confidence": conf}
         self.log(f"rewrote ({strategy}, {len(rewritten)} chars): {rewritten[:120]}")
-        self._write_history(
-            {"ts": time.time(), "duration_s": round(duration, 2), "raw": raw,
-             "text": rewritten, "ai": True, "backend": self.backend.name,
-             "app": None, "mode": "rewrite"}, wav)
+        entry = {"ts": time.time(), "duration_s": round(duration, 2),
+                 "raw": raw, "text": rewritten, "ai": True,
+                 "backend": self.backend.name, "app": None, "mode": "rewrite"}
+        if conf is not None:
+            entry["confidence"] = conf
+        self._write_history(entry, wav)
         return out
 
     def _command(self, instruction: str, raw: str,
@@ -197,9 +223,11 @@ class DictationPipeline:
             if not raw.strip():
                 self.log("empty transcription")
                 return None
+            conf = confidence_band(result)
             text = post_process(raw, self.cfg, app_hint=app_hint)
             if mode == "rewrite":
-                return self._rewrite(text, rewrite_context, raw, duration, wav)
+                return self._rewrite(text, rewrite_context, raw, duration,
+                                     wav, conf)
             if mode == "command":
                 return self._command(text, raw, duration, wav)
             polished, ai_used = self._polish(text, app_hint=app_hint)
@@ -211,13 +239,16 @@ class DictationPipeline:
                 self.key_presser(spec)
                 self._set_pill_badge("⏎ sent")
                 strategy += f"+{spec}"
-            out = {"raw": raw, "text": polished, "ai": ai_used, "strategy": strategy}
+            out = {"raw": raw, "text": polished, "ai": ai_used,
+                   "strategy": strategy, "confidence": conf}
             self.log(f"typed ({strategy}, {len(polished)} chars, {duration:.1f}s audio, "
                      f"{time.monotonic() - started:.1f}s total): {polished[:120]}")
-            self._write_history(
-                {"ts": time.time(), "duration_s": round(duration, 2), "raw": raw,
-                 "text": polished, "ai": ai_used, "backend": self.backend.name,
-                 "app": app_hint}, wav)
+            entry = {"ts": time.time(), "duration_s": round(duration, 2),
+                     "raw": raw, "text": polished, "ai": ai_used,
+                     "backend": self.backend.name, "app": app_hint}
+            if conf is not None:
+                entry["confidence"] = conf
+            self._write_history(entry, wav)
             return out
         finally:
             wav.unlink(missing_ok=True)
@@ -752,6 +783,9 @@ class Daemon:
         if action == "paste-last":
             ok, detail = self.paste_last()
             return {"ok": ok, "error": detail if not ok else None}
+        if action == "insert-text":
+            ok, detail = self.insert_text_action(str(req.get("text", "")))
+            return {"ok": ok, "error": detail if not ok else None}
         if action == "status":
             return {"ok": True, "recording": self.recording, "busy": self.busy,
                     "backend": self.backend.name if self.backend else None,
@@ -1117,6 +1151,22 @@ class Daemon:
             log(f"paste-last failed: {e}")
             return False, str(e)
 
+    def insert_text_action(self, text: str) -> tuple[bool, str | None]:
+        """Type arbitrary text into the focused app (history-window repair
+        path: edit a transcript, then re-insert it)."""
+        if self.busy or self.recording:
+            return False, "busy"
+        text = (text or "").strip()
+        if not text:
+            return False, "nothing to insert"
+        try:
+            insertion.insert_text(text, self.cfg)
+            log(f"inserted text from history ({len(text)} chars)")
+            return True, None
+        except insertion.InsertError as e:
+            log(f"insert-text failed: {e}")
+            return False, str(e)
+
     # -- pipeline ------------------------------------------------------------
 
     def _ensure_backend(self):
@@ -1150,8 +1200,10 @@ class Daemon:
                     display.close()  # the panel takes over the conversation
                 elif out.get("text"):
                     # peak-end done beat: the pill shows the success frame,
-                    # then fades itself (research §7)
-                    display.finish("✓ AI" if out.get("ai") else "✓")
+                    # then fades itself (research §7); low confidence tints
+                    # the badge amber (research §5)
+                    display.finish("✓ AI" if out.get("ai") else "✓",
+                                   confidence=out.get("confidence"))
                 else:
                     display.close()
         # Turn 1 runs AFTER busy clears, so there is no busy-flag race with

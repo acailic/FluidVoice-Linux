@@ -66,6 +66,7 @@ class FasterWhisperBackend:
         for seg in segments:  # generator - consume once, reuse for text AND segments
             texts.append(seg.text)
             segs.append({"start": round(seg.start, 3), "end": round(seg.end, 3),
-                         "text": seg.text.strip()})
+                         "text": seg.text.strip(),
+                         "avg_logprob": round(getattr(seg, "avg_logprob", 0.0), 3)})
         return {"text": "".join(texts).strip(), "language": info.language,
                 "duration": info.duration, "segments": segs}

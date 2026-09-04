@@ -37,6 +37,8 @@ class StubClient(Client):
         self.entries = entries or []
         self.saved: list[dict] = []
         self.selected_models: list[str] = []
+        self.inserted: list[str] = []
+        self.updated: list[tuple] = []
 
     def status(self):
         return {"ok": True, "recording": False, "busy": False,
@@ -82,6 +84,18 @@ class StubClient(Client):
         n = len(self.entries)
         self.entries = []
         return n
+
+    def history_update_text(self, ts, text):
+        self.updated.append((ts, text))
+        for e in self.entries:
+            if abs(e.get("ts", 0) - ts) < 1e-6:
+                e["text"] = text
+                return True
+        return False
+
+    def insert_text(self, text):
+        self.inserted.append(text)
+        return {"ok": True}
 
     def today_stats(self):
         return {"dictations": 2, "seconds": 6.5, "words": 9}
@@ -533,4 +547,118 @@ class TestOnboardingWindow:
             "Right_Control" in w.hotkey_lbl.get_label()
         w._show_tryout({"ok": True, "text": "hello", "duration_s": 3})
         assert "hello" in w.try_out.get_text()
+        w.close()
+
+
+class TestHistoryScience:
+    """UI-science uplift phases 3b+4: confidence dots, inline repair
+    (edit + insert at cursor), date-header grouping."""
+
+    def _rows(self, w):
+        out = []
+        row = w.listbox.get_first_child()
+        while row is not None:
+            out.append(row)
+            row = row.get_next_sibling()
+        return out
+
+    def _labels(self, w):
+        texts = []
+
+        def walk(wIDGET):
+            if isinstance(wIDGET, Gtk.Label):
+                texts.append(wIDGET.get_text())
+            child = wIDGET.get_first_child() if hasattr(wIDGET, "get_first_child") else None
+            while child is not None:
+                walk(child)
+                child = child.get_next_sibling()
+
+        for row in self._rows(w):
+            walk(row)
+        return texts
+
+    def _first_entry_row(self, w):
+        from fluidvoice.gtkui.main_window import HistoryEntryRow
+        for row in self._rows(w):
+            if isinstance(row, HistoryEntryRow):
+                return row
+        raise AssertionError("no entry rows")
+
+    def test_date_headers_group_renders(self, loop):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        now = time.time()
+        entries = [
+            {"ts": now, "text": "newest", "app": "zed"},
+            {"ts": now - 86400, "text": "yesterdays words", "app": "zed"},
+            {"ts": now - 86400 - 5, "text": "also yesterday", "app": "zed"},
+        ]
+        w = HistoryWindow(client=StubClient(entries))
+        w.present()
+        pump(loop)
+        labels = self._labels(w)
+        assert "Today" in labels
+        assert "Yesterday" in labels
+        w.close()
+
+    def test_confidence_dots_render(self, loop):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        entries = [{"ts": time.time(), "text": "shaky words",
+                    "confidence": 1}]
+        w = HistoryWindow(client=StubClient(entries))
+        w.present()
+        pump(loop)
+        assert "●●○" in self._labels(w)
+        w.close()
+
+    def test_no_dots_without_confidence(self, loop):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        w = HistoryWindow(client=StubClient(ENTRIES))
+        w.present()
+        pump(loop)
+        assert not any("●" in t for t in self._labels(w))
+        w.close()
+
+    def test_inline_edit_round_trip(self, loop):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        entries = [{"ts": 1234.5, "text": "original words"}]
+        c = StubClient(entries)
+        w = HistoryWindow(client=c)
+        w.present()
+        pump(loop)
+        row = self._first_entry_row(w)
+        row._start_edit(None)
+        assert row.editor is not None
+        view = row.editor.get_first_child()
+        view.get_buffer().set_text("edited words")
+        row._end_edit(True, view)
+        assert c.updated == [(1234.5, "edited words")]
+        assert row.entry["text"] == "edited words"
+        assert "edited words" in self._labels(w)
+        assert row.editor is None
+        w.close()
+
+    def test_edit_cancel_keeps_text(self, loop):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        c = StubClient([{"ts": 99.0, "text": "keep me"}])
+        w = HistoryWindow(client=c)
+        w.present()
+        pump(loop)
+        row = self._first_entry_row(w)
+        row._start_edit(None)
+        view = row.editor.get_first_child()
+        view.get_buffer().set_text("discarded")
+        row._end_edit(False, view)
+        assert c.updated == []
+        assert "keep me" in self._labels(w)
+        w.close()
+
+    def test_insert_at_cursor_uses_client(self, loop):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        c = StubClient([{"ts": 7.0, "text": "insert me"}])
+        w = HistoryWindow(client=c)
+        w.present()
+        pump(loop)
+        row = self._first_entry_row(w)
+        w._on_insert_row(None, row)
+        assert c.inserted == ["insert me"]
         w.close()
