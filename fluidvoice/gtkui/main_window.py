@@ -93,6 +93,9 @@ class HistoryEntryRow(Gtk.ListBoxRow):
 
     CONFIDENCE_DOTS = {2: "●●●", 1: "●●○", 0: "●○○"}
     CONFIDENCE_WORD = {2: "high", 1: "mixed", 0: "low"}
+    MODE_ICONS = {"dictate": "audio-input-microphone-symbolic",
+                  "rewrite": "document-edit-symbolic",
+                  "command": "utilities-terminal-symbolic"}
 
     def __init__(self, entry, on_delete, on_copy, on_insert=None,
                  on_edit=None):
@@ -106,6 +109,11 @@ class HistoryEntryRow(Gtk.ListBoxRow):
                       margin_start=14, margin_end=10)
         meta = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         ts = entry.get("ts") or 0
+        mode = str(entry.get("mode") or "dictate")
+        if mode in self.MODE_ICONS:  # glanceable mode glyph, not color-only
+            meta.append(Gtk.Image(icon_name=self.MODE_ICONS[mode],
+                                  tooltip_text=mode.capitalize(),
+                                  css_classes=["dim-label"]))
         meta.append(Gtk.Label(
             label=datetime.fromtimestamp(ts).strftime("%a %d %b, %H:%M"),
             css_classes=["dim-label"]))
@@ -199,7 +207,8 @@ class HistoryEntryRow(Gtk.ListBoxRow):
             new = buf.get_text(buf.get_start_iter(), buf.get_end_iter(),
                                False).strip()
             if new and new != str(self.entry.get("text") or ""):
-                self.on_edit(self, new)  # persists + updates entry on success
+                if not self.on_edit(self, new):
+                    return  # persist failed: keep the editor + the user's text
         if self.editor is not None:
             self.get_child().remove(self.editor)
             self.editor = None
@@ -391,7 +400,7 @@ class HistoryWindow(Adw.ApplicationWindow):
         except Exception as e:  # noqa: BLE001 - daemon down/busy -> toast
             self._toast(f"Insert failed: {e}")
 
-    def _on_edit_row(self, row, new_text: str) -> None:
+    def _on_edit_row(self, row, new_text: str) -> bool:
         try:
             saved = self.c.history_update_text(row.entry.get("ts", 0),
                                                new_text)
@@ -402,6 +411,7 @@ class HistoryWindow(Adw.ApplicationWindow):
             self._toast("Saved")
         else:
             self._toast("Save failed")
+        return bool(saved)
 
     def _on_delete_row(self, _btn, row) -> None:
         def confirmed(dialog, response):

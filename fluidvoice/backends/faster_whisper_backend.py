@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import tempfile
+import wave
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,26 @@ class FasterWhisperBackend:
 
     def warmup(self) -> None:
         self._load()
+        # _load alone leaves the first real dictation paying CUDA kernel /
+        # cuDNN setup (~+0.2 s on an RTX 4060); one throwaway inference on a
+        # second of silence gets that out of the way at daemon start.
+        try:
+            self._warm_inference()
+        except Exception:
+            pass  # the model loaded; a failed probe must not fail startup
+
+    def _warm_inference(self) -> None:
+        fd, name = tempfile.mkstemp(prefix="sayitermano-warmup-", suffix=".wav")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                with wave.open(f, "wb") as w:
+                    w.setnchannels(1)
+                    w.setsampwidth(2)
+                    w.setframerate(16000)
+                    w.writeframes(b"\0" * 32000)  # 1.0 s of silence
+            self.transcribe(Path(name))
+        finally:
+            Path(name).unlink(missing_ok=True)
 
     def _load(self) -> None:
         if self._model is not None:
@@ -65,8 +87,9 @@ class FasterWhisperBackend:
         texts, segs = [], []
         for seg in segments:  # generator - consume once, reuse for text AND segments
             texts.append(seg.text)
+            lp = getattr(seg, "avg_logprob", None)
             segs.append({"start": round(seg.start, 3), "end": round(seg.end, 3),
                          "text": seg.text.strip(),
-                         "avg_logprob": round(getattr(seg, "avg_logprob", 0.0), 3)})
+                         "avg_logprob": round(lp, 3) if lp is not None else None})
         return {"text": "".join(texts).strip(), "language": info.language,
                 "duration": info.duration, "segments": segs}

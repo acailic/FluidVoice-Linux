@@ -123,6 +123,14 @@ def audio_path_for(ts: float) -> Path | None:
     return None
 
 
+def _atomic_write(hpath: Path, lines: list[str]) -> None:
+    """Replace the JSONL with `lines` atomically (tmp file + rename)."""
+    tmp = hpath.with_suffix(".jsonl.tmp")
+    tmp.write_text("\n".join(lines) + ("\n" if lines else ""),
+                   encoding="utf-8")
+    tmp.replace(hpath)
+
+
 def _rewrite(keep, drop_audio: bool) -> int:
     """Keep entries matching `keep`; delete the rest (+ their audio)."""
     hpath = paths.history_file()
@@ -137,10 +145,7 @@ def _rewrite(keep, drop_audio: bool) -> int:
             removed += 1
             if drop_audio and entry.get("audio"):
                 removed_audio.append(Path(entry["audio"]))
-    tmp = hpath.with_suffix(".jsonl.tmp")
-    tmp.write_text("\n".join(kept_lines) + ("\n" if kept_lines else ""),
-                   encoding="utf-8")
-    tmp.replace(hpath)
+    _atomic_write(hpath, kept_lines)
     for p in removed_audio:
         p.unlink(missing_ok=True)
     return removed
@@ -166,9 +171,7 @@ def update_text(ts: float, text: str) -> bool:
         lines.append(json.dumps(entry, ensure_ascii=False))
     if not changed:
         return False
-    tmp = hpath.with_suffix(".jsonl.tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    tmp.replace(hpath)
+    _atomic_write(hpath, lines)
     return True
 
 

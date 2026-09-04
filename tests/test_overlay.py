@@ -500,3 +500,39 @@ class TestMotionScience:
         assert o._badge == "✓ AI"
         o._d = None
         o.close()
+
+
+class TestMotionScienceTiming:
+    """Review follow-ups: fade-in arming and the >=4 s still-working pulse."""
+
+    def test_start_arms_fade_in_frames(self, monkeypatch):
+        import fluidvoice.overlay as ov
+
+        def boom(*a, **k):
+            raise OSError("no display")
+
+        monkeypatch.setattr("Xlib.display.Display", boom)
+        o = ov.FluidOverlay()
+        o._arm_fade_in()
+        assert o._fade_left == ov.FADE_IN_FRAMES
+        o.close()
+        o2 = ov.FluidOverlay()
+        o2._anims = False
+        o2._arm_fade_in()
+        assert o2._fade_left == 0  # reduced motion: no ramp
+        o2.close()
+
+    def test_still_working_pulse_starts_at_four_seconds(self):
+        r = PillRenderer()
+        # below 4 s, same phase, same "· N s" label: frames identical
+        a, _ = r.render([BAR_MIN_H] * BAR_COUNT, None, state="processing",
+                        phase=0.3, elapsed=2.0)
+        b, _ = r.render([BAR_MIN_H] * BAR_COUNT, None, state="processing",
+                        phase=0.3, elapsed=2.6)
+        assert a.tobytes() == b.tobytes()
+        # at/above 4 s the label alpha pulses between frames
+        c, _ = r.render([BAR_MIN_H] * BAR_COUNT, None, state="processing",
+                        phase=0.3, elapsed=4.0)
+        d, _ = r.render([BAR_MIN_H] * BAR_COUNT, None, state="processing",
+                        phase=0.3, elapsed=4.6)
+        assert c.tobytes() != d.tobytes()

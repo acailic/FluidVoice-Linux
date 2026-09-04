@@ -707,11 +707,12 @@ class TestHistoryScience:
 
     def test_date_headers_group_renders(self, loop):
         from fluidvoice.gtkui.main_window import HistoryWindow
-        now = time.time()
+        midnight = time.mktime(time.localtime(time.time())[:3]
+                               + (0, 0, 0, 0, 0, -1))
         entries = [
-            {"ts": now, "text": "newest", "app": "zed"},
-            {"ts": now - 86400, "text": "yesterdays words", "app": "zed"},
-            {"ts": now - 86400 - 5, "text": "also yesterday", "app": "zed"},
+            {"ts": time.time(), "text": "newest", "app": "zed"},
+            {"ts": midnight - 3600, "text": "yesterdays words", "app": "zed"},
+            {"ts": midnight - 7200, "text": "also yesterday", "app": "zed"},
         ]
         w = HistoryWindow(client=StubClient(entries))
         w.present()
@@ -782,4 +783,26 @@ class TestHistoryScience:
         row = self._first_entry_row(w)
         w._on_insert_row(None, row)
         assert c.inserted == ["insert me"]
+        w.close()
+
+    def test_edit_failure_keeps_editor_open(self, loop):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        c = StubClient([{"ts": 55.0, "text": "original"}])
+
+        def fail_update(ts, text):
+            c.updated.append((ts, text))
+            return False
+
+        c.history_update_text = fail_update
+        w = HistoryWindow(client=c)
+        w.present()
+        pump(loop)
+        row = self._first_entry_row(w)
+        row._start_edit(None)
+        view = row.editor.get_first_child()
+        view.get_buffer().set_text("risky edit")
+        row._end_edit(True, view)
+        assert row.editor is not None      # editor stays open...
+        assert not row.text_lbl.get_visible()  # ...with the user's text
+        assert c.updated == [(55.0, "risky edit")]
         w.close()

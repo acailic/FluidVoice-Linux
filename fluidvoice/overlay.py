@@ -875,11 +875,15 @@ class FluidOverlay:
     def start(self) -> None:
         if self._d is None or self._thread:
             return
-        if self._anims:
-            self._fade_left = FADE_IN_FRAMES
+        self._arm_fade_in()
         self._thread = threading.Thread(target=self._run, name="fluidvoice-overlay",
                                         daemon=True)
         self._thread.start()
+
+    def _arm_fade_in(self) -> None:
+        """Appear through a ~130 ms alpha ramp (skipped under reduced motion)."""
+        if self._anims:
+            self._fade_left = FADE_IN_FRAMES
 
     def show(self, text: str) -> None:
         if self._d is None:
@@ -914,8 +918,12 @@ class FluidOverlay:
         if state not in ("recording", "processing", "confirm", "done"):
             raise ValueError(f"unknown overlay state {state!r}")
         with self._lock:
-            self._state = state
+            # _state_since first: the render loop reads both unlocked, and
+            # seeing the new state must never pair with a stale timestamp
             self._state_since = time.monotonic()
+            self._state = state
+            if state != "done":
+                self._done_confidence = None
             self._last_sig = None
         if self._d is None:
             return  # notifications have no processing visual
@@ -933,8 +941,8 @@ class FluidOverlay:
             if badge is not None:
                 self._badge = badge
             self._done_confidence = confidence
+            self._state_since = time.monotonic()  # before _state: see below
             self._state = "done"
-            self._state_since = time.monotonic()
             self._last_sig = None
 
     def close(self) -> None:
