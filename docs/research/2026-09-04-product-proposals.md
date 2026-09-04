@@ -187,3 +187,19 @@ locked, config keys + doctor lines.
    limit, and today's grab-race class of bugs is X11-grab-inherent.
 3. **P6 / P7 / P8** as palate-cleansers between big phases (each is
    independently shippable).
+
+## Status 2026-09-05
+
+- **DONE:** P1 (23e2567), P2 (634dbca), P6 (93e21b2), P7 (55c2062),
+  P8 (c2a95f6).
+- **P5 in progress** (user, overnight 09-05): multi-tool protocol +
+  destructive-command list landed (03d243f, 3576ae0; spec
+  specs/d13f4d53_command-mode-v2.md). Remaining: conversation store,
+  History Commands tab.
+- **P4 picked next** — streaming preview (segmented finalization, phase 1
+  only) as Phase A of the "macOS parity and beyond" cycle
+  (docs/superpowers/specs/2026-09-05-macos-parity-and-beyond-design.md);
+  the fork is effectively being answered in order P5 → P4 → P3, with P3
+  (Wayland) the recommended cycle after this one — the upstream official
+  Linux build ("coming soon", reviews doc insight 11) keeps the window
+  time-boxed.
