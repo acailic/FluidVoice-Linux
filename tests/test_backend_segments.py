@@ -40,8 +40,8 @@ class TestFasterWhisperSegments:
         assert out["text"] == "And so it goes."
         assert out["language"] == "en" and out["duration"] == 2.0
         assert out["segments"] == [
-            {"start": 0.123, "end": 1.001, "text": "And so"},
-            {"start": 1.5, "end": 2.0, "text": "it goes."},
+            {"start": 0.123, "end": 1.001, "text": "And so", "avg_logprob": 0.0},
+            {"start": 1.5, "end": 2.0, "text": "it goes.", "avg_logprob": 0.0},
         ]
         assert len(calls) == 1  # generator consumed once, no re-transcription
 
