@@ -33,7 +33,10 @@ sources. Everything below is a known, classified gap — see
 - [x] Per-app prompt sets — DONE: `ai.per_app_prompts` rules matched against
       the recording-start app (Settings → AI → Per-app prompts, per-rule
       editor; the frontmost-app hint was already captured).
-- [ ] User-editable prompt profiles (named presets of the base prompt).
+- [x] User-editable prompt profiles — DONE: named presets of the base
+      prompt as a sidecar `prompt-profiles.json` (save/load/rename/delete
+      in Settings → AI; loading copies text into the editor, config.toml
+      stays the source of truth).
 - [x] Always-copy-to-clipboard option; sub-1s zero-padding — DONE.
 - [x] GAAV mode (lowercase-first / strip trailing period) — DONE.
 
@@ -52,10 +55,17 @@ sources. Everything below is a known, classified gap — see
       ggml catalog in Settings → Models with streaming one-click download
       (progress, atomic rename), name-or-path `model.whispercpp_model`, and a
       doctor resolution report.
-- [ ] Per-model language selection (whisper/cohere/nemotron stores upstream).
-- [ ] Model manager: list/download in `~/.cache/fluidvoice/models` — partially
-      done (faster-whisper one-click switch + GGUF downloads in Settings →
-      Models); prune/freeing stays open.
+- [x] Per-model language selection — DONE: flat `model.languages` dict
+      ({model_key: code} across all three catalogs, "auto" forces
+      detection, missing key follows general.language), resolved through
+      one `backends.effective_language` helper at every call site
+      (pipeline, preview, test-dictation, CLI); picker in Settings →
+      Models.
+- [x] Model manager: list/download/prune in `~/.cache/fluidvoice/models` —
+      DONE: faster-whisper one-click switch + GGUF/Parakeet downloads + a
+      disk-usage section in Settings → Models (per-model size + total) with
+      socket-only deletion (`model-delete` refuses the active model, in-
+      flight loads and anything outside the cache root).
 
 ## Later
 - [ ] Command mode (voice → terminal agent) with the upstream tool schema and

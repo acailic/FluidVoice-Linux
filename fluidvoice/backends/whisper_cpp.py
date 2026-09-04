@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import model_catalog
-from . import _whispercpp_binary
+from . import _whispercpp_binary, effective_language
 
 
 class WhisperCppBackend:
@@ -38,7 +38,7 @@ class WhisperCppBackend:
                     f"whisper.cpp model '{raw}' not downloaded yet "
                     f"(expected at {self.model}) — download it in "
                     f"Settings → Models, whisper.cpp GGUF")
-        self.language = cfg["general"]["language"] or "auto"
+        self.language = effective_language(cfg) or "auto"
 
     def transcribe(self, wav_path: Path, language: str | None = None) -> dict[str, Any]:
         lang = language or self.language or "auto"

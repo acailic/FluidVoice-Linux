@@ -72,6 +72,10 @@ DEFAULTS: dict[str, Any] = {
         "compute": "auto",  # auto | float16 | int8
         "whispercpp_model": "",  # catalog name (ggml-base.bin...) or path to a ggml/gguf model for whisper.cpp
         "eager_warmup": True,  # load the model at daemon start (preview-ready)
+        # per-model language overrides: {model_key: code} across all
+        # catalogs; missing key / "" inherits general.language, "auto"
+        # forces detection for that model (read per-dictation, applies live)
+        "languages": {},
     },
     "processing": {
         "remove_filler_words": True,
@@ -99,6 +103,9 @@ DEFAULTS: dict[str, Any] = {
         "max_retries": 3,
         # upstream per-app prompt sets: [{"apps": ["zed"], "instructions": "..."}]
         "per_app_prompts": [],
+        # custom base prompt for AI polish (empty = the built-in dictation
+        # prompt; Settings → AI can save named presets of it)
+        "base_prompt": "",
     },
     "insertion": {
         "mode": "typed",  # typed | paste | auto (typed, falls back to paste)
@@ -217,6 +224,9 @@ compute = "auto"  # auto | float16 | int8
 # ggml/gguf model for the whisper.cpp backend: a catalog name
 # (ggml-base.bin, ggml-small.en.bin, ...) or a path to a file
 whispercpp_model = ""
+# Per-model language overrides, e.g. languages = { small = "de", "ggml-base.en.bin" = "en" }
+# "auto" = always detect for that model; a missing key follows general.language
+languages = {}
 
 [processing]
 remove_filler_words = true
@@ -246,6 +256,9 @@ api_key_env = "SAYITERMANO_API_KEY"
 temperature = 0.2
 timeout_seconds = 120
 max_retries = 3
+# Custom base prompt for AI polish (empty = built-in). Settings → AI can
+# save named presets of it (prompt profiles).
+# base_prompt = ""
 
 [insertion]
 # typed: simulate keystrokes (xdotool type)
@@ -319,13 +332,13 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
                   "preview_bottom_offset", "preview_overlay_size",
                   "pause_media"],
     "model": ["backend", "name", "device", "compute", "whispercpp_model",
-              "eager_warmup"],
+              "eager_warmup", "languages"],
     "processing": ["remove_filler_words", "filler_words", "punctuation_enabled",
                    "punctuation_prefix", "dictionary", "gaav_enabled",
                    "gaav_lowercase_first", "gaav_remove_trailing_period",
                    "slash_mention_squeeze"],
     "ai": ["enabled", "base_url", "model", "api_key", "api_key_env", "temperature",
-           "timeout_seconds", "max_retries", "per_app_prompts"],
+           "timeout_seconds", "max_retries", "per_app_prompts", "base_prompt"],
     "insertion": ["mode", "type_delay_ms", "paste_threshold_chars",
                   "terminal_autocomplete_space", "verify_paste",
                   "terminal_paste_key"],
@@ -335,6 +348,12 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
     "command": ["max_turns", "working_dir", "timeout_seconds",
                 "confirm_timeout_s"],
 }
+
+
+# Keys where an EMPTY value is meaningful (not "keep the saved value"):
+# ai.base_prompt = "" restores the built-in prompt, so a cleared editor
+# must actually clear the file instead of carrying the old value over.
+_EMPTY_IS_MEANINGFUL = {("ai", "base_prompt")}
 
 
 def _toml_value(value: Any) -> str:
@@ -348,9 +367,16 @@ def _toml_value(value: Any) -> str:
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(v) for v in value) + "]"
     if isinstance(value, dict):
+        import re as _re
         parts = []
         for k, v in value.items():
-            parts.append(f"{k} = {_toml_value(v)}")
+            # bare TOML keys only for safe chars; anything else (e.g. the
+            # dotted "ggml-base.bin") MUST be quoted or it round-trips
+            # as a nested table
+            k_str = str(k)
+            key_repr = (k_str if _re.fullmatch(r"[A-Za-z0-9_-]+", k_str)
+                        else json.dumps(k_str, ensure_ascii=False))
+            parts.append(f"{key_repr} = {_toml_value(v)}")
         return "{ " + ", ".join(parts) + " }"
     raise ValueError(f"cannot serialize {type(value).__name__} to TOML")
 
@@ -373,7 +399,8 @@ def save_config(cfg: dict, path: Path | None = None) -> Path:
         lines.append(f"[{section}]")
         for key in keys:
             value = values.get(key)
-            if value in ("", None) and key in carried:
+            if value in ("", None) and key in carried \
+                    and (section, key) not in _EMPTY_IS_MEANINGFUL:
                 value = carried[key]  # e.g. keep an existing api_key
             if value not in ("", None):
                 lines.append(f"{key} = {_toml_value(value)}")
@@ -461,13 +488,13 @@ ALLOWED_SETTINGS: dict[str, set] = {
                   "preview_min_audio", "preview_bottom_offset",
                   "preview_overlay_size", "pause_media"},
     "model": {"backend", "name", "device", "compute", "whispercpp_model",
-              "eager_warmup"},
+              "eager_warmup", "languages"},
     "processing": {"remove_filler_words", "filler_words",
                    "punctuation_enabled", "punctuation_prefix", "dictionary",
                    "gaav_enabled", "gaav_lowercase_first",
                    "gaav_remove_trailing_period", "slash_mention_squeeze"},
     "ai": {"enabled", "base_url", "model", "api_key_env", "temperature",
-           "timeout_seconds", "max_retries", "per_app_prompts"},
+           "timeout_seconds", "max_retries", "per_app_prompts", "base_prompt"},
     "insertion": {"mode", "type_delay_ms", "paste_threshold_chars",
                   "terminal_autocomplete_space", "verify_paste",
                   "terminal_paste_key"},
@@ -497,6 +524,10 @@ def coerce_setting(section: str, key: str, value: Any) -> tuple[bool, Any]:
         return (ok, value.strip() if ok else value)
     if (section, key) == ("ai", "per_app_prompts"):
         return _coerce_per_app_prompts(value)
+    if (section, key) == ("ai", "base_prompt"):
+        # empty IS valid here (clearing the editor restores the built-in
+        # prompt), unlike the str-range rule below which rejects ""
+        return (isinstance(value, str) and len(value) <= 8000, value)
     rule = SETTING_RANGES.get((section, key))
     if rule:
         kind, bound = rule
@@ -513,6 +544,8 @@ def coerce_setting(section: str, key: str, value: Any) -> tuple[bool, Any]:
             return (False, value)
     if (section, key) == ("recording", "mic_priority"):
         return _coerce_mic_priority(value)
+    if (section, key) == ("model", "languages"):
+        return _coerce_model_languages(value)
     if (section, key) == ("general", "terminal_apps"):
         return _coerce_terminal_apps(value)
     if (section, key) in SETTING_LISTS:
@@ -557,6 +590,27 @@ def _coerce_mic_priority(value: Any) -> tuple[bool, Any]:
         cleaned.append(pattern)
     if len(cleaned) > 20:
         return (False, value)
+    return (True, cleaned)
+
+
+def _coerce_model_languages(value: Any) -> tuple[bool, Any]:
+    """model.languages: {model_key: code} per-model language overrides.
+    Keys are unique across all three catalogs (tiny...large-v3-turbo,
+    ggml-*.bin, parakeet-*). Values follow the general.language code
+    grammar; a missing key inherits general.language, "auto" forces
+    detection for that model. Max 30 entries (one per catalog model +
+    paths is plenty)."""
+    import re as _re
+    if not isinstance(value, dict) or len(value) > 30:
+        return (False, value)
+    cleaned: dict[str, str] = {}
+    for raw_k, raw_v in value.items():
+        k = str(raw_k).strip()
+        v = raw_v.strip() if isinstance(raw_v, str) else raw_v
+        if (not k or len(k) > 64 or not isinstance(raw_v, str)
+                or not _re.fullmatch(r"auto|[a-z]{2,3}(-[A-Za-z0-9]{2,8})?", v)):
+            return (False, value)
+        cleaned[k] = v
     return (True, cleaned)
 
 

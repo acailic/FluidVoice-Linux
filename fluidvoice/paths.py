@@ -63,6 +63,11 @@ def dictionary_suggestions_file() -> Path:
     return config_dir() / "dictionary-suggestions.json"
 
 
+def prompt_profiles_file() -> Path:
+    """Named presets of the AI base prompt ({name: prompt})."""
+    return config_dir() / "prompt-profiles.json"
+
+
 def audio_dir() -> Path:
     return data_dir() / "audio"
 

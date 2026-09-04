@@ -166,6 +166,58 @@ def resolve_model_name(name: str) -> str:
     return name
 
 
+def backend_model_key(backend) -> str | None:
+    """Identity of a LIVE backend for model.languages lookups (and the
+    model-delete guard): faster-whisper/parakeet expose model_name;
+    whisper.cpp exposes a model path (use its basename)."""
+    if backend is None:
+        return None
+    name = getattr(backend, "model_name", None)
+    if isinstance(name, str) and name:
+        return name
+    model = getattr(backend, "model", None)
+    if isinstance(model, str) and model:
+        return os.path.basename(model)
+    return None
+
+
+def config_model_key(cfg) -> str | None:
+    """Config-derived model identity (the Daemon._active_model_name
+    simplification): whisper.cpp -> basename(whispercpp_model);
+    parakeet -> name or PARAKEET_DEFAULT_MODEL; else resolve_model_name
+    ("auto" backend included). None when nothing resolves."""
+    m = (cfg.get("model", {}) or {}) if isinstance(cfg, dict) else {}
+    backend = str(m.get("backend", "auto"))
+    if backend == "whisper.cpp":
+        raw = str(m.get("whispercpp_model", "") or "").strip()
+        return os.path.basename(raw) if raw else None
+    if backend == "parakeet":
+        from .. import model_catalog  # lazy: model_catalog imports us
+        raw = str(m.get("name", "") or "").strip()
+        return raw if raw not in ("", "auto") \
+            else model_catalog.PARAKEET_DEFAULT_MODEL
+    try:
+        return resolve_model_name(str(m.get("name", "auto")))
+    except ValueError:
+        return None
+
+
+def effective_language(cfg, backend=None) -> str:
+    """Language for one transcription. A model.languages override for the
+    live backend's key wins (checked first), then the config-derived key;
+    ""/missing = inherit; the override may be "auto" (force detection).
+    Otherwise general.language ("auto" default)."""
+    overrides = ((cfg.get("model", {}) or {}).get("languages") or {}) \
+        if isinstance(cfg, dict) else {}
+    for key in (backend_model_key(backend), config_model_key(cfg)):
+        if key:
+            override = str(overrides.get(key, "") or "")
+            if override:
+                return override
+    general = (cfg.get("general", {}) or {}) if isinstance(cfg, dict) else {}
+    return str(general.get("language") or "auto")
+
+
 def load_backend(cfg: dict) -> Backend:
     from .faster_whisper_backend import FasterWhisperBackend
     from .torch_whisper import TorchWhisperBackend

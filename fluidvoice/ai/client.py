@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
-from .prompts import default_dictation_prompt, render_dictation_user_message
+from .prompts import base_prompt_for, render_dictation_user_message
 
 THINK_RE = re.compile(r"<think(?:ing)?>([\s\S]*?)</think(?:ing)?>")
 ORPHAN_CLOSE_RE = re.compile(r"^([\s\S]*?)</think(?:ing)?>")
@@ -110,7 +110,7 @@ class AIClient:
         self.timeout = float(ai.get("timeout_seconds", 120))
         self.retries = int(ai.get("max_retries", 3))
         self.api_key = ai.get("api_key", "") or os.environ.get(ai.get("api_key_env", ""), "")
-        self.system_prompt = default_dictation_prompt()
+        self.system_prompt = base_prompt_for(cfg)
 
     @property
     def configured(self) -> bool:

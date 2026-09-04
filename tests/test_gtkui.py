@@ -42,6 +42,9 @@ class StubClient(Client):
         self.suggestions: list[dict] = []
         self.accepted: list[tuple] = []
         self.dismissed: list[tuple] = []
+        self.profile_store: dict[str, str] = {}
+        self.profile_calls: list[tuple] = []
+        self.deleted_models: list[tuple] = []
 
     def status(self):
         return {"ok": True, "recording": False, "busy": False,
@@ -133,6 +136,42 @@ class StubClient(Client):
         self.suggestions = [s for s in self.suggestions
                             if (s.get("heard"), s.get("corrected"))
                             != (heard, corrected)]
+
+    # -- prompt profiles (mirrors Client's four methods) ----------------------
+
+    def prompt_profiles(self):
+        return dict(self.profile_store)
+
+    def prompt_profile_save(self, name, prompt):
+        self.profile_calls.append(("save", name, prompt))
+        self.profile_store[name] = prompt
+        return {"ok": True, "error": None,
+                "profiles": dict(self.profile_store)}
+
+    def prompt_profile_rename(self, old, new):
+        self.profile_calls.append(("rename", old, new))
+        if old not in self.profile_store:
+            return {"ok": False, "error": f"no profile named {old!r}",
+                    "profiles": dict(self.profile_store)}
+        self.profile_store = {(new if k == old else k): v
+                              for k, v in self.profile_store.items()}
+        return {"ok": True, "error": None,
+                "profiles": dict(self.profile_store)}
+
+    def prompt_profile_delete(self, name):
+        self.profile_calls.append(("delete", name))
+        if name not in self.profile_store:
+            return {"ok": False, "error": f"no profile named {name!r}",
+                    "profiles": dict(self.profile_store)}
+        del self.profile_store[name]
+        return {"ok": True, "error": None,
+                "profiles": dict(self.profile_store)}
+
+    # -- model pruning (mirrors Client.model_delete) --------------------------
+
+    def model_delete(self, kind, name):
+        self.deleted_models.append((kind, name))
+        return {"ok": True, "path": f"/cache/{kind}/{name}", "bytes": 1234}
 
 
 @pytest.fixture()

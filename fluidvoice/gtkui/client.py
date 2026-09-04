@@ -61,6 +61,12 @@ class Client:
     def select_model(self, name: str) -> dict:
         return self._request("select-model", name=name)
 
+    def model_delete(self, kind: str, name: str) -> dict:
+        """Socket-only model-cache deletion (the GTK app never deletes
+        files, not even in daemon-offline degraded mode). Raises
+        ClientError when the daemon is down."""
+        return self._request("model-delete", kind=kind, name=name)
+
     def mics(self) -> list[dict]:
         """Microphone list (socket action; direct tray query if down)."""
         try:
@@ -179,3 +185,35 @@ class Client:
         """Record the pair as permanently dismissed."""
         from ..processing import dict_learn
         dict_learn.dismiss(heard, corrected)
+
+    # -- prompt profiles (sidecar file beside the config; dict_learn
+    #    precedent - direct access, no daemon round-trip) ------------------------
+
+    def prompt_profiles(self) -> dict[str, str]:
+        """Named presets of the AI base prompt ({} when unreadable)."""
+        from ..ai import profiles
+        try:
+            return profiles.load_profiles()
+        except Exception:
+            return {}  # a broken sidecar must not take the window down
+
+    def _profile_call(self, fn, *args) -> dict:
+        from ..ai import profiles
+        try:
+            return {"ok": True, "error": None,
+                    "profiles": fn(*args)}
+        except ValueError as e:
+            return {"ok": False, "error": str(e),
+                    "profiles": profiles.load_profiles()}
+
+    def prompt_profile_save(self, name: str, prompt: str) -> dict:
+        from ..ai.profiles import save_named
+        return self._profile_call(save_named, name, prompt)
+
+    def prompt_profile_rename(self, old: str, new: str) -> dict:
+        from ..ai.profiles import rename_profile
+        return self._profile_call(rename_profile, old, new)
+
+    def prompt_profile_delete(self, name: str) -> dict:
+        from ..ai.profiles import delete_profile
+        return self._profile_call(delete_profile, name)

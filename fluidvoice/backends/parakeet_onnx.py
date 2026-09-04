@@ -38,6 +38,7 @@ from typing import Any
 import numpy as np
 
 from .. import model_catalog
+from . import effective_language
 
 TAIL_PAD_S = 2.0  # seconds of silence appended before featurization
 SAMPLE_RATE = 16000
@@ -218,7 +219,7 @@ class ParakeetOnnxBackend:
                 f"parakeet model '{name}' not downloaded yet "
                 f"(expected at {model_catalog.parakeet_model_dir(name)}) — "
                 f"download it in Settings → Models, Parakeet (ONNX)")
-        self.language = cfg.get("general", {}).get("language") or None
+        self.language = effective_language(cfg) or None
         # device/compute are accepted but ignored: the ONNX Runtime provider
         # list (CUDA EP when the installed wheel has it) is the source of truth
         self._device = mcfg.get("device")

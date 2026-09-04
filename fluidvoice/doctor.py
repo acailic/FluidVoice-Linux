@@ -101,6 +101,53 @@ def _formatting_lines(cfg: dict) -> list[str]:
     ]
 
 
+def _models_cache_lines(cfg: dict) -> list[str]:
+    """Models-cache report: one line per cached entry (with the ACTIVE
+    marker), a total, and a note that the legacy huggingface/hub location
+    is not manageable here."""
+    from . import model_catalog
+    entries = model_catalog.cached_models()
+    lines = [f"models cache: {paths.models_dir()}"]
+    active = backends.config_model_key(cfg)
+    for e in entries:
+        mark = " · ACTIVE" if active and e["name"] == active else ""
+        lines.append(f"  {e['kind']} {e['name']} "
+                     f"{model_catalog.human_bytes(e['bytes'])}{mark}")
+    total = sum(e["bytes"] for e in entries)
+    lines.append(f"  total: {len(entries)} model"
+                 f"{'' if len(entries) == 1 else 's'}, "
+                 f"{model_catalog.human_bytes(total)}")
+    lines.append("  note: the legacy huggingface/hub cache "
+                 f"({paths.cache_dir().parent / 'huggingface' / 'hub'}) "
+                 "is not managed here")
+    return lines
+
+
+def _language_lines(cfg: dict) -> list[str]:
+    """Language resolution: general.language, per-model overrides, and the
+    effective language of the config's active model."""
+    from . import model_catalog
+    general = str((cfg.get("general", {}) or {}).get("language") or "auto")
+    overrides = (cfg.get("model", {}) or {}).get("languages") or {}
+    lines = [f"  general: {general} (general.language)"]
+    if overrides:
+        pretty = ", ".join(f"{k}={v}" for k, v in overrides.items())
+        lines.append(f"  per-model overrides: {pretty} (model.languages)")
+    else:
+        lines.append("  per-model overrides: none (model.languages)")
+    key = backends.config_model_key(cfg)
+    lines.append(f"  active model {key or '-'} -> "
+                 f"{backends.effective_language(cfg)}")
+    m = cfg.get("model", {}) or {}
+    if str(m.get("backend", "")) == "parakeet" and key:
+        langs = model_catalog.PARAKEET_CATALOG.get(key, {}).get("langs", "")
+        if langs == "en":
+            lines.append(
+                f"  note: {key} is English-only - the language code is "
+                "recorded but not enforced")
+    return lines
+
+
 def _insertion_lines(cfg: dict) -> list[str]:
     """Insertion hardening resolution: one line per key."""
     i = cfg.get("insertion", {})
@@ -193,7 +240,8 @@ def run() -> int:
         cfg = {}
     print("\ndictionary learning:")
     print(_suggestions_line(cfg))
-    print(f"models cache: {paths.models_dir()}")
+    for line in _models_cache_lines(cfg):
+        print(line)
 
     print("\ntools:")
     for tool, why in [
@@ -228,6 +276,10 @@ def run() -> int:
 
     print("\nparakeet:")
     for line in _parakeet_lines(cfg):
+        print(line)
+
+    print("\nlanguage resolution:")
+    for line in _language_lines(cfg):
         print(line)
 
     print("\nchat/terminal formatting:")

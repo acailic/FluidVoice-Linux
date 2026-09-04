@@ -16,7 +16,7 @@ from gi.repository import Adw, Gdk, GLib, Gtk
 from .. import __version__ as APP_VERSION
 from .. import backends, model_catalog, model_download
 from ..config import DEFAULTS
-from .client import Client
+from .client import Client, ClientError
 
 # GDK keyval name -> friendly keysym the config expects (where they differ)
 _KEY_REMAP = {"Control_L": "Left_Control", "Control_R": "Right_Control",
@@ -61,11 +61,27 @@ class _ListProxy:
                 if v.strip()]
 
 
+class _TextProxy:
+    """TextBuffer-backed multi-line string for the field registry (the
+    base-prompt editor). Empty is a MEANINGFUL value ("use the built-in
+    prompt"), unlike EntryRow's keep-the-saved-value rule."""
+
+    def __init__(self, buffer: Gtk.TextBuffer):
+        self.buffer = buffer
+
+    def set_value(self, text) -> None:
+        self.buffer.set_text(str(text or ""))
+
+    def get_value(self) -> str:
+        start, end = self.buffer.get_start_iter(), self.buffer.get_end_iter()
+        return self.buffer.get_text(start, end, False)
+
+
 class _InstructionRow(Adw.PreferencesRow):
     """A preferences-compatible row that hosts the instructions TextView."""
 
-    def __init__(self, text_view: Gtk.TextView):
-        super().__init__(title="Instructions")
+    def __init__(self, text_view: Gtk.TextView, title: str = "Instructions"):
+        super().__init__(title=title)
         sw = Gtk.ScrolledWindow(child=text_view, hexpand=True,
                                 height_request=90,
                                 propagate_natural_height=True)
@@ -98,6 +114,10 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._parakeet_rows: list[Adw.ActionRow] = []
         self._parakeet_dl: dict[str, dict] = {}
         self._mod_toggles: dict[str, Gtk.ToggleButton] = {}
+        self._profiles: dict[str, str] = {}  # prompt profiles (sidecar file)
+        self._model_lang_rows: dict[str, Adw.ComboRow] = {}  # name -> row
+        self._model_lang_values_map: dict[str, list] = {}  # name -> values
+        self._suppress_touch = False  # programmatic combo rebuilds
 
         self._build_general()
         self._build_models()
@@ -219,7 +239,8 @@ class SettingsWindow(Adw.PreferencesWindow):
             GLib.idle_add(self.toast,
                           "Daemon offline — file-only mode; changes apply on "
                           "next daemon start", 6)
-        self._fill_mics()
+        self._fill_mics()  # NOTE: resets _loading to False at its end
+        self._loading = True  # keep the guard up through the final refresh
         lang = str(self.cfg.get("general", {}).get("language", "auto"))
         if lang != "auto" and lang not in LANGUAGES:
             # a saved code outside the common list stays selectable
@@ -234,6 +255,8 @@ class SettingsWindow(Adw.PreferencesWindow):
             elif isinstance(row, Adw.SwitchRow):
                 row.set_active(bool(val))
             elif isinstance(row, _ListProxy):
+                row.set_value(val)
+            elif isinstance(row, _TextProxy):
                 row.set_value(val)
             elif isinstance(row, Adw.EntryRow):
                 row.set_text("" if val is None else str(val))
@@ -252,10 +275,14 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._load_suggestions()
         self._load_mic_priority(
             list(self.cfg.get("recording", {}).get("mic_priority") or []))
+        self._load_profiles()
         self._dirty = False
-        self._loading = False
         self._sync_save_rows()
         self._refresh_models()
+        # re-sync language-row selections from cfg (Discard semantics);
+        # still under the _loading guard so no _touch fires
+        self._refresh_model_language_rows(reset=True)
+        self._loading = False
         self._update_provider_logo()
 
     _loading_first_done = False
@@ -269,6 +296,12 @@ class SettingsWindow(Adw.PreferencesWindow):
                 val = row.get_active()
             elif isinstance(row, _ListProxy):
                 val = row.get_value()
+            elif isinstance(row, _TextProxy):
+                # base_prompt POSTs even when empty: "" is meaningful
+                # (reset to the built-in prompt), unlike EntryRow
+                val = row.get_value().strip()
+                if not val and (sec, key) != ("ai", "base_prompt"):
+                    continue
             elif isinstance(row, Adw.EntryRow):
                 val = row.get_text().strip()
                 if not val:
@@ -290,6 +323,8 @@ class SettingsWindow(Adw.PreferencesWindow):
             self._collect_dictionary()
         body.setdefault("recording", {})["mic_priority"] = \
             self._collect_mic_priority()  # empty list is meaningful: removals
+        body.setdefault("model", {})["languages"] = \
+            self._collect_model_languages()  # empty dict is meaningful too
         return body
 
     def save(self) -> bool:
@@ -422,6 +457,21 @@ class SettingsWindow(Adw.PreferencesWindow):
                                 "Warm the model when the daemon starts "
                                 "(needs a daemon restart)"))
         page.add(engine)
+
+        self.lang_overrides_group = Adw.PreferencesGroup(
+            title="Per-model language",
+            description="Overrides general.language per model - "
+                        "empty = inherit, auto = always detect")
+        page.add(self.lang_overrides_group)
+
+        self.disk_group = Adw.PreferencesGroup(
+            title="Disk usage",
+            description="Cached models under ~/.cache/sayit-ermano/models "
+                        "(deletion needs the daemon)")
+        self.disk_total_row = Adw.ActionRow(title="Total", subtitle="—")
+        self.disk_group.add(self.disk_total_row)
+        self._disk_rows: list[Adw.ActionRow] = []
+        page.add(self.disk_group)
         page.add(self._save_group())
         self.add(page)
 
@@ -449,6 +499,8 @@ class SettingsWindow(Adw.PreferencesWindow):
             self._model_rows.append(row)
         self._refresh_gguf_rows()
         self._refresh_parakeet_rows()
+        self._refresh_model_language_rows()
+        self._refresh_disk_rows()
         st = self.c.status() or {}
         warm = st.get("warmup") or {}
         if warm.get("running"):
@@ -490,6 +542,157 @@ class SettingsWindow(Adw.PreferencesWindow):
         if warm.get("error"):
             self.toast(f"model error: {warm['error']}")
         return False
+
+    # -- per-model language overrides (model.languages) -----------------------
+
+    def _downloaded_model_names(self) -> list[str]:
+        """Every downloaded model across the three catalogs. Parakeet v2
+        (English-only) has no language to constrain and is skipped."""
+        names = [n for n in model_catalog.MODEL_CATALOG
+                 if model_catalog.model_downloaded(n)]
+        names += [n for n in model_catalog.GGUF_CATALOG
+                  if model_catalog.gguf_downloaded(n)]
+        names += [n for n in model_catalog.PARAKEET_CATALOG
+                  if n != "parakeet-tdt-0.6b-v2"
+                  and model_catalog.parakeet_downloaded(n)]
+        return names
+
+    def _model_lang_values(self, saved: str) -> list[tuple[str, str]]:
+        values = [("inherit (general)", ""), ("auto (detect)", "auto")] \
+            + [(c, c) for c in LANGUAGES]
+        if saved and saved != "auto" and saved not in LANGUAGES:
+            values.append((f"{saved} (saved)", saved))  # unknown saved code
+        return values
+
+    def _set_model_lang_selection(self, name: str) -> None:
+        saved = str((self.cfg.get("model", {}).get("languages") or {})
+                    .get(name, ""))
+        values = self._model_lang_values(saved)
+        model = Gtk.StringList()
+        for label, _v in values:
+            model.append(label)
+        row = self._model_lang_rows[name]
+        self._suppress_touch = True  # programmatic rebuild: no dirty
+        try:
+            row.set_model(model)
+            row.set_title(name)
+            row.set_selected([v for _l, v in values].index(saved))
+        finally:
+            self._suppress_touch = False
+        self._model_lang_values_map[name] = values
+
+    def _refresh_model_language_rows(self, reset: bool = False) -> None:
+        """Diff the downloaded set against the rows and add/remove only the
+        diff (entered selections survive refreshes; reset re-syncs them
+        from cfg, e.g. on Discard). Mic-priority discipline."""
+        wanted = self._downloaded_model_names()
+        for name in [n for n in list(self._model_lang_rows) if n not in wanted]:
+            self.lang_overrides_group.remove(self._model_lang_rows.pop(name))
+            self._model_lang_values_map.pop(name, None)
+        for name in wanted:
+            if name not in self._model_lang_rows:
+                row = Adw.ComboRow(title=name)
+                row.connect("notify::selected", self._lang_row_touch)
+                self._model_lang_rows[name] = row
+                self._model_lang_values_map[name] = []
+                self._set_model_lang_selection(name)
+                self.lang_overrides_group.add(row)
+            elif reset:
+                self._set_model_lang_selection(name)
+        self.lang_overrides_group.set_visible(bool(self._model_lang_rows))
+
+    def _lang_row_touch(self, *_args) -> None:
+        if not self._suppress_touch:
+            self._touch()
+
+    def _collect_model_languages(self) -> dict[str, str]:
+        """model.languages from the shown rows; entries for models WITHOUT
+        rows (no longer downloaded) are carried over from cfg unchanged."""
+        out: dict[str, str] = {}
+        for name, row in self._model_lang_rows.items():
+            values = self._model_lang_values_map.get(name) or []
+            idx = row.get_selected()
+            code = values[idx][1] if 0 <= idx < len(values) else ""
+            if code:  # ""/inherit drops the key
+                out[name] = code
+        shown = set(self._model_lang_rows)
+        for k, v in (self.cfg.get("model", {}).get("languages") or {}).items():
+            if k not in shown and v:
+                out[str(k)] = str(v)
+        return out
+
+    # -- disk usage / model pruning (socket-only deletion) -------------------
+
+    def _refresh_disk_rows(self) -> None:
+        """Per-cached-model size rows + total (direct read, dict_suggestions
+        precedent); deletion itself goes through the daemon."""
+        for row in self._disk_rows:
+            self.disk_group.remove(row)
+        self._disk_rows = []
+        try:
+            entries = model_catalog.cached_models()
+        except Exception:
+            entries = []  # a cache listing failure must not break the page
+        total = sum(e["bytes"] for e in entries)
+        self.disk_total_row.set_subtitle(
+            f"{len(entries)} model{'' if len(entries) == 1 else 's'} · "
+            f"{model_catalog.human_bytes(total)}" if entries else "empty")
+        active = (self._active_model() or self._active_gguf()
+                  or self._active_parakeet())
+        for e in entries:
+            row = Adw.ActionRow(
+                title=e["name"],
+                subtitle=f"{e['kind']} · "
+                         f"{model_catalog.human_bytes(e['bytes'])} · {e['path']}")
+            btn = Gtk.Button(label="Delete",
+                             css_classes=["flat", "destructive-action"])
+            btn.set_valign(Gtk.Align.CENTER)
+            if e["name"] == active:
+                btn.set_sensitive(False)
+                btn.set_tooltip_text("This is the active model")
+            else:
+                btn.connect("clicked", self._confirm_delete_model, e)
+            row.add_suffix(btn)
+            self.disk_group.add(row)
+            self._disk_rows.append(row)
+
+    def _confirm_delete_model(self, _btn, entry: dict) -> None:
+        dlg = Adw.MessageDialog(
+            transient_for=self, modal=True,
+            heading=f"Delete {entry['name']}?",
+            body=f"Frees {model_catalog.human_bytes(entry['bytes'])} from "
+                 "the models cache.")
+        dlg.add_response("cancel", "Cancel")
+        dlg.add_response("delete", "Delete")
+        dlg.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dlg.connect("response", self._on_delete_model_response, entry)
+        dlg.present()
+
+    def _on_delete_model_response(self, _dlg, response, entry: dict) -> None:
+        if response != "delete":
+            return
+        kind, name = entry["kind"], entry["name"]
+
+        def work():
+            try:
+                resp = self.c.model_delete(kind, name)
+            except ClientError:
+                resp = {"ok": False,
+                        "error": "daemon not running - start it to delete "
+                                 "models"}
+            except Exception as e:  # noqa: BLE001 - surfaced as a toast
+                resp = {"ok": False, "error": str(e)}
+            GLib.idle_add(self._after_model_delete, name, resp)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _after_model_delete(self, name: str, resp: dict) -> None:
+        if resp.get("ok"):
+            freed = model_catalog.human_bytes(int(resp.get("bytes") or 0))
+            self.toast(f"Deleted {name} (freed {freed})")
+        else:
+            self.toast(str(resp.get("error") or "delete failed"))
+        self._refresh_models()
 
     # -- whisper.cpp GGUF models (download + use) ---------------------------------
 
@@ -726,6 +929,58 @@ class SettingsWindow(Adw.PreferencesWindow):
         grp.add(test_row)
         page.add(grp)
 
+        # prompt profiles: the profile bar above the prompt editor (loading
+        # copies the text into the editor; config.toml stays the source of
+        # truth for what is active)
+        prof_grp = Adw.PreferencesGroup(
+            title="Prompt profiles",
+            description="Named presets of the base prompt - loading copies "
+                        "the text into the editor")
+        self._profile_combo = Adw.ComboRow(
+            title="Profile", subtitle="Select to load it into the editor")
+        self._profile_combo.connect("notify::selected",
+                                    self._on_profile_selected)
+        prof_grp.add(self._profile_combo)
+        self._profile_name_row = Adw.EntryRow(title="Profile name")
+        # no _touch: the name feeds profile CRUD (immediate), not the
+        # config save flow
+        save_btn = Gtk.Button(label="Save", css_classes=["suggested-action"])
+        save_btn.set_valign(Gtk.Align.CENTER)
+        save_btn.connect("clicked", self._profile_save)
+        rename_btn = Gtk.Button(label="Rename", css_classes=["flat"])
+        rename_btn.set_valign(Gtk.Align.CENTER)
+        rename_btn.connect("clicked", self._profile_rename)
+        del_btn = Gtk.Button(label="Delete",
+                             css_classes=["flat", "destructive-action"])
+        del_btn.set_valign(Gtk.Align.CENTER)
+        del_btn.connect("clicked", self._confirm_delete_profile)
+        self._profile_name_row.add_suffix(del_btn)
+        self._profile_name_row.add_suffix(rename_btn)
+        self._profile_name_row.add_suffix(save_btn)
+        prof_grp.add(self._profile_name_row)
+        page.add(prof_grp)
+
+        # custom base prompt editor (empty = the built-in dictation prompt;
+        # the Prompt profiles group above saves/loads named presets of it)
+        prompt_grp = Adw.PreferencesGroup(
+            title="Base prompt",
+            description="The system prompt AI polish starts from "
+                        "(empty = the built-in dictation prompt)")
+        tv = Gtk.TextView(hexpand=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        buf = tv.get_buffer()
+        buf.connect("changed", lambda *_: self._touch())
+        self._rows[("ai", "base_prompt")] = _TextProxy(buf)
+        prompt_grp.add(_InstructionRow(tv, title="Base prompt"))
+        builtin_row = Adw.ActionRow(
+            title="Built-in template",
+            subtitle="Start editing from the shipped dictation prompt")
+        builtin_btn = Gtk.Button(label="Insert built-in", css_classes=["flat"])
+        builtin_btn.set_valign(Gtk.Align.CENTER)
+        builtin_btn.connect("clicked", self._insert_builtin_prompt)
+        builtin_row.add_suffix(builtin_btn)
+        prompt_grp.add(builtin_row)
+        page.add(prompt_grp)
+
         self.rules_group = Adw.PreferencesGroup(
             title="Per-app prompts",
             description="Extra polish instructions when dictating into a "
@@ -786,6 +1041,102 @@ class SettingsWindow(Adw.PreferencesWindow):
     def _get_text(self, sec, key) -> str:
         row = self._rows.get((sec, key))
         return row.get_text() if isinstance(row, Adw.EntryRow) else ""
+
+    def _insert_builtin_prompt(self, _btn) -> None:
+        """Load the shipped dictation prompt into the editor (editing the
+        ~1.5 kB prompt from an empty buffer is hostile)."""
+        from ..ai.prompts import default_dictation_prompt
+        self._rows[("ai", "base_prompt")].set_value(default_dictation_prompt())
+        self._touch()
+
+    # -- prompt profiles ------------------------------------------------------
+
+    def _load_profiles(self) -> None:
+        """Rebuild the profile combo from the sidecar; failures degrade to
+        an empty combo."""
+        self._profiles = self.c.prompt_profiles() or {}
+        model = Gtk.StringList()
+        names = list(self._profiles)
+        if names:
+            for n in names:
+                model.append(n)
+        else:
+            model.append("\u2014 none \u2014")
+        self._suppress_touch = True  # programmatic rebuild: no load/dirty
+        try:
+            self._profile_combo.set_model(model)
+            self._profile_combo.set_selected(0)
+        finally:
+            self._suppress_touch = False
+
+    def _selected_profile(self) -> str | None:
+        if not self._profiles:
+            return None
+        item = self._profile_combo.get_selected_item()
+        name = item.get_string() if item is not None else None
+        return name if name in self._profiles else None
+
+    def _on_profile_selected(self, *_args) -> None:
+        """Loading copies the profile text into the editor (dirty: the user
+        then Saves to persist it to config)."""
+        if self._loading or self._suppress_touch:
+            return
+        name = self._selected_profile()
+        if name is None:
+            return
+        self._rows[("ai", "base_prompt")].set_value(self._profiles[name])
+        self._touch()
+
+    def _profile_save(self, *_args) -> None:
+        name = self._profile_name_row.get_text().strip()
+        if not name:
+            self.toast("Enter a profile name first")
+            return
+        text = self._rows[("ai", "base_prompt")].get_value()
+        resp = self.c.prompt_profile_save(name, text)
+        self._after_profile_call(resp, f"Saved profile \u201c{name}\u201d")
+
+    def _profile_rename(self, *_args) -> None:
+        old = self._selected_profile()
+        if old is None:
+            self.toast("Select a profile to rename first")
+            return
+        new = self._profile_name_row.get_text().strip()
+        if not new:
+            self.toast("Enter a new name first")
+            return
+        resp = self.c.prompt_profile_rename(old, new)
+        self._after_profile_call(resp, f"Renamed to \u201c{new}\u201d")
+
+    def _confirm_delete_profile(self, _btn) -> None:
+        name = self._selected_profile()
+        if name is None:
+            self.toast("Select a profile to delete first")
+            return
+        dlg = Adw.MessageDialog(
+            transient_for=self, modal=True,
+            heading=f"Delete profile \u201c{name}\u201d?",
+            body="The preset is removed from disk. The prompt saved in your "
+                 "config is not touched.")
+        dlg.add_response("cancel", "Cancel")
+        dlg.add_response("delete", "Delete")
+        dlg.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dlg.connect("response", self._on_delete_profile_response, name)
+        dlg.present()
+
+    def _on_delete_profile_response(self, _dlg, response, name: str) -> None:
+        if response != "delete":
+            return
+        resp = self.c.prompt_profile_delete(name)
+        self._after_profile_call(resp, f"Deleted profile \u201c{name}\u201d")
+
+    def _after_profile_call(self, resp: dict, ok_msg: str) -> None:
+        if resp.get("ok"):
+            self._profiles = resp.get("profiles") or {}
+            self._load_profiles()
+            self.toast(ok_msg)
+        else:
+            self.toast(str(resp.get("error") or "profile operation failed"))
 
     # -- per-app prompt rules --------------------------------------------------------
 

@@ -2,6 +2,7 @@
 CLI, and daemon)."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from . import backends, paths
@@ -132,3 +133,77 @@ def model_downloaded(name: str) -> bool:
             if blob.is_file() and ".incomplete" not in blob.name:
                 return True
     return False
+
+
+# -- cached-model enumeration + deletion targets (Settings → Models pruning) --
+
+def _dir_size(p: Path) -> int:
+    """Sum of file sizes under a directory (symlinks not followed)."""
+    total = 0
+    for root, _dirs, files in os.walk(p, followlinks=False):
+        for f in files:
+            try:
+                total += (Path(root) / f).stat().st_size
+            except OSError:
+                pass  # a vanished temp file must not break the listing
+    return total
+
+
+def human_bytes(n: int) -> str:
+    """Human-readable size for cache display (MB-style, 1e6 base)."""
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.1f} GB"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.0f} MB"
+    return f"{n / 1_000:.0f} KB"
+
+
+def _fw_repo_dir(repo: str) -> Path:
+    return paths.models_dir() / "faster-whisper" / (
+        "models--" + repo.replace("/", "--"))
+
+
+def cached_models() -> list[dict]:
+    """[{kind, name, path, bytes}] for every model cached under
+    paths.models_dir() ONLY - the legacy huggingface/hub fallback stays
+    unmanaged (see doctor)."""
+    out: list[dict] = []
+    fw_dir = paths.models_dir() / "faster-whisper"
+    if fw_dir.is_dir():
+        repos = {_fw_repo_dir(repo): name
+                 for name, repo in backends.FW_MODEL_REPOS.items()}
+        for d in sorted(fw_dir.iterdir()):
+            if not d.is_dir() or not d.name.startswith("models--"):
+                continue
+            name = repos.get(d, d.name.removeprefix("models--").replace("--", "/"))
+            out.append({"kind": "faster-whisper", "name": name,
+                        "path": d, "bytes": _dir_size(d)})
+    if gguf_dir().is_dir():
+        for f in sorted(gguf_dir().iterdir()):
+            if (f.is_file() and f.name.startswith("ggml-")
+                    and f.suffix in (".bin", ".gguf")
+                    and not f.name.endswith(".part")):
+                out.append({"kind": "whisper.cpp", "name": f.name,
+                            "path": f, "bytes": f.stat().st_size})
+    if parakeet_dir().is_dir():
+        for d in sorted(parakeet_dir().iterdir()):
+            if d.is_dir() and not d.name.startswith("."):
+                # dot-prefixed = staging/tarball leftovers, never a model
+                out.append({"kind": "parakeet", "name": d.name,
+                            "path": d, "bytes": _dir_size(d)})
+    return out
+
+
+def cache_entry_path(kind: str, name: str) -> Path:
+    """Resolve (kind, name) to its managed-cache path (the daemon deletes
+    through this so a client path is never trusted). ValueError on an
+    unknown kind."""
+    if kind == "whisper.cpp":
+        return gguf_dir() / name
+    if kind == "parakeet":
+        return parakeet_dir() / name
+    if kind == "faster-whisper":
+        repo = backends.FW_MODEL_REPOS.get(name, name)
+        return _fw_repo_dir(repo)
+    raise ValueError(f"unknown model kind {kind!r} "
+                     f"(faster-whisper, whisper.cpp or parakeet)")

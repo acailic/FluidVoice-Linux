@@ -21,7 +21,7 @@ from . import __version__, backends, control, insertion, ui
 from . import history as history_mod
 from . import paths
 from .ai.client import AIClient, AIError
-from .ai.prompts import default_dictation_prompt
+from .ai.prompts import base_prompt_for
 from .audio_utils import duration_seconds, is_silent
 from .config import load_config
 from .media import MediaController
@@ -104,7 +104,8 @@ class DictationPipeline:
         return duration <= 4.0 and is_silent(str(wav))
 
     def _transcribe(self, wav: Path) -> dict:
-        return self.backend.transcribe(wav, language=self.cfg["general"]["language"])
+        return self.backend.transcribe(
+            wav, language=backends.effective_language(self.cfg, self.backend))
 
     def _polish(self, text: str, app_hint: str | None = None) -> tuple[str, bool]:
         """Returns (text, ai_used) - falls back to the raw text on AI errors.
@@ -117,7 +118,7 @@ class DictationPipeline:
             self.cfg["ai"].get("per_app_prompts", []), app_hint)
         try:
             if instructions and self.polisher is None:
-                prompt = system_prompt_for(default_dictation_prompt(),
+                prompt = system_prompt_for(base_prompt_for(self.cfg),
                                            instructions)
                 return polisher(text, system_prompt=prompt), True
             return polisher(text), True
@@ -839,6 +840,48 @@ class Daemon:
         except Exception as e:  # noqa: BLE001 - surfaced in the UI
             self.warmup = {"running": False, "error": str(e)[:300], "model": model}
 
+    def delete_model(self, kind: str, name: str) -> dict:
+        """Remove one cached model (Settings → Models pruning). The target
+        is resolved from kind+name under the managed cache root - a client
+        path is never trusted; the active model and in-flight loads are
+        refused."""
+        import shutil
+
+        from . import model_catalog
+        name = name.strip()
+        if not name:
+            return {"ok": False, "error": "missing model name"}
+        try:
+            target = model_catalog.cache_entry_path(kind, name)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        if not target.exists():
+            return {"ok": False,
+                    "error": f"{name} is not in the models cache"}
+        root = paths.models_dir().resolve()
+        t = target.resolve()
+        if t == root or not t.is_relative_to(root):
+            return {"ok": False,
+                    "error": "refusing to delete outside the models cache"}
+        active = backends.backend_model_key(self.backend) \
+            or backends.config_model_key(self.cfg)
+        if name == active:
+            return {"ok": False,
+                    "error": f"{name} is the active model (switch models first)"}
+        if self.warmup.get("running"):
+            return {"ok": False,
+                    "error": "a model load is in progress - try again once "
+                             "it finishes"}
+        freed = (model_catalog._dir_size(t) if t.is_dir()
+                else t.stat().st_size)
+        if t.is_dir():
+            shutil.rmtree(t)
+        else:
+            t.unlink()
+        log(f"deleted cached model {kind} {name} "
+            f"(freed {model_catalog.human_bytes(freed)}): {t}")
+        return {"ok": True, "path": str(t), "bytes": freed}
+
     # -- control protocol ----------------------------------------------------
 
     def handle_request(self, req: dict) -> dict:
@@ -865,6 +908,8 @@ class Daemon:
                                        if self._hotkey is not None else None),
                     "warmup": dict(self.warmup),
                     "active_model": self._active_model_name(),
+                    "active_model_key": backends.backend_model_key(self.backend)
+                                       or backends.config_model_key(self.cfg),
                     "today": history_mod.today_stats(history_mod.read_all())}
         if action == "shutdown":
             self._quit_gracefully()
@@ -882,6 +927,9 @@ class Daemon:
             return self._set_config(req.get("config") or {})
         if action == "select-model":
             return self.select_model(str(req.get("name", "")))
+        if action == "model-delete":
+            return self.delete_model(str(req.get("kind", "")),
+                                     str(req.get("name", "")))
         if action == "mics":
             from .tray import list_microphones
             return {"ok": True, "mics": list_microphones()}
@@ -1042,7 +1090,8 @@ class Daemon:
             display.start()
             engine = PreviewEngine(
                 Path(raw_path),
-                faster_whisper_transcriber(model, self.cfg["general"]["language"]),
+                faster_whisper_transcriber(
+                    model, backends.effective_language(self.cfg, self.backend)),
                 display.show,
                 interval=float(rcfg.get("preview_interval", 1.2)),
                 min_audio=float(rcfg.get("preview_min_audio", 1.0)))
@@ -1194,8 +1243,8 @@ class Daemon:
                 return {"ok": False, "duration_s": duration,
                         "error": "audio was silent - is the mic muted?"}
             backend = self._ensure_backend()
-            result = backend.transcribe(Path(wav),
-                                        self.cfg["general"]["language"]) or {}
+            result = backend.transcribe(
+                Path(wav), backends.effective_language(self.cfg, backend)) or {}
             return {"ok": True, "duration_s": round(duration, 1),
                     "text": result.get("text", "")}
         except Exception as e:

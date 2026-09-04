@@ -4,7 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from . import ALIASES, cuda_available, resolve_model_name
+from . import (ALIASES, cuda_available, effective_language,
+               resolve_model_name)
 
 
 class TorchWhisperBackend:
@@ -16,7 +17,7 @@ class TorchWhisperBackend:
         self._whisper = whisper
         mcfg = cfg["model"]
         self.model_name = resolve_model_name(mcfg["name"])
-        self.language = cfg["general"]["language"] or None
+        self.language = effective_language(cfg) or None
         self.device = mcfg["device"]
         if self.device == "auto":
             self.device = "cuda" if cuda_available() else "cpu"

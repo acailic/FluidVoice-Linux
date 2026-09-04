@@ -137,6 +137,12 @@ matrix + upstream changelog with its refresh loop).
 - Works with any OpenAI-compatible endpoint (OpenAI/Groq/Ollama/LM Studio/
   llama.cpp); live-tested against local Ollama.
 - Error behavior: AI failure falls back to raw transcript + notification.
+- Custom base prompt: `ai.base_prompt` (empty = the built-in dictation
+  prompt) feeds both the AI client and the per-app compose; Settings → AI
+  edits it and manages named presets in a sidecar `prompt-profiles.json`
+  (0600 atomic writes; loading copies text into the editor — config.toml
+  stays the single source of truth; a malformed file degrades to an empty
+  list with one warning, never a crash).
 
 ### Native GTK app (`fluidvoice app` / `fluidvoice settings`)
 - GTK 4 + libadwaita, single instance with remote window raising
@@ -164,6 +170,17 @@ matrix + upstream changelog with its refresh loop).
   `model.backend = "parakeet"` + `model.name` (an engine key — hot-swaps
   the loaded model like `select-model`); doctor reports onnxruntime,
   providers and per-model download state.
+- **Prompt profiles + base prompt** (Settings → AI): multi-line base-prompt
+  editor (empty = built-in, one-click "Insert built-in" seed) and a
+  profile bar above it — Save/Rename/Delete of named presets in
+  `prompt-profiles.json` (delete is confirmation-gated).
+- **Per-model language + disk usage** (Settings → Models): one language
+  picker per downloaded model (inherit / auto / code; `model.languages`),
+  and a disk-usage group listing every cached model under
+  `~/.cache/sayit-ermano/models` with per-entry sizes, the total, and a
+  Delete button that goes through the socket-only `model-delete` action
+  (the active model is disabled with a tooltip; the GTK app never deletes
+  files directly, not even in daemon-offline mode).
 - Replaces the retired web UI (spec: docs/superpowers/specs/
   2026-09-02-native-settings-app-design.md) - no TCP listener remains;
   the localhost CSRF/DNS-rebinding surface is gone by construction.
@@ -232,7 +249,17 @@ matrix + upstream changelog with its refresh loop).
       Remaining divergence (deliberate): typed keys do not end the dictation
       (upstream clean-tap interrupts), and the held hotkey's auto-repeats
       reach the app.
-- [ ] Per-model language selection (one global language today).
+- [x] **Per-model language selection** — DONE: one flat `model.languages`
+      dict (`{model_key: code}` across all three catalogs) instead of
+      upstream's separate whisper/cohere/nemotron per-store pickers;
+      missing key / `""` inherits `general.language`, `"auto"` forces
+      detection for that model (upstream "automatic preserved"). Resolution
+      lives in one `backends.effective_language(cfg, backend)` helper wired
+      into all four language call sites (pipeline, live preview,
+      test-dictation, `transcribe` CLI); applies live (not an engine key).
+      Parakeet v2 (English-only) records but cannot enforce a code; the
+      Settings → Models picker skips it. Divergence from upstream: flat
+      dict vs per-store pickers.
 
 ### Wayland parity (v0.3)
 - [ ] Insertion via ydotool/wtype; wl-clipboard restore; DE-shortcut /

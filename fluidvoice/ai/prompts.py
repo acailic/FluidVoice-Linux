@@ -67,6 +67,13 @@ def default_dictation_prompt() -> str:
     return BASE_DICTATION_PROMPT + "\n\n" + DEFAULT_DICTATION_PROMPT_BODY
 
 
+def base_prompt_for(cfg: dict) -> str:
+    """The dictation base prompt for a config: the user's ai.base_prompt
+    override when set, else the built-in default."""
+    override = (cfg.get("ai", {}) or {}).get("base_prompt") if cfg else None
+    return str(override) if override else default_dictation_prompt()
+
+
 def default_edit_prompt() -> str:
     if DEFAULT_EDIT_PROMPT_BODY.startswith(BASE_EDIT_PROMPT):
         return DEFAULT_EDIT_PROMPT_BODY

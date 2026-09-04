@@ -7,7 +7,8 @@ import wave
 from pathlib import Path
 from typing import Any
 
-from . import FW_MODEL_REPOS, cuda_available, preload_cuda_libs, resolve_model_name
+from . import (FW_MODEL_REPOS, cuda_available, effective_language,
+               preload_cuda_libs, resolve_model_name)
 
 
 class FasterWhisperBackend:
@@ -20,7 +21,7 @@ class FasterWhisperBackend:
         self._WhisperModel = WhisperModel
         mcfg = cfg["model"]
         self.model_name = resolve_model_name(mcfg["name"])
-        self.language = cfg["general"]["language"] or None
+        self.language = effective_language(cfg) or None
         device = mcfg["device"]
         compute = mcfg["compute"]
         if device == "auto":

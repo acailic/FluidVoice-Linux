@@ -135,7 +135,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             if audio != args.file:
                 converted_dir = audio.parent
-            result = backend.transcribe(audio, language=cfg["general"]["language"])
+            result = backend.transcribe(
+                audio, language=backends.effective_language(cfg, backend))
         finally:
             if converted_dir is not None:
                 shutil.rmtree(converted_dir, ignore_errors=True)

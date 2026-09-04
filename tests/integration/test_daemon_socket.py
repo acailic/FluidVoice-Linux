@@ -54,3 +54,29 @@ class TestDaemonProcess:
     def test_unknown_action_rejected(self, daemon_process):
         resp = control.request("explode")
         assert resp["ok"] is False
+
+    def test_model_delete_removes_decoy_over_socket(self, daemon_process):
+        """Settings → Models pruning: a decoy cached model dir is removed
+        via the socket; the active model (config-derived) is refused."""
+        from fluidvoice import model_catalog
+        decoy = model_catalog.cache_entry_path("faster-whisper", "tiny")
+        (decoy / "blobs").mkdir(parents=True)
+        (decoy / "blobs" / "b").write_bytes(b"x" * 4242)
+        resp = control.request("model-delete", kind="faster-whisper",
+                                name="tiny")
+        assert resp["ok"] is True and resp["bytes"] == 4242
+        assert not decoy.exists()
+        # the config's active model is refused (auto backend -> small/base)
+        from fluidvoice import backends
+        from fluidvoice.config import load_config
+        active = backends.config_model_key(load_config())
+        active_dir = model_catalog.cache_entry_path("faster-whisper", active)
+        (active_dir / "blobs").mkdir(parents=True)
+        (active_dir / "blobs" / "b").write_bytes(b"x")
+        resp = control.request("model-delete", kind="faster-whisper",
+                                name=active)
+        assert resp["ok"] is False and "active model" in resp["error"]
+        assert active_dir.exists()  # untouched
+        # unknown kind refused
+        resp = control.request("model-delete", kind="bogus", name="x")
+        assert resp["ok"] is False
