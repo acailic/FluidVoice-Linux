@@ -79,6 +79,22 @@ sources. Everything below is a known, classified gap — see
       flight loads and anything outside the cache root).
 
 ## Later
+- [ ] macOS-parity quick wins (design doc 2026-09-05 "macOS parity and
+      beyond", B-track): up to 3 dictation shortcuts with per-shortcut
+      prompt profile; activation mode "both" (tap toggles, hold talks);
+      dictionary spoken-formatting actions (trigger word → new line/
+      paragraph/tab); spoken slash/mention grammar ("slash fix", "at sign
+      John", "tag John"); stats page (streak, time-saved, 7/30-day chart);
+      pill hover chips (prompt/mode/actions) — stretch.
+- [ ] Leapfrog menu (same doc, C/D tracks, evidence: reviews sweep): idle
+      model-unload / keep-warm policy (upstream's 3 GB RAM fight, #548/#854);
+      fast language switching + whisper language whitelist (upstream's
+      weakest area, #506/#100 — personally relevant); OpenAI-compatible
+      remote STT endpoint as a backend (LAN GPU boxes, upstream declined
+      the PR); AI refusal/derail guardrail (never type "I'm sorry…");
+      scriptable unix-socket API (upstream loopback-API parity without
+      TCP); AT-SPI caret-context smart typing; per-app behavior profiles;
+      diarization; n-best pick lists (blocked on backend alternates).
 - [x] Command mode (voice → terminal agent) with the upstream tool schema and
       destructive-command confirmation list — DONE (v2): tool schema ported
       into the strict-JSON `tool_calls` protocol with per-arg validation;
