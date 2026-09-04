@@ -5,7 +5,7 @@
 <h1 align="center">SayItErmano</h1>
 
 <p align="center">
-  <strong>FluidVoice for Linux</strong> — press a key, speak, and polished text lands in any app.<br>
+  <strong>Dictation app for Linux</strong> — press a key, speak, and polished text lands in any app.<br>
   100% local speech-to-text · optional AI polish · native GTK 4 app
 </p>
 
