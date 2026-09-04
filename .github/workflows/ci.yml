@@ -30,7 +30,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e . pytest
       - name: Unit tests (offline)
-        run: pytest -m "not slow and not integration" -q
+        # scope to tests/: bare `pytest` also collects adws/*_test.py,
+        # which are agent-factory scripts with extra deps (pydantic)
+        run: pytest tests -m "not slow and not integration" -q
       - name: Upload test log on failure
         if: failure()
         uses: actions/upload-artifact@v4
