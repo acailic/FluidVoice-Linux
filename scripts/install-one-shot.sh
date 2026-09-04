@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# FluidVoiceLinux one-shot installer.
+# SayItErmano one-shot installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/acailic/FluidVoice-Linux/linux/scripts/install-one-shot.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/acailic/SayItErmano/linux/scripts/install-one-shot.sh | bash
 #
 # DEFAULT (no sudo): installs into your home directory
-#   ~/.local/share/fluidvoice-linux/venv     bundled runtime
-#   ~/.local/bin/fluidvoice                  CLI (must be on PATH)
+#   ~/.local/share/sayit-ermano/venv     bundled runtime
+#   ~/.local/bin/sayit-ermano            CLI (must be on PATH)
 #   ~/.local/share/applications + icons      launcher entry
 #   ~/.config/autostart/                     daemon at login
-#   ~/.config/systemd/user/fluidvoice.service  (shadows any system unit)
+#   ~/.config/systemd/user/sayit-ermano.service  (shadows any system unit)
 # A system-wide .deb install remains available:  bash install-one-shot.sh --system
 #
 # Options:
@@ -18,9 +18,9 @@
 #   DRY_RUN=1 ...                           download+verify only
 set -euo pipefail
 
-REPO="acailic/FluidVoice-Linux"
+REPO="acailic/SayItErmano"
 BIN="$HOME/.local/bin"
-APP_DIR="$HOME/.local/share/fluidvoice-linux"
+APP_DIR="$HOME/.local/share/sayit-ermano"
 MODE="user"
 
 say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -30,15 +30,23 @@ die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 [ "${1:-}" = "--system" ] && { MODE="system"; shift; }
 if [ "${1:-}" = "--uninstall" ]; then
     say "Removing the user installation..."
-    systemctl --user disable --now fluidvoice.service 2>/dev/null || true
+    systemctl --user disable --now sayit-ermano.service 2>/dev/null || true
     pkill -f "$APP_DIR/venv/bin/python -m fluidvoice" 2>/dev/null || true
-    rm -rf "$APP_DIR" "$BIN/fluidvoice" \
+    rm -rf "$APP_DIR" "$BIN/sayit-ermano" \
+        "$HOME/.local/share/applications/sayit-ermano.desktop" \
+        "$HOME/.config/autostart/sayit-ermano.desktop" \
+        "$HOME/.config/systemd/user/sayit-ermano.service"
+    # pre-rename layout (fluidvoice / fluidvoice-linux), if ever present
+    systemctl --user disable --now fluidvoice.service 2>/dev/null || true
+    pkill -f '/opt/fluidvoice-linux/.*/python -m fluidvoice' 2>/dev/null || true
+    rm -f "$HOME/.local/bin/fluidvoice" \
         "$HOME/.local/share/applications/fluidvoice-linux.desktop" \
         "$HOME/.config/autostart/fluidvoice-linux.desktop" \
         "$HOME/.config/systemd/user/fluidvoice.service"
     systemctl --user daemon-reload 2>/dev/null || true
-    say "Removed. (config kept at ~/.config/fluidvoice)"
-    say "A system-wide .deb, if present, is separate: sudo apt remove fluidvoice-linux"
+    say "Removed. (config kept at ~/.config/sayit-ermano)"
+    say "A system-wide .deb, if present, is separate: sudo apt remove sayit-ermano"
+    say "Pre-rename system package (if ever installed): sudo apt remove fluidvoice-linux"
     exit 0
 fi
 
@@ -96,14 +104,14 @@ if [ "$MODE" = "system" ]; then
     sudo apt install -y "$DEB"
     cat <<'NOTE'
 
-  FluidVoice installed system-wide! Log out and back in once so the daemon
+  SayItErmano installed system-wide! Log out and back in once so the daemon
   autostarts and the launcher entry appear.
   (Upgrading? The daemon restarts itself automatically - just close and
   reopen the settings window if you had it open.)
 
     - press Right Ctrl, speak, press Right Ctrl again -> text is typed
-    - "FluidVoice" in your app launcher opens the settings UI
-    - fluidvoice doctor     check everything is healthy
+    - "SayItErmano" in your app launcher opens the settings UI
+    - sayit-ermano doctor     check everything is healthy
 
 NOTE
     exit 0
@@ -118,46 +126,50 @@ say "Installing into your home directory (no sudo)..."
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 dpkg-deb -x "$DEB" "$STAGE"
-[ -d "$STAGE/opt/fluidvoice-linux/venv" ] || die "unexpected package layout"
+[ -d "$STAGE/opt/sayit-ermano/venv" ] || die "unexpected package layout"
 
 # stop whatever daemon is running before its files move underneath it
-systemctl --user stop fluidvoice.service 2>/dev/null || true
-pkill -f '/opt/fluidvoice-linux/.*/python -m fluidvoice daemon' 2>/dev/null || true
+systemctl --user stop sayit-ermano.service 2>/dev/null || true
+pkill -f '/opt/sayit-ermano/.*/python -m fluidvoice daemon' 2>/dev/null || true
 pkill -f "$APP_DIR/venv/bin/python -m fluidvoice daemon" 2>/dev/null || true
+# legacy pre-rename system install (fluidvoice-linux): stop its daemon and
+# retire its unit so two daemons can't fight over the hotkey
+systemctl --user disable --now fluidvoice.service 2>/dev/null || true
+pkill -f '/opt/fluidvoice-linux/.*/python -m fluidvoice daemon' 2>/dev/null || true
 sleep 1
 
 mkdir -p "$APP_DIR" "$BIN" \
     "$HOME/.local/share/applications" "$HOME/.local/share/icons" \
     "$HOME/.config/autostart" "$HOME/.config/systemd/user"
 rm -rf "$APP_DIR/venv"
-cp -a "$STAGE/opt/fluidvoice-linux/venv" "$APP_DIR/venv"
+cp -a "$STAGE/opt/sayit-ermano/venv" "$APP_DIR/venv"
 
-cat > "$BIN/fluidvoice" <<WRAP
+cat > "$BIN/sayit-ermano" <<WRAP
 #!/bin/sh
-# FluidVoiceLinux user launcher (keeps the session environment intact)
+# SayItErmano user launcher (keeps the session environment intact)
 exec "$APP_DIR/venv/bin/python" -m fluidvoice "\$@"
 WRAP
-chmod 755 "$BIN/fluidvoice"
+chmod 755 "$BIN/sayit-ermano"
 
-sed "s|^Exec=/usr/bin/fluidvoice|Exec=$BIN/fluidvoice|" \
-    "$STAGE/usr/share/applications/fluidvoice-linux.desktop" \
-    > "$HOME/.local/share/applications/fluidvoice-linux.desktop"
-sed "s|^Exec=/usr/bin/fluidvoice|Exec=$BIN/fluidvoice|" \
-    "$STAGE/etc/xdg/autostart/fluidvoice-linux.desktop" \
-    > "$HOME/.config/autostart/fluidvoice-linux.desktop"
+sed "s|^Exec=/usr/bin/sayit-ermano|Exec=$BIN/sayit-ermano|" \
+    "$STAGE/usr/share/applications/sayit-ermano.desktop" \
+    > "$HOME/.local/share/applications/sayit-ermano.desktop"
+sed "s|^Exec=/usr/bin/sayit-ermano|Exec=$BIN/sayit-ermano|" \
+    "$STAGE/etc/xdg/autostart/sayit-ermano.desktop" \
+    > "$HOME/.config/autostart/sayit-ermano.desktop"
 cp -a "$STAGE/usr/share/icons/hicolor/." "$HOME/.local/share/icons/hicolor/" 2>/dev/null || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 \
     && gtk-update-icon-cache -q -t -f "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
-cat > "$HOME/.config/systemd/user/fluidvoice.service" <<UNIT
+cat > "$HOME/.config/systemd/user/sayit-ermano.service" <<UNIT
 [Unit]
-Description=FluidVoiceLinux dictation daemon (user install)
+Description=SayItErmano dictation daemon (user install)
 PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=$BIN/fluidvoice daemon
+ExecStart=$BIN/sayit-ermano daemon
 Restart=on-failure
 RestartSec=3
 
@@ -165,33 +177,39 @@ RestartSec=3
 WantedBy=graphical-session.target
 UNIT
 systemctl --user daemon-reload 2>/dev/null || true
-systemctl --user enable fluidvoice.service 2>/dev/null || true
-systemctl --user restart fluidvoice.service 2>/dev/null || true
-systemctl --user start fluidvoice.service 2>/dev/null || true
+systemctl --user enable sayit-ermano.service 2>/dev/null || true
+systemctl --user restart sayit-ermano.service 2>/dev/null || true
+systemctl --user start sayit-ermano.service 2>/dev/null || true
 
 case ":$PATH:" in
     *":$BIN:"*) ;;
     *) warn "$BIN is not on your PATH - add it:  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc" ;;
 esac
+if dpkg -s sayit-ermano >/dev/null 2>&1; then
+    warn "a system-wide .deb (sayit-ermano) is also installed."
+    warn "The user install shadows its systemd unit; to drop the duplicate"
+    warn "entirely:  sudo apt remove sayit-ermano"
+fi
 if dpkg -s fluidvoice-linux >/dev/null 2>&1; then
-    warn "a system-wide .deb (fluidvoice-linux) is still installed."
-    warn "The user install shadows it (same systemd unit name); to drop the"
-    warn "duplicate entirely:  sudo apt remove fluidvoice-linux"
+    warn "a pre-rename system-wide .deb (fluidvoice-linux) is still installed."
+    warn "Its daemon was stopped and its autostart unit retired; remove the old"
+    warn "package entirely with:  sudo apt remove fluidvoice-linux"
 fi
 
-if systemctl --user is-active --quiet fluidvoice.service 2>/dev/null; then
+if systemctl --user is-active --quiet sayit-ermano.service 2>/dev/null; then
     say "daemon restarted on the new version - no logout needed"
 else
-    say "daemon will start at next login (start now:  systemctl --user start fluidvoice)"
+    say "daemon will start at next login (start now:  systemctl --user start sayit-ermano)"
 fi
 cat <<'NOTE'
 
-  FluidVoice installed (user-space, no sudo)!
+  SayItErmano installed (user-space, no sudo)!
+  (SayItErmano is the community Linux port of FluidVoice - altic.dev)
 
     - press Right Ctrl, speak, press Right Ctrl again -> text is typed
-    - "FluidVoice" in your app launcher opens the settings UI
-      (model picker, AI polish, history) - or run: fluidvoice settings
-    - fluidvoice doctor     check everything is healthy
-    - fluidvoice --help     all commands
+    - "SayItErmano" in your app launcher opens the settings UI
+      (model picker, AI polish, history) - or run: sayit-ermano settings
+    - sayit-ermano doctor     check everything is healthy
+    - sayit-ermano --help     all commands
 
 NOTE

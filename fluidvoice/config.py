@@ -138,7 +138,7 @@ def load_config(path: Path | None = None) -> dict:
 
 
 TEMPLATE = """\
-# FluidVoiceLinux configuration.
+# SayItErmano configuration.
 # Delete any line to fall back to the built-in default.
 
 [general]
@@ -327,7 +327,7 @@ def save_config(cfg: dict, path: Path | None = None) -> Path:
                 carry = tomllib.load(fh)
         except tomllib.TOMLDecodeError:
             carry = {}
-    lines: list[str] = ["# FluidVoiceLinux configuration (managed by the settings UI)",
+    lines: list[str] = ["# SayItErmano configuration (managed by the settings UI)",
                         ""]
     for section, keys in _SAVE_WHITELIST.items():
         values = cfg.get(section, {})

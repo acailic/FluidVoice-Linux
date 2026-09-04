@@ -15,7 +15,7 @@ from .client import Client
 
 class OnboardingWindow(Adw.ApplicationWindow):
     def __init__(self, application=None, client=None):
-        super().__init__(application=application, title="Welcome to FluidVoice",
+        super().__init__(application=application, title="Welcome to SayItErmano",
                          default_width=560, default_height=560)
         self.c = client or Client()
 
@@ -24,11 +24,11 @@ class OnboardingWindow(Adw.ApplicationWindow):
         vbox.append(Adw.HeaderBar())
 
         page = Adw.StatusPage(
-            title="Welcome to FluidVoice",
+            title="Welcome to SayItErmano",
             description="A one-pass setup, same as on the Mac: check your mic, "
                         "the engine, then try a real dictation. Nothing gets "
                         "typed into your apps.",
-            icon_name="fluidvoice-linux", vexpand=True)
+            icon_name="sayit-ermano", vexpand=True)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
                       margin_start=24, margin_end=24, margin_bottom=18)
         page.set_child(box)

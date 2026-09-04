@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FluidVoiceLinux installer (Pop!_OS / Ubuntu / Debian, X11)
+# SayItErmano installer (Pop!_OS / Ubuntu / Debian, X11)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO_DIR="$(pwd)"
@@ -15,14 +15,14 @@ python3 -m venv --system-site-packages .venv
 .venv/bin/pip install -e . -q
 
 echo "== 3/5 config =="
-[ -f ~/.config/fluidvoice/config.toml ] || .venv/bin/fluidvoice config init
+[ -f ~/.config/sayit-ermano/config.toml ] || .venv/bin/sayit-ermano config init
 
 echo "== 4/5 systemd user unit (path + DISPLAY baked in) =="
 UNIT_DIR=~/.config/systemd/user
 mkdir -p "$UNIT_DIR"
-cat > "$UNIT_DIR/fluidvoice.service" <<UNIT
+cat > "$UNIT_DIR/sayit-ermano.service" <<UNIT
 [Unit]
-Description=FluidVoiceLinux dictation daemon
+Description=SayItErmano dictation daemon
 PartOf=graphical-session.target
 After=graphical-session.target
 
@@ -30,7 +30,7 @@ After=graphical-session.target
 Type=simple
 Environment=DISPLAY=${DISPLAY:-:0}
 Environment=XAUTHORITY=${XAUTHORITY:-$HOME/.Xauthority}
-ExecStart=$REPO_DIR/.venv/bin/fluidvoice daemon
+ExecStart=$REPO_DIR/.venv/bin/sayit-ermano daemon
 Restart=on-failure
 RestartSec=3
 
@@ -38,19 +38,19 @@ RestartSec=3
 WantedBy=graphical-session.target
 UNIT
 systemctl --user daemon-reload
-systemctl --user enable --now fluidvoice.service
+systemctl --user enable --now sayit-ermano.service
 
 echo "== 5/5 verify =="
-.venv/bin/fluidvoice doctor
-systemctl --user --no-pager status fluidvoice.service | head -5 || true
+.venv/bin/sayit-ermano doctor
+systemctl --user --no-pager status sayit-ermano.service | head -5 || true
 
 cat <<'NOTE'
 
 Done. The daemon runs as a systemd user service tied to your graphical
 session (starts at login, stops at logout).
-  Start/stop:  systemctl --user start|stop fluidvoice
-  Logs:        journalctl --user -u fluidvoice -f
-  Settings UI: $REPO_DIR/.venv/bin/fluidvoice settings
+  Start/stop:  systemctl --user start|stop sayit-ermano
+  Logs:        journalctl --user -u sayit-ermano -f
+  Settings UI: $REPO_DIR/.venv/bin/sayit-ermano settings
   Hotkey:      Right Ctrl (tap to start, tap again to type)
 
 NOTE

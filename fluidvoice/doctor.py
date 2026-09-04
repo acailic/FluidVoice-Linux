@@ -1,4 +1,4 @@
-"""`fluidvoice doctor` - environment report."""
+"""`sayit-ermano doctor` - environment report."""
 from __future__ import annotations
 
 import os
@@ -48,7 +48,7 @@ def _whispercpp_lines(cfg: dict) -> list[str]:
 
 
 def run() -> int:
-    print(f"FluidVoiceLinux v{__version__} doctor\n")
+    print(f"SayItErmano v{__version__} doctor\n")
     ok = True
 
     session = os.environ.get("XDG_SESSION_TYPE", "unknown")
@@ -57,7 +57,7 @@ def run() -> int:
     if session == "x11":
         print("  X11: full experience (global hotkey + xdotool typing)")
     elif session == "wayland":
-        print("  Wayland: DE-shortcut -> `fluidvoice toggle` works; typing needs "
+        print("  Wayland: DE-shortcut -> `sayit-ermano toggle` works; typing needs "
               "ydotool/wtype (see README)")
         ok = False
 
@@ -103,7 +103,7 @@ def run() -> int:
     print(f"\ncontrol socket: {paths.socket_path()} "
           f"({'alive' if paths.socket_path().exists() else 'daemon not running'})")
     if _gtk_available():
-        print("settings app: GTK 4 + libadwaita OK (`fluidvoice app`)")
+        print("settings app: GTK 4 + libadwaita OK (`sayit-ermano app`)")
     else:
         print("settings app: GTK 4 / libadwaita missing - install with\n"
               "  apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1")

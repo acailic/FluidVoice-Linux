@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build the FluidVoiceLinux .deb — the "install like a Mac app" experience:
-#   sudo apt install ./fluidvoice-linux_<ver>_amd64.deb
-#   -> /usr/bin/fluidvoice CLI
+# Build the SayItErmano .deb — the "install like a Mac app" experience:
+#   sudo apt install ./sayit-ermano_<ver>_amd64.deb
+#   -> /usr/bin/sayit-ermano CLI
 #   -> launcher entry (opens the settings UI)
 #   -> daemon autostarts at login (XDG autostart)
 #   -> icon, systemd user unit
 #
-# The Python runtime is a bundled venv under /opt/fluidvoice-linux/venv so the
+# The Python runtime is a bundled venv under /opt/sayit-ermano/venv so the
 # deb needs no pip/uv on the target. --system-site-packages is used so a CUDA
 # torch already on the machine (and its NVIDIA libs) are reused when present;
 # without it the app still runs on CPU (faster-whisper int8).
@@ -16,7 +16,7 @@ REPO="$(pwd)"
 VERSION="$(.venv/bin/python -c 'import fluidvoice; print(fluidvoice.__version__)')"
 PKGVER="${DEB_VERSION:-1}"
 ARCH="${DEB_ARCH:-$(dpkg --print-architecture)}"
-NAME="fluidvoice-linux"
+NAME="sayit-ermano"
 STAGE="$(mktemp -d)/pkg"
 trap 'rm -rf "$(dirname "$STAGE")"' EXIT
 
@@ -40,21 +40,21 @@ find "$STAGE/opt" -type f -exec chmod go-w {} + || true
 
 # 2. CLI wrapper ------------------------------------------------------------
 mkdir -p "$STAGE/usr/bin"
-cat > "$STAGE/usr/bin/fluidvoice" <<'WRAP'
+cat > "$STAGE/usr/bin/sayit-ermano" <<'WRAP'
 #!/bin/sh
-# FluidVoiceLinux launcher - keeps the user's session environment (DISPLAY,
+# SayItErmano launcher - keeps the user's session environment (DISPLAY,
 # XAUTHORITY, XDG_RUNTIME_DIR) which sudo/apt contexts would otherwise lose.
-exec /opt/fluidvoice-linux/venv/bin/python -m fluidvoice "$@"
+exec /opt/sayit-ermano/venv/bin/python -m fluidvoice "$@"
 WRAP
-chmod 755 "$STAGE/usr/bin/fluidvoice"
+chmod 755 "$STAGE/usr/bin/sayit-ermano"
 
 # 3. Desktop integration ----------------------------------------------------
-install -Dm644 packaging/fluidvoice-linux.desktop \
-    "$STAGE/usr/share/applications/fluidvoice-linux.desktop"
+install -Dm644 packaging/sayit-ermano.desktop \
+    "$STAGE/usr/share/applications/sayit-ermano.desktop"
 install -Dm644 packaging/autostart.desktop \
-    "$STAGE/etc/xdg/autostart/fluidvoice-linux.desktop"
+    "$STAGE/etc/xdg/autostart/sayit-ermano.desktop"
 # hicolor PNG sizes rendered from the macOS app icon (exact brand asset)
-for png in packaging/icons/hicolor/*x*/apps/fluidvoice-linux.png; do
+for png in packaging/icons/hicolor/*x*/apps/sayit-ermano.png; do
     install -Dm644 "$png" \
         "$STAGE/usr/share/icons/hicolor/${png#packaging/icons/hicolor/}"
 done
@@ -66,15 +66,15 @@ done
 
 # 4. systemd user unit (optional alternative to XDG autostart) -------------
 mkdir -p "$STAGE/usr/lib/systemd/user"
-cat > "$STAGE/usr/lib/systemd/user/fluidvoice.service" <<UNIT
+cat > "$STAGE/usr/lib/systemd/user/sayit-ermano.service" <<UNIT
 [Unit]
-Description=FluidVoiceLinux dictation daemon
+Description=SayItErmano dictation daemon
 PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/fluidvoice daemon
+ExecStart=/usr/bin/sayit-ermano daemon
 Restart=on-failure
 RestartSec=3
 
@@ -92,12 +92,17 @@ Priority: optional
 Architecture: $ARCH
 Depends: python3 (>= 3.11), pipewire-audio-utils | pulseaudio-utils, xdotool, xclip, libnotify-bin, python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1
 Recommends: pulseaudio-utils
-Maintainer: FluidVoiceLinux contributors
-Description: FluidVoice for Linux - local voice dictation with AI polish
+Conflicts: fluidvoice-linux
+Replaces: fluidvoice-linux
+Provides: fluidvoice-linux
+Maintainer: SayItErmano contributors
+Description: SayItErmano - local voice dictation with AI polish (Linux port of FluidVoice)
  Community port of altic-dev/FluidVoice behavior to Linux: global hotkey,
  on-device Whisper transcription (CUDA when available), spoken punctuation
  commands, optional AI polish via any OpenAI-compatible endpoint, text
- typed into the focused app. Native GTK settings/history app (fluidvoice app).
+ typed into the focused app. Native GTK settings/history app (sayit-ermano app).
+ Replaces the pre-rename fluidvoice-linux package and takes over its
+ config/history/model directories on first run.
 CONTROL
 
 cat > "$STAGE/DEBIAN/postinst" <<'POST'
@@ -118,13 +123,13 @@ if command -v systemctl >/dev/null 2>&1 && [ -n "${SUDO_USER:-}" ]; then
     su -s /bin/sh "$SUDO_USER" -c '
         export XDG_RUNTIME_DIR="/run/user/$(id -u)"
         systemctl --user daemon-reload 2>/dev/null || true
-        systemctl --user enable fluidvoice.service 2>/dev/null || true
-        if systemctl --user is-active --quiet fluidvoice.service 2>/dev/null; then
-            systemctl --user try-restart fluidvoice.service 2>/dev/null || true
-        elif pgrep -f "/opt/fluidvoice-linux/.*/python -m fluidvoice daemon" >/dev/null 2>&1; then
-            pkill -f "/opt/fluidvoice-linux/.*/python -m fluidvoice daemon" 2>/dev/null || true
+        systemctl --user enable sayit-ermano.service 2>/dev/null || true
+        if systemctl --user is-active --quiet sayit-ermano.service 2>/dev/null; then
+            systemctl --user try-restart sayit-ermano.service 2>/dev/null || true
+        elif pgrep -f "/opt/sayit-ermano/.*/python -m fluidvoice daemon" >/dev/null 2>&1; then
+            pkill -f "/opt/sayit-ermano/.*/python -m fluidvoice daemon" 2>/dev/null || true
             sleep 1
-            systemctl --user start fluidvoice.service 2>/dev/null || true
+            systemctl --user start sayit-ermano.service 2>/dev/null || true
         fi' || true
 fi
 exit 0

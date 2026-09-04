@@ -1075,7 +1075,7 @@ class SettingsWindow(Adw.PreferencesWindow):
                 ("Control socket", str(paths.socket_path())),
                 ("History", str(paths.data_dir() / "history.jsonl"))):
             grp.add(Adw.ActionRow(title=title, subtitle=value))
-        about_btn_row = Adw.ActionRow(title="About FluidVoice Linux")
+        about_btn_row = Adw.ActionRow(title="About SayItErmano")
         about_btn = Gtk.Button(icon_name="help-about-symbolic",
                                css_classes=["flat"])
         about_btn.connect("clicked", self._show_about_dialog)
@@ -1086,11 +1086,11 @@ class SettingsWindow(Adw.PreferencesWindow):
 
     def _show_about_dialog(self, *_args) -> None:
         dlg = Adw.AboutDialog(
-            application_name="FluidVoice Linux",
-            application_icon="fluidvoice-linux",
+            application_name="SayItErmano",
+            application_icon="sayit-ermano",
             version=APP_VERSION,
-            website="https://github.com/acailic/FluidVoice-Linux",
-            issue_url="https://github.com/acailic/FluidVoice-Linux/issues",
+            website="https://github.com/acailic/SayItErmano",
+            issue_url="https://github.com/acailic/SayItErmano/issues",
             license_type=Gtk.License.GPL_3_0)
         dlg.present(self)
 

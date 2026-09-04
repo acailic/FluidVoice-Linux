@@ -27,14 +27,14 @@ class TestDebPackage:
         subprocess.run(["dpkg-deb", "-x", str(deb), str(root)], check=True)
         # key integration points of the installed layout
         assert (root / "usr/bin/fluidvoice").exists()
-        assert (root / "etc/xdg/autostart/fluidvoice-linux.desktop").exists()
-        assert (root / "usr/share/applications/fluidvoice-linux.desktop").exists()
-        assert (root / "usr/share/icons/hicolor/128x128/apps/fluidvoice-linux.png").exists()
-        assert (root / "usr/share/icons/hicolor/512x512/apps/fluidvoice-linux.png").exists()
+        assert (root / "etc/xdg/autostart/sayit-ermano.desktop").exists()
+        assert (root / "usr/share/applications/sayit-ermano.desktop").exists()
+        assert (root / "usr/share/icons/hicolor/128x128/apps/sayit-ermano.png").exists()
+        assert (root / "usr/share/icons/hicolor/512x512/apps/sayit-ermano.png").exists()
         assert (root / "usr/lib/systemd/user/fluidvoice.service").exists()
         # the bundled venv must import the app from the relocated location
         out = subprocess.run(
-            [str(root / "opt/fluidvoice-linux/venv/bin/python"),
+            [str(root / "opt/sayit-ermano/venv/bin/python"),
              "-m", "fluidvoice", "--version"],
             capture_output=True, text=True, timeout=120)
         assert out.returncode == 0 and out.stdout.strip()

@@ -1,7 +1,7 @@
 """System tray icon (StatusNotifierItem / AppIndicator) - the Linux
 equivalent of the macOS menu bar icon, dropdown menu included.
 
-While the daemon runs, the FluidVoice icon sits in the panel (GNOME with
+While the daemon runs, the SayItErmano icon sits in the panel (GNOME with
 the AppIndicator extension, KDE, XFCE, Budgie, ...). The tooltip reflects
 state and the configured hotkey; while recording the icon gets a red
 badge. Left click toggles dictation; right click opens a native dropdown
@@ -28,8 +28,8 @@ DBUSMENU = "com.canonical.dbusmenu"
 ITEM_PATH = "/StatusNotifierItem"
 MENU_PATH = "/MenuBar"
 
-SNI_ID = "fluidvoice"
-SNI_TITLE = "FluidVoice"
+SNI_ID = "sayitermano"
+SNI_TITLE = "SayItErmano"
 
 TRAY_SIZE = 64  # px; hosts scale down to their panel size
 

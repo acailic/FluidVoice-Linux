@@ -120,7 +120,7 @@ class NotifyPreview:
         if not self.supported:
             return
         import subprocess
-        args = ["notify-send", "-a", "FluidVoice", "-t", str(self.timeout_ms)]
+        args = ["notify-send", "-a", "SayItErmano", "-t", str(self.timeout_ms)]
         if self._id is not None:
             args += ["-r", str(self._id), "-e"]
         args += [f"● {text}"]
@@ -136,7 +136,7 @@ class NotifyPreview:
         if self._id is not None and self.supported:
             import subprocess
             try:
-                subprocess.run(["notify-send", "-a", "FluidVoice", "-r",
+                subprocess.run(["notify-send", "-a", "SayItErmano", "-r",
                                 str(self._id), "-t", "1", " "], timeout=3)
             except Exception:
                 pass

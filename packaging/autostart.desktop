@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=FluidVoice Daemon
-Comment=Start FluidVoice dictation daemon at login
-Comment[hr]=Pokreni FluidVoice diktaturu pri prijavi
-Exec=/usr/bin/fluidvoice daemon
-Icon=fluidvoice-linux
+Name=SayItErmano Daemon
+Comment=Start the SayItErmano dictation daemon at login
+Comment[hr]=Pokreni SayItErmano diktaturu pri prijavi
+Exec=/usr/bin/sayit-ermano daemon
+Icon=sayit-ermano
 Terminal=false
 NoDisplay=true
 X-GNOME-Autostart-enabled=true

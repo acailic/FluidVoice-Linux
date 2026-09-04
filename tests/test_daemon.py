@@ -386,16 +386,20 @@ class TestStaleTmpSweep:
     def test_old_tmp_files_removed(self, tmp_path, monkeypatch):
         import glob
         import os
-        old = tmp_path / "fluidvoice-old.wav"
-        new = tmp_path / "fluidvoice-new.wav"
-        old.write_bytes(b"x")
-        new.write_bytes(b"x")
+        old = tmp_path / "sayitermano-old.wav"
+        legacy = tmp_path / "fluidvoice-legacy.wav"  # pre-rename prefix
+        new = tmp_path / "sayitermano-new.wav"
+        for f in (old, legacy, new):
+            f.write_bytes(b"x")
         far_past = time.time() - 2 * 86400
         os.utime(old, (far_past, far_past))
-        monkeypatch.setattr(glob, "glob",
-                            lambda pattern: [str(old), str(new)] if "fluidvoice" in pattern else [])
+        os.utime(legacy, (far_past, far_past))
+        monkeypatch.setattr(
+            glob, "glob",
+            lambda pattern: [str(old), str(new)] if pattern.startswith("/tmp/sayitermano-")
+            else [str(legacy)] if pattern.startswith("/tmp/fluidvoice-") else [])
         dm.Daemon._sweep_stale_tmp()
-        assert not old.exists() and new.exists()
+        assert not old.exists() and not legacy.exists() and new.exists()
 
 
 class TestFirstPcmWatchdog:

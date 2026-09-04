@@ -1,4 +1,4 @@
-"""FluidVoiceLinux command line interface."""
+"""SayItErmano command line interface."""
 from __future__ import annotations
 
 import argparse
@@ -18,14 +18,14 @@ LARGE_INPUT_BYTES = 25 * 1024 * 1024
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="fluidvoice",
-        description="FluidVoice for Linux - local voice dictation with AI polish")
+        prog="sayit-ermano",
+        description="SayItErmano - local voice dictation with AI polish (FluidVoice for Linux)")
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="cmd")
 
     p = sub.add_parser("daemon", help="run the dictation daemon (foreground)")
     p.add_argument("--no-hotkey", action="store_true",
-                   help="skip the X11 global hotkey (use `fluidvoice toggle` instead)")
+                   help="skip the X11 global hotkey (use `sayit-ermano toggle` instead)")
     p.add_argument("--no-sounds", action="store_true", help="disable start/stop sounds")
     p.add_argument("--config", type=Path, help="alternative config file")
 
@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg = load_config(args.config)
         lock = _acquire_daemon_lock()
         if lock is None:
-            print("fluidvoice daemon is already running - second instance "
+            print("sayit-ermano daemon is already running - second instance "
                   "exiting", file=sys.stderr)
             return 0
         try:
@@ -183,13 +183,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"wrote {path}")
         elif args.action == "print":
             print(paths.config_file().read_text() if paths.config_file().exists()
-                  else "(no config file - defaults in use; run `fluidvoice config init`)")
+                  else "(no config file - defaults in use; run `sayit-ermano config init`)")
         else:
             print(paths.config_file())
         return 0
 
     if args.cmd == "settings":
-        # Kept for the .desktop entry (Exec=fluidvoice settings): opens the
+        # Kept for the .desktop entry (Exec=sayit-ermano settings): opens the
         # native window now that the web UI is retired.
         from .gtkui.application import run as run_app
         return run_app(["--open", "settings"])
@@ -210,7 +210,7 @@ _DAEMON_LOCK_FILE = None
 def _acquire_daemon_lock():
     """Singleton guard: the deb starts the daemon via XDG autostart AND a
     systemd unit - at login both fire. First instance holds an flock on
-    ~/.config/fluidvoice/daemon.lock; the second exits immediately."""
+    ~/.config/sayit-ermano/daemon.lock; the second exits immediately."""
     import fcntl
     from .paths import config_dir
     global _DAEMON_LOCK_FILE

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import sys
 
-APP_ID = "dev.fluidvoicelinux.FluidVoice"
-APP_ICON_NAME = "fluidvoice-linux"
+APP_ID = "io.github.acailic.SayItErmano"
+APP_ICON_NAME = "sayit-ermano"
 
 GTK_HINT = ("GTK 4 / libadwaita not available - install with:\n"
             "  apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1")
@@ -48,11 +48,12 @@ def _register_bundled_icons() -> None:
             digest = hashlib.sha1(names.encode()
                                   + b"".join(p.read_bytes() for p in svgs)
                                   ).hexdigest()[:16]
-            cache = Path.home() / ".cache/fluidvoice/icons"
+            from .. import paths
+            cache = paths.cache_dir() / "icons"
             cache.mkdir(parents=True, exist_ok=True)
             gresource = cache / f"icons-{digest}.gresource"
             if not gresource.exists():
-                xml = "<gresources><gresource prefix='/dev/fluidvoicelinux/icons'>"
+                xml = "<gresources><gresource prefix='/io/github/acailic/sayitermano/icons'>"
                 for p in svgs:
                     # strip the trailing -symbolic; GTK looks up by basename
                     file_attr = f" alias='scalable/actions/{p.name}'"
@@ -72,7 +73,7 @@ def _register_bundled_icons() -> None:
         Gio.resources_register(Gio.Resource.load(str(gresource)))
         theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
         if theme is not None:
-            theme.add_resource_path("/dev/fluidvoicelinux/icons")
+            theme.add_resource_path("/io/github/acailic/sayitermano/icons")
     except Exception:
         pass  # icon-name lookups degrade to theme fallbacks
 
@@ -89,7 +90,7 @@ def run(argv: list[str] | None = None) -> int:
         print(f"{GTK_HINT}\n(detail: {e})", file=sys.stderr)
         return 1
 
-    class FluidVoiceApp(Adw.Application):
+    class SayItErmanoApp(Adw.Application):
         def __init__(self) -> None:
             super().__init__(application_id=APP_ID,
                              flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
@@ -149,5 +150,5 @@ def run(argv: list[str] | None = None) -> int:
             return self._window("onboarding",
                                 lambda app: OnboardingWindow(application=app))
 
-    app = FluidVoiceApp()
+    app = SayItErmanoApp()
     return app.run([sys.argv[0], *argv])

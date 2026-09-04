@@ -11,12 +11,12 @@ class TestBrandAssets:
         from importlib import resources
         base = resources.files("fluidvoice.assets")
         assert base.joinpath("icon.png").is_file()
-        assert base.joinpath("icons/fluidvoice-linux.png").is_file()
+        assert base.joinpath("icons/sayit-ermano.png").is_file()
 
     def test_hicolor_sizes_for_packaging(self):
         for size in (16, 32, 48, 64, 128, 256, 512):
             path = (f"packaging/icons/hicolor/{size}x{size}/apps/"
-                    f"fluidvoice-linux.png")
+                    f"sayit-ermano.png")
             assert os.path.isfile(path), path
 
     def test_tray_pixmaps_use_new_icon(self):

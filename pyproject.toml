@@ -3,13 +3,13 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fluidvoice-linux"
-version = "0.3.0"
-description = "FluidVoice for Linux - local voice dictation with AI polish (community port of altic-dev/FluidVoice behavior)"
+name = "sayit-ermano"
+version = "0.4.0"
+description = "SayItErmano - local voice dictation with AI polish for Linux (community port of altic-dev/FluidVoice behavior)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
-authors = [{ name = "FluidVoiceLinux contributors" }]
+authors = [{ name = "SayItErmano contributors" }]
 keywords = ["speech-to-text", "dictation", "whisper", "voice", "linux"]
 classifiers = [
     "Environment :: X11 Applications",
@@ -29,7 +29,8 @@ torch = ["openai-whisper"]          # only if you want the torch/CUDA backend
 dev = ["pytest>=8"]
 
 [project.scripts]
-fluidvoice = "fluidvoice.cli:main"
+sayit-ermano = "fluidvoice.cli:main"
+fluidvoice = "fluidvoice.cli:main"  # legacy alias from the pre-rename installs
 
 [tool.setuptools.packages.find]
 include = ["fluidvoice*"]

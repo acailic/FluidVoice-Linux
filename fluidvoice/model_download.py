@@ -34,7 +34,7 @@ def download_file(url: str, dest: Path, progress: Progress | None = None) -> Pat
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".part")
     req = urllib.request.Request(
-        url, headers={"User-Agent": f"FluidVoiceLinux/{__version__}"})
+        url, headers={"User-Agent": f"SayItErmano/{__version__}"})
     try:
         with urllib.request.urlopen(req, timeout=CONNECT_TIMEOUT_S) as resp:
             raw = resp.headers.get("Content-Length")

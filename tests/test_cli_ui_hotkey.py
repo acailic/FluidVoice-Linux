@@ -47,7 +47,7 @@ class TestUI:
         monkeypatch.setattr(ui.shutil, "which", lambda n: "/usr/bin/" + n)
         monkeypatch.setattr(ui.subprocess, "run", lambda *a, **k: ran.append(a))
         ui.notify("Title", "Body", timeout_ms=1500, enabled=True)
-        assert ran and ran[0][0][:3] == ["notify-send", "-a", "FluidVoice"]
+        assert ran and ran[0][0][:3] == ["notify-send", "-a", "SayItErmano"]
 
     def test_notify_disabled(self, monkeypatch):
         ran = []

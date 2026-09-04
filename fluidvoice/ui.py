@@ -11,7 +11,7 @@ SOUNDS = {"start": "FV_start_0.m4a", "stop": "FV_end_0.m4a"}
 def notify(title: str, body: str = "", timeout_ms: int = 2500, enabled: bool = True) -> None:
     if not enabled or not shutil.which("notify-send"):
         return
-    subprocess.run(["notify-send", "-a", "FluidVoice", "-t", str(timeout_ms),
+    subprocess.run(["notify-send", "-a", "SayItErmano", "-t", str(timeout_ms),
                     title, body], check=False)
 
 

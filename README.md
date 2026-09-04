@@ -1,7 +1,8 @@
-# FluidVoice for Linux
+# SayItErmano
 
-**Community Linux port of [FluidVoice](https://github.com/altic-dev/FluidVoice)** — the free,
-open-source, on-device voice dictation app. Press a hotkey, speak, press it again:
+**SayItErmano is FluidVoice for Linux** — a community Linux port of
+[FluidVoice](https://github.com/altic-dev/FluidVoice), the free, open-source,
+on-device voice dictation app. Press a hotkey, speak, press it again:
 your speech becomes polished text typed into whatever app has focus. 100% local
 speech-to-text; optional AI polish via any OpenAI-compatible endpoint (including
 a local Ollama).
@@ -12,7 +13,14 @@ a local Ollama).
 > the same prompts, rules and sounds. See [docs/BEHAVIOR-SPEC.md](docs/BEHAVIOR-SPEC.md)
 > for what was ported from the upstream source.
 
-[![Status](https://img.shields.io/badge/status-v0.1%20MVP-green)]() [![License](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
+> **Naming:** the project, repo, package and command are **SayItErmano**
+> (`sayit-ermano`). The Python module, env-var overrides (`FLUIDVOICE_CONFIG`,
+> `FLUIDVOICE_SOCKET`, `FLUIDVOICE_API_KEY`, ...) and code comments keep the
+> upstream `fluidvoice` naming on purpose — this is a port of FluidVoice, and
+> internals credit it. Installing `sayit-ermano` replaces the pre-rename
+> `fluidvoice-linux` package and takes over its config/history/models.
+
+[![Status](https://img.shields.io/badge/status-v0.4-blue)]() [![License](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 
 ## Screenshots
 
@@ -63,49 +71,51 @@ hotkey ─▶ pw-record 16k mono ─▶ faster-whisper (CUDA/int8) ─▶ filler
 
 ### Option A — one-shot installer
 
-One download + one command, then FluidVoice appears in your app launcher,
+One download + one command, then SayItErmano appears in your app launcher,
 autostarts at login, and needs no terminal. The default install is
 **user-space and needs no sudo at all** (`~/.local/...` + a systemd user
 unit that shadows any system unit); it only asks for sudo if a required
 system package (GTK/pygobject, xdotool, ...) is missing:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/acailic/FluidVoice-Linux/linux/scripts/install-one-shot.sh | bash
+curl -fsSL https://raw.githubusercontent.com/acailic/SayItErmano/linux/scripts/install-one-shot.sh | bash
 ```
 
 Prefer the classic system-wide .deb (root-owned, `/opt` runtime)?
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/acailic/FluidVoice-Linux/linux/scripts/install-one-shot.sh | bash -s -- --system
+curl -fsSL https://raw.githubusercontent.com/acailic/SayItErmano/linux/scripts/install-one-shot.sh | bash -s -- --system
 ```
 
 Or manually (download + install):
 
 ```bash
-curl -LO https://github.com/acailic/FluidVoice-Linux/releases/download/v0.3.0/fluidvoice-linux_0.3.0-2_amd64.deb
-sudo apt install ./fluidvoice-linux_0.3.0-2_amd64.deb
+curl -LO https://github.com/acailic/SayItErmano/releases/download/v0.4.0/sayit-ermano_0.4.0-1_amd64.deb
+sudo apt install ./sayit-ermano_0.4.0-1_amd64.deb
 ```
 
-Grab a specific version from the [releases page](https://github.com/acailic/FluidVoice-Linux/releases).
+Grab a specific version from the [releases page](https://github.com/acailic/SayItErmano/releases).
 Building it yourself instead: `git clone … -b linux && ./packaging/build-deb.sh`.
 
 What you get after install (log out/in once):
-- **App launcher entry "FluidVoice"** (opens the native app) with its own icon
+- **App launcher entry "SayItErmano"** (opens the native app) with its own icon
 - **Daemon autostarts at login** (XDG autostart; a systemd user unit is also
-  provided: `systemctl --user enable --now fluidvoice`)
-- `fluidvoice` available everywhere in PATH (`fluidvoice doctor`, `toggle`,
+  provided: `systemctl --user enable --now sayit-ermano`)
+- `fluidvoice` available everywhere in PATH (`sayit-ermano doctor`, `toggle`,
   `settings`, `history`, ...)
-- Removes cleanly with `sudo apt remove fluidvoice-linux`
+- Removes cleanly with `sudo apt remove sayit-ermano`
+  (upgrading from the pre-rename `fluidvoice-linux` package replaces it
+  automatically; your config, history and downloaded models are kept)
 
 ### Option B — from source (development)
 
 ```bash
-git clone https://github.com/acailic/FluidVoice-Linux.git -b linux
-cd FluidVoice-Linux
+git clone https://github.com/acailic/SayItErmano.git -b linux
+cd SayItErmano
 ./scripts/install.sh          # apt deps + venv (reuses your CUDA torch if present)
 
 # run it (foreground; systemd unit in systemd/)
-.venv/bin/fluidvoice daemon
+.venv/bin/sayit-ermano daemon
 ```
 
 Press **Right Ctrl**, speak, press **Right Ctrl** again. Done.
@@ -113,20 +123,20 @@ Press **Right Ctrl**, speak, press **Right Ctrl** again. Done.
 Useful commands:
 
 ```bash
-fluidvoice app               # native GTK app: History, Settings, onboarding
-fluidvoice settings          # same app, Settings window (alias)
-fluidvoice doctor            # environment check
-fluidvoice toggle            # CLI trigger (bind to a DE shortcut on Wayland)
-fluidvoice cancel            # abort a recording
-fluidvoice status --json
-fluidvoice transcribe x.opus --json  # one-shot transcription (many formats)
-fluidvoice history -n 10
-fluidvoice config init       # write ~/.config/fluidvoice/config.toml
+sayit-ermano app               # native GTK app: History, Settings, onboarding
+sayit-ermano settings          # same app, Settings window (alias)
+sayit-ermano doctor            # environment check
+sayit-ermano toggle            # CLI trigger (bind to a DE shortcut on Wayland)
+sayit-ermano cancel            # abort a recording
+sayit-ermano status --json
+sayit-ermano transcribe x.opus --json  # one-shot transcription (many formats)
+sayit-ermano history -n 10
+fluidvoice config init       # write ~/.config/sayit-ermano/config.toml
 ```
 
 ### File transcription
 
-`fluidvoice transcribe` accepts **wav, flac, mp3, opus, oga, ogg, m4a, aac,
+`sayit-ermano transcribe` accepts **wav, flac, mp3, opus, oga, ogg, m4a, aac,
 wma, aiff, webm** (verified to decode via PyAV). Unknown extensions are still
 attempted: anything PyAV can't open is converted with **ffmpeg** to 16 kHz
 mono WAV first (`sudo apt install ffmpeg` if it's missing). The whisper.cpp
@@ -144,7 +154,7 @@ backend always converts via ffmpeg since `whisper-cli` reliably reads WAV only.
 
 ### Native app
 
-`fluidvoice app` opens a native GTK 4 / libadwaita app (single instance;
+`sayit-ermano app` opens a native GTK 4 / libadwaita app (single instance;
 follows your system theme) that mirrors the macOS app's windows:
 
 - **History** (main window) — live status header, search, copy/delete,
@@ -193,7 +203,7 @@ commands are recorded in History.
 
 ## Features vs. upstream FluidVoice
 
-| Feature | macOS (upstream) | Linux port v0.1 |
+| Feature | macOS (upstream) | Linux port (SayItErmano) |
 |---|---|---|
 | Push hotkey → dictate → text in any app | ✅ (Right ⌥) | ✅ (Right Ctrl / any key) |
 | 100% local transcription | ✅ (Parakeet/Nemotron/Whisper/Apple) | ✅ (faster-whisper/whisper.cpp; Parakeet on roadmap) |
@@ -206,8 +216,8 @@ commands are recorded in History.
 | Write/Rewrite selected text | ✅ (⌥R) | ✅ dedicated rewrite hotkey |
 | Command mode (voice → terminal agent) | ✅ (notch chat panel) | ✅ dedicated hotkey, live conversation panel, JSON agent loop |
 | Per-app prompt sets | ✅ | 🚧 roadmap (app hint is already captured) |
-| Settings UI with model picker | ✅ | ✅ native GTK app (`fluidvoice app`): Settings + History windows |
-| Onboarding (setup + tryout) | ✅ | ✅ opens once on first launch (`fluidvoice app --onboard`) |
+| Settings UI with model picker | ✅ | ✅ native GTK app (`sayit-ermano app`): Settings + History windows |
+| Onboarding (setup + tryout) | ✅ | ✅ opens once on first launch (`sayit-ermano app --onboard`) |
 | Overlay sizes (pill/small/medium/large) | ✅ | ✅ `recording.preview_overlay_size` |
 | Notch overlay / menu bar | ✅ | ✅ tray/panel icon (StatusNotifierItem): click = dictate, state badge, tooltip with hotkey |
 
@@ -224,7 +234,7 @@ macOS-vs-Linux capability matrix and the upstream changelog we track
 
 - **X11 session** (full experience: global hotkey + typing into apps).
   On **Wayland**, the daemon still works if you bind a desktop-environment
-  shortcut to `fluidvoice toggle`, but text insertion needs `ydotool`/`wtype`
+  shortcut to `sayit-ermano toggle`, but text insertion needs `ydotool`/`wtype`
   (not implemented yet — see roadmap).
 - Python 3.10+ (tested 3.12), `pipewire` (`pw-record`), `xdotool`, `xclip`,
   `libnotify-bin`, `pulseaudio-utils` (sounds).
@@ -237,8 +247,8 @@ macOS-vs-Linux capability matrix and the upstream changelog we track
 
 ## Configuration
 
-Everything lives in `~/.config/fluidvoice/config.toml` (generated by
-`fluidvoice config init`; full commented template). Highlights:
+Everything lives in `~/.config/sayit-ermano/config.toml` (generated by
+`sayit-ermano config init`; full commented template). Highlights:
 
 ```toml
 [hotkey]
@@ -301,5 +311,6 @@ dictionary, spoken punctuation) · `ai/` (prompts + OpenAI-compatible client) ·
 - Speech by [faster-whisper](https://github.com/SYstran/faster-whisper) (MIT) /
   [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT) /
   [OpenAI Whisper](https://github.com/openai/whisper) (MIT).
-- "FluidVoice" is the upstream project's name; this fork's Linux port is
-  community-maintained and not affiliated with or endorsed by altic-dev.
+- "FluidVoice" is the upstream project's name; SayItErmano is this
+  community-maintained Linux port of it and is not affiliated with or
+  endorsed by altic-dev.

@@ -140,7 +140,7 @@ class HistoryEntryRow(Gtk.ListBoxRow):
 
 class HistoryWindow(Adw.ApplicationWindow):
     def __init__(self, application=None, client=None):
-        super().__init__(application=application, title="FluidVoice",
+        super().__init__(application=application, title="SayItErmano",
                          default_width=760, default_height=640)
         self.c = client or Client()
         self._entries: list[dict] = []
@@ -149,7 +149,7 @@ class HistoryWindow(Adw.ApplicationWindow):
 
         # -- header ---------------------------------------------------------
         header = Adw.HeaderBar()
-        self.title_widget = Adw.WindowTitle(title="FluidVoice", subtitle="idle")
+        self.title_widget = Adw.WindowTitle(title="SayItErmano", subtitle="idle")
         header.set_title_widget(self.title_widget)
 
         self.mic_btn = Gtk.Button(icon_name="audio-input-microphone-symbolic",
@@ -212,7 +212,7 @@ class HistoryWindow(Adw.ApplicationWindow):
         self.listbox.set_placeholder(Adw.StatusPage(
             title="No dictations yet",
             description="Press your hotkey and speak — transcripts land here.",
-            icon_name="fluidvoice-linux",
+            icon_name="sayit-ermano",
             vexpand=True))
         scroll.set_child(self.listbox)
 
@@ -330,7 +330,7 @@ class HistoryWindow(Adw.ApplicationWindow):
             "Export history", self, Gtk.FileChooserAction.SAVE,
             "_Export", "_Cancel")
         dlg.set_current_name(
-            f"fluidvoice-history-{time.strftime('%Y%m%d-%H%M%S')}.zip")
+            f"sayitermano-history-{time.strftime('%Y%m%d-%H%M%S')}.zip")
         dlg.connect("response", self._on_export_response)
         self._export_dlg = dlg  # keep alive while it runs its own loop
         dlg.show()

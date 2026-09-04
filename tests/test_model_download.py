@@ -57,7 +57,7 @@ def test_happy_path_streams_and_renames(cache, monkeypatch):
     # URL fidelity + UA
     assert seen_req["req"].full_url == \
         model_catalog.GGUF_CATALOG["ggml-base.bin"]["url"]
-    assert "FluidVoiceLinux" in seen_req["req"].headers["User-agent"]
+    assert "SayItErmano" in seen_req["req"].headers["User-agent"]
 
 
 def test_no_content_length_still_succeeds(cache, monkeypatch):

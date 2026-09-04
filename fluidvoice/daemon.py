@@ -1,4 +1,4 @@
-"""The FluidVoiceLinux daemon: hotkey -> record -> transcribe -> polish -> type.
+"""The SayItErmano daemon: hotkey -> record -> transcribe -> polish -> type.
 
 Structure:
   Daemon            state machine (idle/recording/busy), hotkey + socket wiring
@@ -32,7 +32,7 @@ from .recorder import Recorder, RecorderError
 
 
 def log(msg: str) -> None:
-    print(f"[fluidvoice] {time.strftime('%H:%M:%S')} {msg}", file=sys.stderr, flush=True)
+    print(f"[sayit-ermano] {time.strftime('%H:%M:%S')} {msg}", file=sys.stderr, flush=True)
 
 
 Inserter = Callable[[str, dict], str]
@@ -97,7 +97,7 @@ class DictationPipeline:
             rewritten = rewriter(instruction, context)
         except rewrite_mod.RewriteError as e:
             self.log(f"rewrite failed: {e}")
-            self.notify("FluidVoice", f"Rewrite failed: {e}")
+            self.notify("SayItErmano", f"Rewrite failed: {e}")
             return None
         strategy = self._insert(rewritten)
         out = {"raw": raw, "text": rewritten, "ai": True,
@@ -155,7 +155,7 @@ class DictationPipeline:
             strategy = self.inserter(text, self.cfg)
         except insertion.InsertError as e:
             self.log(f"insertion failed: {e}")
-            self.notify("FluidVoice", f"Could not type text: {e}\n(copied to clipboard instead)")
+            self.notify("SayItErmano", f"Could not type text: {e}\n(copied to clipboard instead)")
             insertion.clipboard_fallback(text)
             strategy = "clipboard-fallback"
         if self.cfg.get("general", {}).get("copy_to_clipboard"):
@@ -191,7 +191,7 @@ class DictationPipeline:
                 result = self._transcribe(wav)
             except Exception as e:
                 self.log(f"transcription failed: {e}")
-                self.notify("FluidVoice", f"Transcription failed: {e}")
+                self.notify("SayItErmano", f"Transcription failed: {e}")
                 return None
             raw = result.get("text", "")
             if not raw.strip():
@@ -273,7 +273,7 @@ class Daemon:
     # -- lifecycle -----------------------------------------------------------
 
     def run(self) -> None:
-        log(f"FluidVoiceLinux v{__version__} starting")
+        log(f"SayItErmano v{__version__} starting")
         self._sweep_stale_tmp()
         try:
             self.backend = self._backend_factory(self.cfg)
@@ -395,7 +395,7 @@ class Daemon:
             entries = history_mod.tail(1)
             text = entries[0].get("text", "") if entries else ""
         if not text:
-            ui.notify("FluidVoice", "Nothing to copy",
+            ui.notify("SayItErmano", "Nothing to copy",
                       enabled=self.cfg["notifications"]["enabled"])
             return
         import shutil
@@ -403,7 +403,7 @@ class Daemon:
         tool = next((t for t in ("xclip", "xsel", "wl-copy")
                      if shutil.which(t)), None)
         if not tool:
-            ui.notify("FluidVoice", "No clipboard tool found (install xclip)",
+            ui.notify("SayItErmano", "No clipboard tool found (install xclip)",
                       enabled=self.cfg["notifications"]["enabled"])
             return
         args = ([tool, "-selection", "clipboard"] if tool == "xclip"
@@ -481,7 +481,7 @@ class Daemon:
             return
         self._mic_missing_logged = False
         self._set_device(best)  # existing path: lock re-check, save, rebuild
-        ui.notify("FluidVoice", f"Microphone switched to {best}",
+        ui.notify("SayItErmano", f"Microphone switched to {best}",
                   enabled=self.cfg["notifications"]["enabled"])
 
     def _quit_gracefully(self) -> None:
@@ -509,7 +509,7 @@ class Daemon:
                 state = "Ready"
         hk = self.cfg["hotkey"].get("key", "")
         hint = f" — {hk} or click to dictate" if hk else ""
-        return f"FluidVoice: {state}{hint}"
+        return f"SayItErmano: {state}{hint}"
 
     def _spawn_app(self, *args: str) -> None:
         """Launch the native GTK app in the same interpreter/env as us."""
@@ -559,16 +559,17 @@ class Daemon:
 
     @staticmethod
     def _sweep_stale_tmp() -> None:
-        """Delete fluidvoice temp wavs abandoned by hard crashes (older than 1 day)."""
+        """Delete SayItErmano temp wavs abandoned by hard crashes (older than 1 day); also sweeps the pre-rename /tmp/fluidvoice-*.wav leftovers."""
         import glob
         import time as _time
         cutoff = _time.time() - 86400
-        for f in glob.glob("/tmp/fluidvoice-*.wav"):
-            try:
-                if os.path.getmtime(f) < cutoff:
-                    os.unlink(f)
-            except OSError:
-                pass
+        for pattern in ("/tmp/sayitermano-*.wav", "/tmp/fluidvoice-*.wav"):
+            for f in glob.glob(pattern):
+                try:
+                    if os.path.getmtime(f) < cutoff:
+                        os.unlink(f)
+                except OSError:
+                    pass
 
     def _start_hotkey(self) -> str | None:
         """(Re-)grab the dictation hotkeys. Returns the first error, if any."""
@@ -589,7 +590,7 @@ class Daemon:
         except HotkeyError as e:
             self._hotkey = None
             log(f"WARN hotkey unavailable: {e}")
-            ui.notify("FluidVoice", f"Hotkey unavailable: {e}\n"
+            ui.notify("SayItErmano", f"Hotkey unavailable: {e}\n"
                       "Bind a DE shortcut to `fluidvoice toggle` instead.",
                       timeout_ms=8000, enabled=self.cfg["notifications"]["enabled"])
             error = str(e)
@@ -843,7 +844,7 @@ class Daemon:
         ready = command_mod.command_mode_ready(self.cfg)
         if ready:
             log(ready)
-            ui.notify("FluidVoice", f"Command mode unavailable: {ready}",
+            ui.notify("SayItErmano", f"Command mode unavailable: {ready}",
                       enabled=self.cfg["notifications"]["enabled"])
             return
         with self._lock:
@@ -872,13 +873,13 @@ class Daemon:
 
     def _start_recording_locked(self) -> None:
         self._app_hint = insertion.active_window_class()
-        fd, tmp = tempfile.mkstemp(prefix="fluidvoice-", suffix=".wav")
+        fd, tmp = tempfile.mkstemp(prefix="sayitermano-", suffix=".wav")
         os.close(fd)
         try:
             self.recorder.start(Path(tmp))
         except RecorderError as e:
             log(f"recorder error: {e}")
-            ui.notify("FluidVoice", f"Recording failed: {e}",
+            ui.notify("SayItErmano", f"Recording failed: {e}",
                       enabled=self.cfg["notifications"]["enabled"])
             Path(tmp).unlink(missing_ok=True)
             return
@@ -985,7 +986,7 @@ class Daemon:
                 self._media.resume()
                 msg = "microphone produced no audio (muted or wrong device?) - stopped"
                 log(msg)
-                ui.notify("FluidVoice", msg, enabled=self.cfg["notifications"]["enabled"])
+                ui.notify("SayItErmano", msg, enabled=self.cfg["notifications"]["enabled"])
 
     def _auto_stop(self) -> None:
         # Re-check under the lock: cancel()/shutdown() may have finished in
@@ -1043,7 +1044,7 @@ class Daemon:
             self._rewrite_mode = False
             self._command_mode = False
         log("cancelled")
-        ui.notify("FluidVoice", "Cancelled", enabled=self.cfg["notifications"]["enabled"])
+        ui.notify("SayItErmano", "Cancelled", enabled=self.cfg["notifications"]["enabled"])
 
     def _maybe_first_run_onboard(self) -> None:
         """Open onboarding once on first launch (macOS parity: the app opens
@@ -1068,7 +1069,7 @@ class Daemon:
             if self.busy:
                 return {"ok": False, "error": "busy"}
             self.busy = True
-        fd, tmp = tempfile.mkstemp(prefix="fluidvoice-onboard-", suffix=".wav")
+        fd, tmp = tempfile.mkstemp(prefix="sayitermano-onboard-", suffix=".wav")
         os.close(fd)
         try:
             try:
@@ -1133,7 +1134,7 @@ class Daemon:
                 backend = self._ensure_backend()
             except Exception as e:
                 log(f"transcription failed: {e}")
-                ui.notify("FluidVoice", f"Transcription failed: {e}",
+                ui.notify("SayItErmano", f"Transcription failed: {e}",
                           enabled=self.cfg["notifications"]["enabled"])
                 wav.unlink(missing_ok=True)
                 return
@@ -1168,13 +1169,13 @@ class Daemon:
                 with self._lock:
                     self.busy = False
                 log(f"command mode failed: {e}")
-                ui.notify("FluidVoice", f"Command mode failed: {e}",
+                ui.notify("SayItErmano", f"Command mode failed: {e}",
                           enabled=self.cfg["notifications"]["enabled"])
                 return
             if proposal is None:
                 with self._lock:
                     self.busy = False
-                ui.notify("FluidVoice",
+                ui.notify("SayItErmano",
                           session.summary or "Command mode: nothing to run.",
                           enabled=self.cfg["notifications"]["enabled"])
                 return
@@ -1189,7 +1190,7 @@ class Daemon:
                 _work()
             except Exception as e:  # noqa: BLE001 - never strand `busy`
                 log(f"command mode failed: {e}")
-                ui.notify("FluidVoice", f"Command mode failed: {e}",
+                ui.notify("SayItErmano", f"Command mode failed: {e}",
                           enabled=self.cfg["notifications"]["enabled"])
                 self._end_command_session()
 
@@ -1244,7 +1245,7 @@ class Daemon:
         body = (f"{purpose}\n" if purpose else "") \
             + f"$ {proposal.command}\n" \
             + "Press the command hotkey to run · Esc to cancel"
-        ui.notify("FluidVoice — run this command?", body,
+        ui.notify("SayItErmano — run this command?", body,
                   enabled=self.cfg["notifications"]["enabled"])
         self._command_timer = threading.Timer(
             float(self.cfg["command"].get("confirm_timeout_s", 120.0)),
@@ -1272,14 +1273,14 @@ class Daemon:
                 proposal = session.confirm()
             except command_mod.CommandError as e:
                 log(f"command mode failed: {e}")
-                ui.notify("FluidVoice", f"Command mode failed: {e}",
+                ui.notify("SayItErmano", f"Command mode failed: {e}",
                           enabled=self.cfg["notifications"]["enabled"])
                 self._end_command_session()
                 return
             outcome = session.executed[-1] if session.executed else None
             if outcome is not None:          # result via notification + history
                 brief = (outcome.output or outcome.error or "").strip()[:200]
-                ui.notify("FluidVoice",
+                ui.notify("SayItErmano",
                           f"$ {outcome.command} → exit {outcome.exit_code}"
                           + (f"\n{brief}" if brief else ""),
                           enabled=self.cfg["notifications"]["enabled"])
@@ -1293,7 +1294,7 @@ class Daemon:
                      "text": session.summary or "Command finished."}])[-8:]
                 self._command_panel(self._command_entries, status=None,
                                     awaiting=None)
-                ui.notify("FluidVoice",
+                ui.notify("SayItErmano",
                           (session.summary or "Command finished.")
                           + (" (step limit reached)" if session.exhausted
                              else ""),
@@ -1313,7 +1314,7 @@ class Daemon:
                 _work()
             except Exception as e:  # noqa: BLE001 - never strand `busy`
                 log(f"command mode failed: {e}")
-                ui.notify("FluidVoice", f"Command mode failed: {e}",
+                ui.notify("SayItErmano", f"Command mode failed: {e}",
                           enabled=self.cfg["notifications"]["enabled"])
                 self._end_command_session()
 
@@ -1330,13 +1331,13 @@ class Daemon:
         self._teardown_pending_ux()
         if session is not None:
             session.cancel()
-        ui.notify("FluidVoice", "Command cancelled",
+        ui.notify("SayItErmano", "Command cancelled",
                   enabled=self.cfg["notifications"]["enabled"])
 
     def _on_confirm_timeout(self) -> None:
         if self._command_pending:
             self.cancel_pending_command()
-            ui.notify("FluidVoice", "Command mode: confirmation timed out",
+            ui.notify("SayItErmano", "Command mode: confirmation timed out",
                       enabled=self.cfg["notifications"]["enabled"])
 
     def _teardown_pending_ux(self) -> None:
