@@ -1,6 +1,6 @@
 # SayItErmano
 
-**SayItErmano is FluidVoice for Linux** — a community Linux port of
+**SayItErmano is custom personal version of FluidVoice for Linux** — a community Linux port of
 [FluidVoice](https://github.com/altic-dev/FluidVoice), the free, open-source,
 on-device voice dictation app. Press a hotkey, speak, press it again:
 your speech becomes polished text typed into whatever app has focus. 100% local
