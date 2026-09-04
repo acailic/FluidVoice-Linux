@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import array
 import math
+import os
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -53,6 +55,10 @@ BORDER_ALPHA_TOP = 76     # gloss: bright top fading to dim bottom
 BORDER_ALPHA_BOTTOM = 26
 SHIMMER_PERIOD = 1.05     # seconds per sweep (upstream CompositorShimmerSweep)
 PROCESSING_CAP = 15.0     # hard auto-close so a hung pipeline never strands it
+FADE_IN_FRAMES = 4        # ~130 ms at 30 fps: inside the 0.1 s "instant" band
+DONE_HOLD = 0.45          # peak-end beat: success frame lingers, then fades
+ELAPSED_AFTER = 2.0       # processing seconds before the label shows "· N s"
+STILL_WORKING_AFTER = 4.0  # processing seconds before the label pulses
 
 # Upstream NotchContentViews.OverlayMode.notchColor: dictation white,
 # edit blue, command red - the pill accent (bars + label) follows the mode.
@@ -62,21 +68,64 @@ MODE_ACCENTS: dict[str, tuple[int, int, int]] = {
     "command": (255, 99, 88),
 }
 
+# Done beat (peak-end, research §7): success reads green, low-confidence
+# amber - honest ordinal cues (research §5), never red.
+DONE_OK = (94, 214, 132)
+DONE_LOW = (255, 186, 66)
+
 # Per-state label (upstream processingLabel / "Listening..." header)
 STATE_LABELS: dict[tuple[str, str], str] = {
     ("dictate", "recording"): "Dictate",
     ("dictate", "processing"): "Transcribing",
+    ("dictate", "done"): "Done",
     ("rewrite", "recording"): "Rewrite",
     ("rewrite", "processing"): "Thinking",
+    ("rewrite", "done"): "Done",
     ("command", "recording"): "Listening...",
     ("command", "processing"): "Working...",
     ("command", "confirm"): "Command",
+    ("command", "done"): "Done",
 }
 
 
 def state_label(mode: str, state: str) -> str:
     return STATE_LABELS.get((mode, state),
                             STATE_LABELS[("dictate", "recording")])
+
+
+def processing_label(base: str, elapsed: float | None) -> str:
+    """Processing label with the elapsed cue: "Transcribing · 3 s" past
+    2 s (research §1: unexplained waits feel longer; ≥4 s also pulses)."""
+    if elapsed is None or elapsed < ELAPSED_AFTER:
+        return base
+    return f"{base} · {int(elapsed)} s"
+
+
+_ANIMS_CACHE: bool | None = None
+
+
+def _gsetting_animations() -> bool:
+    """GNOME's enable-animations; unreadable => animations stay on."""
+    try:
+        out = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.interface",
+             "enable-animations"],
+            capture_output=True, text=True, timeout=1.0).stdout.strip()
+        return out != "false"
+    except Exception:
+        return True
+
+
+def animations_enabled() -> bool:
+    """Reduced-motion honor (research §8): SAYITERMANO_NO_ANIMATIONS wins,
+    then GNOME's org.gnome.desktop.interface enable-animations, default on."""
+    global _ANIMS_CACHE
+    env = os.environ.get("SAYITERMANO_NO_ANIMATIONS")
+    if env is not None:
+        return env.strip().lower() not in ("1", "true", "yes", "on")
+    if _ANIMS_CACHE is None:
+        _ANIMS_CACHE = _gsetting_animations()
+    return _ANIMS_CACHE
 
 _FONT_DIRS = (
     "/usr/share/fonts/truetype/dejavu",
@@ -214,9 +263,10 @@ class PillRenderer:
     MARGIN = 22  # transparent margin: room for the drop shadow (blur tail ~3*sigma)
 
     def __init__(self, icon_path: str | Path | None = None,
-                 size: str = DEFAULT_SIZE):
+                 size: str = DEFAULT_SIZE, animations: bool = True):
         from PIL import Image
         self._Image = Image
+        self.animations = animations
         self.spec = SIZE_SPECS.get(size, SIZE_SPECS[DEFAULT_SIZE])
         # fonts are painted on the supersampled canvas, so scale by SS and
         # divide textlength by SS wherever 1x geometry is needed
@@ -292,19 +342,37 @@ class PillRenderer:
     def render(self, levels, text: str | None = None, *, processing: bool = False,
                phase: float = 0.0, alpha: float = 1.0,
                mode: str = "dictate", state: str | None = None,
-               badge: str | None = None):
+               badge: str | None = None, elapsed: float | None = None,
+               confidence: int | None = None):
         """One frame -> (RGBA image, (w, h)).
 
         `mode` picks the accent color (dictate/rewrite/command); `state`
-        ("recording"/"processing"/"confirm") picks the label - `processing`
-        is the legacy shorthand for state="processing". `badge` is a short
-        status chip (e.g. the spoken-send indicator) right of the label.
+        ("recording"/"processing"/"confirm"/"done") picks the label -
+        `processing` is the legacy shorthand for state="processing".
+        `badge` is a short status chip (e.g. the spoken-send indicator)
+        right of the label. `elapsed` (processing only) adds the "· N s"
+        cue and the still-working pulse; `confidence` (done only) flips
+        the success color from green to amber at band 0.
         """
         from PIL import Image
         if state is None:
             state = "processing" if processing else "recording"
+        processing = state == "processing"
+        done = state == "done"
         accent = MODE_ACCENTS.get(mode, MODE_ACCENTS["dictate"])
+        if done:
+            accent = DONE_LOW if confidence == 0 else DONE_OK
         label = state_label(mode, state)
+        if processing:
+            label = processing_label(label, elapsed)
+        label_alpha = LABEL_ALPHA
+        if processing:
+            label_alpha = int(LABEL_ALPHA * 0.5)
+            if (elapsed or 0.0) >= STILL_WORKING_AFTER and self.animations:
+                cycle = (elapsed % 1.2) / 1.2  # slow "still working" pulse
+                label_alpha = int(label_alpha * (0.55 + 0.45 *
+                                                 (0.5 + 0.5 * math.sin(
+                                                     2 * math.pi * cycle))))
         w, h, radius = self.inner_size(text, label, badge)
         ow = w + 2 * self.MARGIN
         oh = h + 2 * self.MARGIN
@@ -312,7 +380,7 @@ class PillRenderer:
         frame = self._shadow_layer(ow, oh, radius)
         inner = Image.new("RGBA", (w * self.SS, h * self.SS), (0, 0, 0, 0))
         self._paint(inner, levels, text, state, phase, radius, accent, label,
-                    badge)
+                    badge, label_alpha)
         inner = inner.resize((w, h), Image.LANCZOS)
         frame.alpha_composite(inner, (self.MARGIN, self.MARGIN))
         if alpha < 1.0:
@@ -320,7 +388,7 @@ class PillRenderer:
         return frame, (ow, oh)
 
     def _paint(self, im, levels, text, state, phase, radius, accent, label,
-               badge=None):
+               badge=None, label_alpha=LABEL_ALPHA):
         from PIL import Image, ImageDraw
         S = self.SS
         spec = self.spec
@@ -348,10 +416,9 @@ class PillRenderer:
                          levels, processing, phase, accent)
         x += spec.wave_w * S + 10 * S
 
-        label_a = LABEL_ALPHA if not processing else int(LABEL_ALPHA * 0.5)
         d.text((x, row_y + (spec.wave_h * S - spec.label_font * S) // 2 + S),
                label, font=self._label_font,
-               fill=(*accent, label_a))
+               fill=(*accent, label_alpha))
         if badge:
             bx = x + d.textlength(label, font=self._label_font) + 10 * S
             d.text((bx, row_y + (spec.wave_h * S - spec.label_font * S) // 2 + S),
@@ -414,11 +481,14 @@ class PillRenderer:
             bh_px = bh * S
             y0 = row_y + (spec.wave_h * S - bh_px) / 2
             if processing:
-                # flat bars + shimmer sweep across the waveform
-                center = (i + 0.5) / spec.bars
-                dist = abs(center - sweep)
-                boost = math.exp(-((dist / 0.16) ** 2))
-                a = int(BAR_FLAT_ALPHA + (255 - BAR_FLAT_ALPHA) * 0.9 * boost)
+                # flat bars; the shimmer sweep only runs when motion is allowed
+                if self.animations:
+                    center = (i + 0.5) / spec.bars
+                    dist = abs(center - sweep)
+                    boost = math.exp(-((dist / 0.16) ** 2))
+                    a = int(BAR_FLAT_ALPHA + (255 - BAR_FLAT_ALPHA) * 0.9 * boost)
+                else:
+                    a = BAR_FLAT_ALPHA
             else:
                 a = BAR_ALPHA
             d.rounded_rectangle(
@@ -596,7 +666,10 @@ class CommandPanelRenderer:
     def render(self, levels, text: str | None = None, *,
                processing: bool = False, phase: float = 0.0,
                alpha: float = 1.0, mode: str = "command",
-               state: str | None = None):
+               state: str | None = None, badge: str | None = None,
+               elapsed: float | None = None, confidence: int | None = None):
+        # badge/elapsed/confidence are pill-only: accepted so the shared
+        # FluidOverlay fade path can render either renderer.
         from PIL import Image, ImageDraw
         accent = MODE_ACCENTS.get("command", (255, 99, 88))
         w, h, radius = self.inner_size()
@@ -747,6 +820,8 @@ class FluidOverlay:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._anims = animations_enabled()
+        self._fade_left = 0  # fade-in frames remaining (0 = settled)
         spec = SIZE_SPECS.get(size, SIZE_SPECS[DEFAULT_SIZE])
         self._levels = AudioLevels(bars=spec.bars, lo=spec.bar_min,
                                    hi=spec.bar_max)
@@ -766,7 +841,8 @@ class FluidOverlay:
         self._d = Display(display_name)
         self._screen = self._d.screen()
         self._depth, self._visual_id, self._colormap = self._pick_visual()
-        self._renderer = PillRenderer(icon_path, size=self._size)
+        self._renderer = PillRenderer(icon_path, size=self._size,
+                                      animations=self._anims)
         self._gc = self._scratch_gc()
         self._win_size = (0, 0)
 
@@ -798,6 +874,8 @@ class FluidOverlay:
     def start(self) -> None:
         if self._d is None or self._thread:
             return
+        if self._anims:
+            self._fade_left = FADE_IN_FRAMES
         self._thread = threading.Thread(target=self._run, name="fluidvoice-overlay",
                                         daemon=True)
         self._thread.start()
@@ -829,9 +907,10 @@ class FluidOverlay:
 
     def set_state(self, state: str) -> None:
         """'recording' (bars follow audio), 'processing' (flat bars +
-        shimmer) or 'confirm' (static bars while the user decides whether
-        to run the proposed command)."""
-        if state not in ("recording", "processing", "confirm"):
+        shimmer), 'confirm' (static bars while the user decides whether
+        to run the proposed command) or 'done' (success beat; the render
+        loop holds it for DONE_HOLD, then fades itself out)."""
+        if state not in ("recording", "processing", "confirm", "done"):
             raise ValueError(f"unknown overlay state {state!r}")
         with self._lock:
             self._state = state
@@ -839,6 +918,20 @@ class FluidOverlay:
             self._last_sig = None
         if self._d is None:
             return  # notifications have no processing visual
+
+    def finish(self, badge: str | None = None) -> None:
+        """Peak-end done beat: show the success frame (badge "✓", green
+        bars) for DONE_HOLD, then the loop fades and unmaps itself.
+        Notification fallbacks just close - there is no frame to polish."""
+        if self._d is None:
+            self.close()
+            return
+        with self._lock:
+            if badge is not None:
+                self._badge = badge
+            self._state = "done"
+            self._state_since = time.monotonic()
+            self._last_sig = None
 
     def close(self) -> None:
         self._stop.set()
@@ -855,9 +948,12 @@ class FluidOverlay:
             while not self._stop.is_set():
                 t0 = time.monotonic()
                 state = self._state
+                now = time.monotonic()
                 if state == "processing" and \
-                        time.monotonic() - self._state_since > PROCESSING_CAP:
+                        now - self._state_since > PROCESSING_CAP:
                     break
+                if state == "done" and now - self._state_since > DONE_HOLD:
+                    break  # done beat over -> fade below
                 try:
                     self._tick(state)
                 except Exception:
@@ -870,14 +966,14 @@ class FluidOverlay:
 
     def _fade_out(self) -> None:
         """Animate opacity down before unmapping (upstream scales+fades
-        the overlay away over ~0.2 s)."""
-        if self._win is None or self._renderer is None:
+        the overlay away over ~0.2 s); skipped under reduced motion."""
+        if self._win is None or self._renderer is None or not self._anims:
             return
         for alpha in (0.7, 0.45, 0.2, 0.0):
             img, (w, h) = self._renderer.render(
                 self._levels.levels(), self._text,
-                processing=(self._state == "processing"),
-                phase=self._phase, alpha=alpha)
+                phase=self._phase, alpha=alpha, mode=self._mode,
+                state=self._state, badge=self._badge)
             try:
                 self._blit(img, w, h, self._text)
             except Exception:
@@ -896,14 +992,22 @@ class FluidOverlay:
             self._levels.update(self._read_pcm_tail())
         self._phase += 1.0 / self.FPS
 
+        elapsed = (time.monotonic() - self._state_since
+                   if state == "processing" else None)
+        fade_alpha = 1.0
+        if self._fade_left > 0:
+            fade_alpha = (FADE_IN_FRAMES - self._fade_left + 1) / FADE_IN_FRAMES
+            self._fade_left -= 1
+
         img, (w, h) = self._renderer.render(
-            self._levels.levels(), text,
-            processing=(state == "processing"), phase=self._phase,
-            mode=mode, state=state, badge=badge)
+            self._levels.levels(), text, phase=self._phase,
+            alpha=fade_alpha, mode=mode, state=state, badge=badge,
+            elapsed=elapsed)
         sig = (w, h, state, mode, text, badge,
                tuple(round(b, 1) for b in self._levels.levels()),
-               round(self._phase % SHIMMER_PERIOD, 2))
-        if sig == self._last_sig:
+               round(self._phase % SHIMMER_PERIOD, 2),
+               None if elapsed is None else int(elapsed))
+        if sig == self._last_sig and self._fade_left <= 0:
             return
         self._last_sig = sig
 
@@ -1045,8 +1149,8 @@ class CommandPanel(FluidOverlay):
         self._renderer.set_status(status)
         self._renderer.set_awaiting(awaiting)
         self._phase += 1.0 / self.FPS
-        pulse = "Working..." if (status and int(self._phase * 2) % 2) \
-            else (status or "")
+        blink = self._anims and bool(int(self._phase * 2) % 2)
+        pulse = "Working..." if (status and blink) else (status or "")
         self._renderer.set_status(pulse)
         img, (w, h) = self._renderer.render(
             None, state="confirm")

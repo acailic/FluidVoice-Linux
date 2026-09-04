@@ -1144,7 +1144,16 @@ class Daemon:
             self.last_result = out
         finally:
             self.busy = False
-            self._close_closing_display()
+            display, self._closing_display = self._closing_display, None
+            if display is not None:
+                if mode == "command":
+                    display.close()  # the panel takes over the conversation
+                elif out.get("text"):
+                    # peak-end done beat: the pill shows the success frame,
+                    # then fades itself (research §7)
+                    display.finish("✓ AI" if out.get("ai") else "✓")
+                else:
+                    display.close()
         # Turn 1 runs AFTER busy clears, so there is no busy-flag race with
         # the hotkey-confirm handoff below.
         if mode == "command" and out.get("mode") == "command":

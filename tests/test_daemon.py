@@ -760,3 +760,80 @@ class TestSocketConfigActions:
         assert d.warmup["error"]  # failure surfaced to the UI
         assert d.cfg["model"]["name"] == "small"  # rolled back
         assert d.backend is keep  # running backend untouched
+
+
+class StubClosingDisplay:
+    """Records the pill lifecycle: finish()/close() vs state/badge churn."""
+
+    using_overlay = True
+
+    def __init__(self):
+        self.events: list[tuple] = []
+
+    def start(self):
+        self.events.append(("start", None))
+
+    def show(self, text):
+        self.events.append(("show", text))
+
+    def set_state(self, state):
+        self.events.append(("state", state))
+
+    def set_badge(self, badge):
+        self.events.append(("badge", badge))
+
+    def finish(self, badge=None):
+        self.events.append(("finish", badge))
+
+    def close(self):
+        self.events.append(("close", None))
+
+
+class TestDoneBeat:
+    """Peak-end success beat: _process finishes the closing pill with a
+    check badge on success (research §7), plain close on failure/command."""
+
+    def _daemon(self, cfg, backend=None, **pipeline_kw):
+        backend = backend or StubBackend("typed text")
+        d = dm.Daemon(cfg, recorder=StubRecorder(),
+                      backend_factory=lambda c: backend,
+                      pipeline_factory=lambda c, b: dm.DictationPipeline(
+                          c, b, inserter=lambda t, c2: "typed", **pipeline_kw),
+                      use_hotkey=False, use_sounds=False)
+        d.backend = backend
+        return d
+
+    def test_success_finishes_with_check(self, tmp_path, cfg, quiet_ui):
+        d = self._daemon(cfg)
+        disp = StubClosingDisplay()
+        d._closing_display = disp
+        d._process(make_wav(tmp_path / "u.wav"), "App", "dictate", None)
+        assert disp.events[-1] == ("finish", "✓")
+
+    def test_ai_polish_finishes_with_ai_badge(self, tmp_path, cfg, quiet_ui):
+        d = self._daemon(cfg, polisher=lambda t: "Polished!")
+        cfg["ai"]["enabled"] = True
+        disp = StubClosingDisplay()
+        d._closing_display = disp
+        d._process(make_wav(tmp_path / "u.wav"), "App", "dictate", None)
+        assert disp.events[-1] == ("finish", "✓ AI")
+
+    def test_failure_closes_without_beat(self, tmp_path, cfg, quiet_ui):
+        d = self._daemon(cfg, StubBackend(error=RuntimeError("boom")))
+        disp = StubClosingDisplay()
+        d._closing_display = disp
+        d._process(make_wav(tmp_path / "u.wav"), "App", "dictate", None)
+        assert disp.events == [("close", None)]
+
+    def test_command_mode_closes_panel_takes_over(self, tmp_path, cfg, quiet_ui):
+        d = self._daemon(cfg)
+        disp = StubClosingDisplay()
+        d._closing_display = disp
+        d._process(make_wav(tmp_path / "u.wav"), "App", "command", None)
+        assert disp.events[-1] == ("close", None)
+
+    def test_no_display_no_crash(self, tmp_path, cfg, quiet_ui):
+        d = self._daemon(cfg)
+        d._closing_display = None
+        d._process(make_wav(tmp_path / "u.wav"), "App", "dictate", None)
+        assert d.last_result.get("text") == "typed text"

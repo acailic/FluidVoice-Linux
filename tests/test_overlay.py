@@ -350,3 +350,153 @@ class TestSendBadge:
         o.set_badge(None)
         assert o._badge is None
         o.close()
+
+
+def count_hue(img, pred, step=2) -> int:
+    return sum(1 for x in range(0, img.width, step)
+               for y in range(0, img.height, step)
+               if (lambda p: p[3] > 200 and pred(p))(img.getpixel((x, y))))
+
+
+class TestMotionScience:
+    """docs/research/ui-hci-papers.md: fade-in inside the 0.1 s band, a
+    peak-end done beat, reduced-motion static paths, and the elapsed /
+    still-working processing cue."""
+
+    def test_animation_constants_exist(self):
+        import fluidvoice.overlay as ov
+        assert ov.FADE_IN_FRAMES == 4          # ~130 ms at 30 fps
+        assert 0.3 <= ov.DONE_HOLD <= 0.8      # peak-end hold, then fade
+
+    def test_animations_env_override_wins(self, monkeypatch):
+        import fluidvoice.overlay as ov
+        monkeypatch.setenv("SAYITERMANO_NO_ANIMATIONS", "1")
+        assert ov.animations_enabled() is False
+        monkeypatch.setenv("SAYITERMANO_NO_ANIMATIONS", "0")
+        assert ov.animations_enabled() is True
+        monkeypatch.setenv("SAYITERMANO_NO_ANIMATIONS", "yes")
+        assert ov.animations_enabled() is False
+
+    def test_animations_gsettings_fallback(self, monkeypatch):
+        import fluidvoice.overlay as ov
+
+        class R:
+            def __init__(self, stdout):
+                self.stdout = stdout
+
+        def fake_run(*a, **k):
+            return R("false\n")
+
+        monkeypatch.delenv("SAYITERMANO_NO_ANIMATIONS", raising=False)
+        monkeypatch.setattr(ov.subprocess, "run", fake_run)
+        monkeypatch.setattr(ov, "_ANIMS_CACHE", None)
+        assert ov.animations_enabled() is False
+
+        monkeypatch.setattr(ov.subprocess, "run",
+                            lambda *a, **k: R("true\n"))
+        monkeypatch.setattr(ov, "_ANIMS_CACHE", None)
+        assert ov.animations_enabled() is True
+
+        def boom(*a, **k):
+            raise FileNotFoundError("no gsettings")
+
+        monkeypatch.setattr(ov.subprocess, "run", boom)
+        monkeypatch.setattr(ov, "_ANIMS_CACHE", None)
+        assert ov.animations_enabled() is True  # fail open
+        monkeypatch.setattr(ov, "_ANIMS_CACHE", None)
+
+    def test_overlay_reads_animation_setting_once(self, monkeypatch):
+        import fluidvoice.overlay as ov
+
+        def boom(*a, **k):
+            raise OSError("no display")
+
+        monkeypatch.setattr("Xlib.display.Display", boom)
+        monkeypatch.setattr(ov, "animations_enabled", lambda: False)
+        o = ov.FluidOverlay()
+        assert o._anims is False
+        o.close()
+
+    def test_processing_label_grows_seconds_suffix(self):
+        from fluidvoice.overlay import processing_label
+        assert processing_label("Transcribing", None) == "Transcribing"
+        assert processing_label("Transcribing", 1.9) == "Transcribing"
+        assert processing_label("Transcribing", 2.0) == "Transcribing · 2 s"
+        assert processing_label("Transcribing", 7.4) == "Transcribing · 7 s"
+
+    def test_elapsed_suffix_widens_pill(self):
+        r = PillRenderer()
+        _, (w0, _) = r.render([BAR_MIN_H] * BAR_COUNT, None,
+                              state="processing")
+        _, (w1, _) = r.render([BAR_MIN_H] * BAR_COUNT, None,
+                              state="processing", elapsed=5.0)
+        assert w1 > w0
+
+    def test_processing_is_static_without_animations(self):
+        r = PillRenderer(animations=False)
+        i0, _ = r.render([BAR_MAX_H] * BAR_COUNT, None, state="processing",
+                         phase=0.0)
+        i1, _ = r.render([BAR_MAX_H] * BAR_COUNT, None, state="processing",
+                         phase=0.5)
+        assert i0.tobytes() == i1.tobytes()
+
+    def test_processing_shimmer_still_animates_with_animations(self):
+        r = PillRenderer(animations=True)
+        i0, _ = r.render([BAR_MAX_H] * BAR_COUNT, None, state="processing",
+                         phase=0.0)
+        i1, _ = r.render([BAR_MAX_H] * BAR_COUNT, None, state="processing",
+                         phase=0.5)
+        assert i0.tobytes() != i1.tobytes()
+
+    def test_done_state_label_and_green_paint(self):
+        from fluidvoice.overlay import state_label
+        assert state_label("dictate", "done") == "Done"
+        assert state_label("rewrite", "done") == "Done"
+        r = PillRenderer()
+        img, _ = r.render([BAR_MAX_H] * BAR_COUNT, None, state="done",
+                          badge="✓")
+        greens = count_hue(img, lambda p: p[1] > 150 and p[0] < 130
+                           and p[2] < 180)
+        assert greens > 5
+
+    def test_done_low_confidence_reads_amber(self):
+        r = PillRenderer()
+        ok, _ = r.render([BAR_MAX_H] * BAR_COUNT, None, state="done",
+                         badge="✓", confidence=2)
+        low, _ = r.render([BAR_MAX_H] * BAR_COUNT, None, state="done",
+                          badge="✓?", confidence=0)
+        assert ok.tobytes() != low.tobytes()
+        ambers = count_hue(low, lambda p: p[0] > 190 and 120 < p[1] < 210
+                           and p[2] < 120)
+        assert ambers > 3
+
+    def test_headless_done_state_and_finish_fallback(self, monkeypatch):
+        import fluidvoice.overlay as ov
+
+        def boom(*a, **k):
+            raise OSError("no display")
+
+        monkeypatch.setattr("Xlib.display.Display", boom)
+        o = ov.FluidOverlay()
+        o.set_state("done")            # accepted now
+        assert o._state == "done"
+        with pytest.raises(ValueError):
+            o.set_state("still bogus")
+        o.finish()                     # fallback path: closes outright
+        assert o._thread is None or not o._thread.is_alive()
+        o.close()
+
+    def test_finish_sets_badge_and_done_state(self, monkeypatch):
+        import fluidvoice.overlay as ov
+
+        def boom(*a, **k):
+            raise OSError("no display")
+
+        monkeypatch.setattr("Xlib.display.Display", boom)
+        o = ov.FluidOverlay()
+        o._d = object()  # pretend a display exists: finish() paints, not closes
+        o.finish(badge="✓ AI")
+        assert o._state == "done"
+        assert o._badge == "✓ AI"
+        o._d = None
+        o.close()
