@@ -103,6 +103,7 @@ class TestPaste:
 
 class TestActiveWindowClass:
     def test_parses_wm_class(self, runner, monkeypatch):
+        monkeypatch.setenv("DISPLAY", ":99")  # hermetic: no ambient X needed
         monkeypatch.setattr(insertion.shutil, "which",
                             lambda n: "/usr/bin/" + n if n in ("xdotool", "xprop") else None)
 
@@ -115,6 +116,7 @@ class TestActiveWindowClass:
         assert insertion.active_window_class() == "dev.warp.Warp"
 
     def test_falls_back_to_window_name(self, runner, monkeypatch):
+        monkeypatch.setenv("DISPLAY", ":99")  # hermetic: no ambient X needed
         monkeypatch.setattr(insertion.shutil, "which",
                             lambda n: "/usr/bin/xdotool" if n == "xdotool" else None)
 

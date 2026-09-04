@@ -52,7 +52,7 @@ jobs:
           python-version: "3.12"
       - name: Byte-compile everything
         run: |
-          pip install -e .
+          pip install -e . pytest
           python -m compileall -q fluidvoice tests
       - name: Integration suite compiles and collects
         run: pytest --collect-only -q tests/integration
