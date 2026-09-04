@@ -39,6 +39,9 @@ class StubClient(Client):
         self.selected_models: list[str] = []
         self.inserted: list[str] = []
         self.updated: list[tuple] = []
+        self.suggestions: list[dict] = []
+        self.accepted: list[tuple] = []
+        self.dismissed: list[tuple] = []
 
     def status(self):
         return {"ok": True, "recording": False, "busy": False,
@@ -106,6 +109,30 @@ class StubClient(Client):
 
     def test_dictation(self, seconds=3.0):
         return {"ok": True, "text": "hello world", "duration_s": 3.0}
+
+    # -- dictionary auto-learning (mirrors Client's three methods) ---------
+
+    def dict_suggestions(self):
+        return list(self.suggestions)
+
+    def dict_suggestion_accept(self, heard, corrected):
+        from fluidvoice.processing import dict_learn
+        cfg, _ = self.get_config()
+        merged = dict_learn.accept_merge(
+            cfg["processing"]["dictionary"], heard, corrected)
+        self.set_config({"processing": {"dictionary": merged}})
+        self.accepted.append((heard, corrected))
+        self.suggestions = [s for s in self.suggestions
+                            if (s.get("heard"), s.get("corrected"))
+                            != (heard, corrected)]
+        return {"ok": True, "dictionary": merged, "changed":
+                ["processing.dictionary"], "rejected": [], "errors": []}
+
+    def dict_suggestion_dismiss(self, heard, corrected):
+        self.dismissed.append((heard, corrected))
+        self.suggestions = [s for s in self.suggestions
+                            if (s.get("heard"), s.get("corrected"))
+                            != (heard, corrected)]
 
 
 @pytest.fixture()
@@ -655,6 +682,98 @@ class TestSettingsWindow:
         assert c.saved[-1]["model"] == {
             "backend": "parakeet", "name": "parakeet-tdt-0.6b-v2"}
         pump(loop, 1300)  # let the scheduled warmup poll run once and stop
+        w.close()
+
+
+class TestDictionarySuggestions:
+    """Settings -> Dictation "Suggested words" group (dict_learn):
+    suggest-only, threshold-2, permanent dismiss, Accept merges through
+    the client's validated save path."""
+
+    def test_rows_render_with_count(self, loop):
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        c = StubClient()
+        c.suggestions = [
+            {"heard": "flud voice", "corrected": "fluid voice", "count": 3},
+            {"heard": "gnu plot", "corrected": "gnuplot", "count": 2},
+        ]
+        w = SettingsWindow(client=c)
+        w.present()
+        pump(loop)
+        assert w.suggest_group.get_visible() is True
+        assert [r["row"].get_title() for r in w._suggest_rows] == [
+            "flud voice → fluid voice", "gnu plot → gnuplot"]
+        assert w._suggest_rows[0]["row"].get_subtitle() == "seen 3×"
+        w.close()
+
+    def test_group_hidden_when_nothing_pending(self, loop):
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        w = SettingsWindow(client=StubClient())  # StubClient: no suggestions
+        w.present()
+        pump(loop)
+        assert w._suggest_rows == []
+        assert w.suggest_group.get_visible() is False
+        w.close()
+
+    def test_accept_posts_merges_and_refreshes_editor(self, loop):
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        c = StubClient()
+        c.suggestions = [
+            {"heard": "flud voice", "corrected": "fluid voice", "count": 2}]
+        w = SettingsWindow(client=c)
+        w.present()
+        pump(loop)
+        toasts: list[str] = []
+        w.toast = lambda text, timeout=5: toasts.append(text)
+        w._on_suggestion_accept(None, w._suggest_rows[0])
+        assert c.accepted == [("flud voice", "fluid voice")]
+        # posted through the validated save path
+        assert c.saved[-1]["processing"]["dictionary"] == [
+            {"triggers": ["miro board"], "replacement": "Miro board"},
+            {"triggers": ["flud voice"], "replacement": "fluid voice"}]
+        # dictionary editor refreshed without discarding other unsaved edits
+        assert len(w._dict_rows) == 2
+        assert {"triggers": ["flud voice"],
+                "replacement": "fluid voice"} in w._collect_dictionary()
+        # row removed, group emptied and hidden, toast shown
+        assert w._suggest_rows == []
+        assert w.suggest_group.get_visible() is False
+        assert "Added to dictionary" in toasts
+        w.close()
+
+    def test_accept_rejected_keeps_row(self, loop):
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        c = StubClient()
+
+        def reject(heard, corrected):
+            return {"ok": False, "dictionary": [], "changed": [],
+                    "rejected": ["processing.dictionary"], "errors": []}
+
+        c.dict_suggestion_accept = reject
+        c.suggestions = [
+            {"heard": "flud voice", "corrected": "fluid voice", "count": 2}]
+        w = SettingsWindow(client=c)
+        w.present()
+        pump(loop)
+        toasts: list[str] = []
+        w.toast = lambda text, timeout=5: toasts.append(text)
+        w._on_suggestion_accept(None, w._suggest_rows[0])
+        assert len(w._suggest_rows) == 1  # row stays on a rejected save
+        assert any("Could not add" in t for t in toasts)
+        w.close()
+
+    def test_dismiss_removes_row_and_records_pair(self, loop):
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        c = StubClient()
+        c.suggestions = [
+            {"heard": "gnu plot", "corrected": "gnuplot", "count": 2}]
+        w = SettingsWindow(client=c)
+        w.present()
+        pump(loop)
+        w._on_suggestion_dismiss(None, w._suggest_rows[0])
+        assert c.dismissed == [("gnu plot", "gnuplot")]
+        assert w._suggest_rows == []
+        assert w.suggest_group.get_visible() is False
         w.close()
 
 

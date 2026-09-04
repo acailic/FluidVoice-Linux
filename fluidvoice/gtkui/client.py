@@ -151,3 +151,31 @@ class Client:
         notes: list[str] = []
         n = history_mod.export_zip(path, on_note=notes.append)
         return n, notes
+
+    # -- dictionary auto-learning (direct reads; accept saves via set_config) --
+
+    def dict_suggestions(self) -> list[dict]:
+        """Pending custom-dictionary suggestions learned from history edits
+        (suggest-only; see processing/dict_learn.py)."""
+        from ..processing import dict_learn
+        return dict_learn.pending_suggestions(load_config(),
+                                              history_mod.read_all())
+
+    def dict_suggestion_accept(self, heard: str, corrected: str) -> dict:
+        """Merge the pair into processing.dictionary through the validated
+        save path (daemon live-apply or file-only degraded mode)."""
+        from ..processing import dict_learn
+        dictionary = (load_config().get("processing", {})
+                      .get("dictionary") or [])
+        merged = dict_learn.accept_merge(dictionary, heard, corrected)
+        resp = self.set_config({"processing": {"dictionary": merged}})
+        ok = not resp.get("rejected") and not resp.get("errors")
+        if ok:
+            dict_learn.record_accepted(heard, corrected)
+        return {"ok": ok, "dictionary": merged, "changed": resp.get("changed"),
+                "rejected": resp.get("rejected"), "errors": resp.get("errors")}
+
+    def dict_suggestion_dismiss(self, heard: str, corrected: str) -> None:
+        """Record the pair as permanently dismissed."""
+        from ..processing import dict_learn
+        dict_learn.dismiss(heard, corrected)

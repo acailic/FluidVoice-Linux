@@ -1,6 +1,6 @@
 # SayItErmano — Status Ledger
 
-Last updated: 2026-09-04 · v0.5.0 · **774 automated tests** (742 offline + 32 integration)
+Last updated: 2026-09-04 · v0.5.0 · **826 automated tests** (794 offline + 32 integration)
 · verified against upstream `altic-dev/FluidVoice` by a 5-agent audit
 (prompts/AI, punctuation rules, daemon pipeline, models, security).
 
@@ -102,6 +102,21 @@ matrix + upstream changelog with its refresh loop).
 - Filler removal — upstream split/trim semantics, default word list identical.
 - Custom dictionary — case-insensitive, longest-first, boundaries only on
   word-char edges.
+- Dictionary auto-learning from History edits (upstream v1.6.3 port) —
+  inline repair stamps the pre-edit text as `edited_from` (first edit
+  wins) and `processing/dict_learn.py` diffs it against the final text:
+  token-level difflib with upstream's shape checks (≤3 words/side, ≤40
+  chars/side, ≤70 combined, ≥2 letters/side, purely alphabetic trimmed
+  tokens, filler-free, trigger-already-saved suppression —
+  Tracker:215-241/676-705); a pair is suggested after 2 occurrences
+  (upstream `requiredOccurrences`; counts derive from the history itself
+  — one entry = one correction event). Suggest-only Accept/Dismiss rows
+  in Settings → Dictation "Suggested words" (nothing enters the
+  dictionary without a click — the macOS model; the Windows port
+  silently auto-adds); Accept merges through the validated save path
+  without duplicate triggers, Dismiss permanent; decisions at
+  `~/.config/sayit-ermano/dictionary-suggestions.json`; doctor prints
+  the pending count. Divergences in the table below.
 - Spoken punctuation (`literal comma`, …) — **matches upstream's LIVE rule
   table**: all 108 aliases (incl. parentheses/curly/angle/quote variants,
   `plus`, `equal`, `equals`), `double quote` toggling, longest-alias-first
@@ -176,6 +191,14 @@ matrix + upstream changelog with its refresh loop).
 | `max_seconds` cap (upstream: none) | runaway-recording safety; configurable |
 | Hold mode passes typed keys through natively but they do NOT end the dictation (upstream clean-tap: other keys interrupt the trigger); the held hotkey's auto-repeat pairs also reach the app | deliberate "keep typing while holding"; X11 has no per-event passthrough under an active grab — releasing the grab entirely is the only clean mechanism (live-verified) |
 | No telemetry at all (upstream has opt-in analytics) | privacy-first choice |
+| D1: case-only corrections are dictionary candidates (upstream rejects them, `AutomaticDictionaryCorrectionTracker.swift:111`/`:216-227`, test "fluidvoice"→"FluidVoice"→nil) | the canonical documented use of this dictionary is exactly `["miro board"] → "Miro board"` and the engine matches triggers case-insensitively, so a learned case entry is fully functional; threshold-2 + suggest-only + permanent dismiss bound the risk |
+| D2: learning signal = History inline repair (`history.update_text` `edited_from`), not a live accessibility observer on the edited field (upstream `TypingService.swift:525-532` kAXValueChangedNotification) | no AT-SPI text-field observation on Linux yet (roadmap keeps it later); v1 scope: no re-dictation, no external editors |
+| D3: suggestions surface as a persistent Settings list ("Suggested words"), not a typing-time 5 s overlay (upstream `AutomaticDictionaryCorrectionOverlay.swift`) | no D2 signal at typing time; a passive list needs no interruption ⇒ none of upstream's cooldowns/session-ignores; Settings is where the dictionary lives |
+| D4: dismissal is permanent, not upstream's 7-day dismissed-pair cooldown with max-3 dismissals (Tracker:236-237) | the brief mandates "never resuggested"; simpler and stricter |
+| D5: counts persist with no 7-day occurrence window (Tracker:234-235) and derive from the history itself, not a stored state file | the 5000-entry history cap bounds them; the store records decisions only (dismissed/accepted) |
+| D6: token-level difflib over the whole edit, not upstream's anchored in-range character diff expanded to token boundaries | our edit boundary is one whole History entry (a single edit event), so anchoring is trivially satisfied |
+| D7: no config toggle (upstream `automaticDictionaryLearningEnabled`, default on) | upstream's toggle gates an interruptive overlay; a passive list that only records what the user already typed needs no gate — `history.save = false` disables the signal at the source |
+| D1 corollary: suggest-only, unlike the Windows port which silently auto-adds (windows-v0.0.8: "FluidVoice adds it to your custom dictionary, with a card to undo") | silent dictionary growth degrades trust (research §5) — nothing enters without an explicit Accept |
 
 ---
 
@@ -242,7 +265,7 @@ c      catalog (v2 English / v3 multilingual, int8) with sha256-verified
       monitoring (3 s diff poll) with vanished-device auto-switch (bluez
       pattern example in README); never mid-take, auto never overridden.
       MPRIS media pause shipped earlier.
-- [ ] Dictionary auto-learning; updater; local OpenAI-style HTTP API;
+- [ ] Updater; local OpenAI-style HTTP API;
       packaging (AUR/nix/deb/pipx).
 
 ### Non-goals

@@ -166,7 +166,7 @@ new that Linux doesn't have" a one-command answer.
 | Upstream change | Linux | Notes |
 |---|---|---|
 | Fluid-1 2.2× faster on Apple silicon | ➖ | Fluid Intelligence only |
-| Auto-suggested custom-dictionary replacements | ⏳ | roadmap: dictionary auto-learning |
+| Auto-suggested custom-dictionary replacements | ✅ | suggest-only, from history edits (`edited_from`); see STATUS divergences |
 | Train by Voice (pronunciation samples) | ⏳ | not started |
 | Optional/configurable spoken punctuation | ✅ | toggles + full rule table ported |
 | All Whisper models restored | ✅ | tiny→large-v3-turbo |

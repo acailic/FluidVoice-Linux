@@ -166,6 +166,12 @@ def update_text(ts: float, text: str) -> bool:
     lines = []
     for entry in entries:
         if not changed and abs(entry.get("ts", 0) - ts) < 1e-6:
+            old = entry.get("text")
+            if old != text and "edited_from" not in entry:
+                # first edit wins: keep what ASR heard (the audit trail);
+                # the diff against the final text is the dictionary
+                # learner's signal (processing/dict_learn.py)
+                entry["edited_from"] = old
             entry["text"] = text
             changed = True
         lines.append(json.dumps(entry, ensure_ascii=False))

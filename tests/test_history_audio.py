@@ -164,3 +164,71 @@ class TestUpdateText:
         history.append({"ts": 5.0, "text": "with audio", "audio": "/x/y.wav"})
         history.update_text(5.0, "edited")
         assert history.read_all()[0]["audio"] == "/x/y.wav"
+
+    def test_edit_records_edited_from(self, tmp_path, monkeypatch):
+        from fluidvoice import paths
+        hpath = tmp_path / "history.jsonl"
+        monkeypatch.setattr(paths, "history_file", lambda: hpath)
+        history.append({"ts": 1.0, "text": "old"})
+        assert history.update_text(1.0, "new") is True
+        entry = history.read_all()[0]
+        assert entry["text"] == "new"
+        assert entry["edited_from"] == "old"
+
+    def test_same_text_update_sets_no_edited_from(self, tmp_path, monkeypatch):
+        from fluidvoice import paths
+        hpath = tmp_path / "history.jsonl"
+        monkeypatch.setattr(paths, "history_file", lambda: hpath)
+        history.append({"ts": 1.0, "text": "same"})
+        assert history.update_text(1.0, "same") is True
+        assert "edited_from" not in history.read_all()[0]
+
+    def test_second_edit_keeps_original_edited_from(self, tmp_path, monkeypatch):
+        from fluidvoice import paths
+        hpath = tmp_path / "history.jsonl"
+        monkeypatch.setattr(paths, "history_file", lambda: hpath)
+        history.append({"ts": 1.0, "text": "first"})
+        history.update_text(1.0, "second")
+        history.update_text(1.0, "third")
+        entry = history.read_all()[0]
+        assert entry["text"] == "third"
+        assert entry["edited_from"] == "first"
+
+    def test_entries_without_edited_from_survive_update_of_other(
+            self, tmp_path, monkeypatch):
+        # pre-feature line (no edited_from key) round-trips alongside a
+        # newly-edited entry
+        from fluidvoice import paths
+        hpath = tmp_path / "history.jsonl"
+        hpath.write_text('{"ts": 1.0, "text": "pre-feature"}\n'
+                         '{"ts": 2.0, "text": "target"}\n',
+                         encoding="utf-8")
+        monkeypatch.setattr(paths, "history_file", lambda: hpath)
+        assert history.update_text(2.0, "targeted") is True
+        entries = history.read_all()
+        assert entries[0] == {"ts": 1.0, "text": "pre-feature"}
+        assert entries[1]["edited_from"] == "target"
+        assert [e["text"] for e in history.tail()] == [
+            "pre-feature", "targeted"]
+
+    def test_edited_from_survives_rewrite_and_export(self, tmp_path,
+                                                     monkeypatch):
+        # edited_from round-trips through _rewrite (delete of another
+        # entry) and export_zip - the dictionary learner's durable signal
+        from fluidvoice import paths
+        import zipfile
+        hpath = tmp_path / "history.jsonl"
+        monkeypatch.setattr(paths, "history_file", lambda: hpath)
+        history.append({"ts": 1.0, "text": "open the miro board app"})
+        history.update_text(1.0, "open the Miro board app")
+        history.append({"ts": 2.0, "text": "unrelated"})
+        assert history.delete(2.0) == 1  # _rewrite path
+        entries = history.read_all()
+        assert entries == [{"ts": 1.0, "text": "open the Miro board app",
+                            "edited_from": "open the miro board app"}]
+        zpath = tmp_path / "h.zip"
+        assert history.export_zip(zpath) == 1
+        with zipfile.ZipFile(zpath) as zf:
+            line = zf.read("history.jsonl").decode("utf-8").strip()
+        import json as _json
+        assert _json.loads(line)["edited_from"] == "open the miro board app"

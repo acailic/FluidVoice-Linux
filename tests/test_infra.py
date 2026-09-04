@@ -201,6 +201,47 @@ class TestDoctorInsertionLines:
         assert "insertion hardening:" in out
 
 
+class TestDoctorSuggestionsLine:
+    """_suggestions_line: pending count + decisions-file path."""
+
+    @pytest.fixture(autouse=True)
+    def _paths(self, tmp_path, monkeypatch):
+        from fluidvoice import paths
+        hpath = tmp_path / "history.jsonl"
+        spath = tmp_path / "dictionary-suggestions.json"
+        monkeypatch.setattr(paths, "history_file", lambda: hpath)
+        monkeypatch.setattr(paths, "dictionary_suggestions_file",
+                            lambda: spath)
+        self.hpath, self.spath = hpath, spath
+
+    def test_zero_pending_without_files(self):
+        from fluidvoice import doctor
+        line = doctor._suggestions_line(DEFAULTS)
+        assert "dictionary suggestions: 0 pending" in line
+        assert str(self.spath) in line
+
+    def test_counts_pending_from_seeded_history(self):
+        from fluidvoice import doctor, history
+        # two distinct pairs (each seen twice) -> two pending suggestions
+        for ts, old, new in [
+                (1.0, "open the miro board app", "open the Miro board app"),
+                (2.0, "open the miro board now", "open the Miro board now"),
+                (3.0, "please send the flud report",
+                 "please send the fluid report"),
+                (4.0, "the flud report again", "the fluid report again")]:
+            history.append({"ts": ts, "text": old})
+            history.update_text(ts, new)
+        line = doctor._suggestions_line(DEFAULTS)
+        assert "dictionary suggestions: 2 pending" in line
+        assert str(self.spath) in line
+
+    def test_run_prints_section(self, capsys):
+        from fluidvoice import doctor
+        doctor.run()
+        out = capsys.readouterr().out
+        assert "dictionary learning:" in out
+
+
 class TestControlSocket:
     def test_round_trip(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr(control.paths, "socket_path", lambda: tmp_path / "s.sock")

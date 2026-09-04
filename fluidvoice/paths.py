@@ -58,6 +58,11 @@ def history_file() -> Path:
     return data_dir() / "history.jsonl"
 
 
+def dictionary_suggestions_file() -> Path:
+    """Dictionary auto-learning decisions (dismissed/accepted pairs)."""
+    return config_dir() / "dictionary-suggestions.json"
+
+
 def audio_dir() -> Path:
     return data_dir() / "audio"
 

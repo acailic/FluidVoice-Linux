@@ -113,6 +113,18 @@ def _insertion_lines(cfg: dict) -> list[str]:
     ]
 
 
+def _suggestions_line(cfg: dict) -> str:
+    """Dictionary-learning report: pending count + the decisions file."""
+    from . import history, paths
+    from .processing import dict_learn
+    try:
+        n = len(dict_learn.pending_suggestions(cfg, history.read_all()))
+    except Exception as e:  # read-only report; never fails doctor
+        return f"  dictionary suggestions: unavailable ({e})"
+    return (f"  dictionary suggestions: {n} pending "
+            f"({paths.dictionary_suggestions_file()})")
+
+
 def run() -> int:
     print(f"SayItErmano v{__version__} doctor\n")
     ok = True
@@ -129,6 +141,12 @@ def run() -> int:
 
     print(f"\nconfig: {paths.config_file()} ({'exists' if paths.config_file().exists() else 'not created yet - defaults in use'})")
     print(f"history: {paths.history_file()}")
+    try:
+        cfg = load_config(paths.config_file())
+    except Exception:
+        cfg = {}
+    print("\ndictionary learning:")
+    print(_suggestions_line(cfg))
     print(f"models cache: {paths.models_dir()}")
 
     print("\ntools:")
@@ -158,10 +176,6 @@ def run() -> int:
     if shutil.which("nvidia-smi"):
         os.system("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | sed 's/^/  GPU: /'")
 
-    try:
-        cfg = load_config(paths.config_file())
-    except Exception:
-        cfg = {}
     print("\nwhisper.cpp:")
     for line in _whispercpp_lines(cfg):
         print(line)

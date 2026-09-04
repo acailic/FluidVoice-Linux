@@ -88,6 +88,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._combo_values: dict[tuple[str, str], list] = {}
         self._rule_rows: list[dict] = []  # per-app prompt editors
         self._dict_rows: list[dict] = []  # custom-dictionary editors
+        self._suggest_rows: list[dict] = []  # learned-suggestion rows
         self._mic_prio_rows: list[dict] = []  # mic-priority pattern editors
         self._save_groups: list[Adw.PreferencesGroup] = []
         self._save_rows: list[Adw.ActionRow] = []
@@ -248,6 +249,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._load_rules(self.cfg.get("ai", {}).get("per_app_prompts") or [])
         self._load_dictionary(self.cfg.get("processing", {}).get("dictionary")
                               or [])
+        self._load_suggestions()
         self._load_mic_priority(
             list(self.cfg.get("recording", {}).get("mic_priority") or []))
         self._dirty = False
@@ -956,6 +958,67 @@ class SettingsWindow(Adw.PreferencesWindow):
                            "triggers and a replacement)")
         return entries
 
+    # -- dictionary suggestions (auto-learned from history edits) ------------------
+
+    def _load_suggestions(self) -> None:
+        """Rebuild the Suggested words group through the client (direct
+        reads: config + history + decision store). Any failure — daemon
+        down, unreadable files — just hides the group."""
+        try:
+            suggestions = self.c.dict_suggestions() or []
+        except Exception:
+            suggestions = []
+        self._rebuild_suggestions(suggestions)
+
+    def _rebuild_suggestions(self, suggestions: list) -> None:
+        for ref in list(self._suggest_rows):
+            self.suggest_group.remove(ref["row"])
+        self._suggest_rows = []
+        for s in suggestions:
+            heard = str(s.get("heard", ""))
+            corrected = str(s.get("corrected", ""))
+            row = Adw.ActionRow(title=f"{heard} → {corrected}",
+                                subtitle=f"seen {s.get('count', 0)}×")
+            ref = {"row": row, "heard": heard, "corrected": corrected}
+            accept_btn = Gtk.Button(label="Accept",
+                                    css_classes=["flat", "suggested-action"])
+            accept_btn.set_valign(Gtk.Align.CENTER)
+            dismiss_btn = Gtk.Button(label="Dismiss", css_classes=["flat"])
+            dismiss_btn.set_valign(Gtk.Align.CENTER)
+            accept_btn.connect("clicked", self._on_suggestion_accept, ref)
+            dismiss_btn.connect("clicked", self._on_suggestion_dismiss, ref)
+            row.add_suffix(dismiss_btn)
+            row.add_suffix(accept_btn)
+            self.suggest_group.add(row)
+            self._suggest_rows.append(ref)
+        self.suggest_group.set_visible(bool(self._suggest_rows))
+
+    def _on_suggestion_accept(self, _btn, ref: dict) -> None:
+        """Merge the pair into processing.dictionary through the client's
+        validated save path, then refresh the dictionary editor WITHOUT a
+        full _load() (other unsaved edits survive) and re-render the group.
+        Not a settings edit — no dirty flag."""
+        try:
+            resp = self.c.dict_suggestion_accept(ref["heard"],
+                                                 ref["corrected"])
+        except Exception:
+            self.toast("Could not add the word (save failed)")
+            return
+        if not resp.get("ok"):
+            self.toast("Could not add the word (save rejected)")
+            return  # keep the row; nothing was recorded
+        self._load_dictionary(resp.get("dictionary") or [])
+        self.toast("Added to dictionary")
+        self._load_suggestions()
+
+    def _on_suggestion_dismiss(self, _btn, ref: dict) -> None:
+        """Record the pair as permanently dismissed (never resuggested)."""
+        try:
+            self.c.dict_suggestion_dismiss(ref["heard"], ref["corrected"])
+        except Exception:
+            pass  # a failed dismiss leaves the row in place on rebuild
+        self._load_suggestions()
+
     # -- dictation page -----------------------------------------------------------------
 
     def _build_dictation(self) -> None:
@@ -1088,6 +1151,16 @@ class SettingsWindow(Adw.PreferencesWindow):
         add_w.add_suffix(add_w_btn)
         self.dict_group.add(add_w)
         page.add(self.dict_group)
+
+        # auto-learned suggestions (dict_learn), below the hand-curated
+        # editor; hidden entirely while nothing is pending
+        self.suggest_group = Adw.PreferencesGroup(
+            title="Suggested words",
+            description="Corrections noticed in your history edits — "
+                        "accept to teach the dictionary")
+        self.suggest_group.set_visible(False)  # until the first load
+        self._suggest_rows: list[dict] = []
+        page.add(self.suggest_group)
 
         ins = Adw.PreferencesGroup(title="Insertion",
                                    description="How typed text reaches your apps")

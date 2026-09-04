@@ -283,6 +283,8 @@ mic_priority = ["bluez", "usb-cam"]  # fallback order when the chosen mic vanish
 
 [processing]
 dictionary = [ { triggers = ["miro board"], replacement = "Miro board" } ]
+# Corrections you make in History teach the dictionary: after the same
+# fix is seen twice, Settings -> Dictation suggests it under "Suggested words"
 # Chat-app literal squeeze: "/ fix the deploy" -> "/fix the deploy",
 # "@ John Smith" -> "@John Smith" (runs after AI cleanup)
 slash_mention_squeeze = true

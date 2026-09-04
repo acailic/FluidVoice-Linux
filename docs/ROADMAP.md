@@ -83,7 +83,26 @@ sources. Everything below is a known, classified gap — see
       (never mid-take; auto device untouched). The MPRIS media pause half
       shipped earlier. Drag-to-reorder in the settings editor stays a
       polish item (up/down buttons for now).
-- [ ] Custom-dictionary auto-learning from post-insertion corrections.
+- [x] Custom-dictionary auto-learning from post-insertion corrections
+      — DONE: inline repair (`history.update_text`) stamps the pre-edit
+      text as `edited_from` (first edit wins — the ASR-heard audit trail);
+      `processing/dict_learn.py` diffs it against the final text
+      (token-level difflib) with upstream's shape checks (≤3 words/side,
+      ≤40 chars/side, ≥2 letters/side, purely alphabetic tokens, filler-
+      free — `AutomaticDictionaryCorrectionTracker.swift:215-241`) and
+      suggests a pair only after it appears in ≥2 entries (upstream
+      `requiredOccurrences`; counts derive from the history itself, the
+      5000-entry cap bounds them). Settings → Dictation gains a passive
+      "Suggested words" group (below the hand-curated editor, hidden when
+      empty): Accept merges through the validated `set-config` path with
+      no duplicate triggers (the merged entry verifiably rewrites the old
+      form), Dismiss is permanent. Decisions live in
+      `~/.config/sayit-ermano/dictionary-suggestions.json` (dismissed /
+      accepted pairs only — no counts, no config key: a passive list that
+      records what the user already typed needs no gate;
+      `history.save = false` disables the signal at the source).
+      `fluidvoice doctor` prints the pending count. Divergences (case-only
+      candidates, no overlay, permanent dismiss…) in STATUS.md.
 - [x] Audio-history ZIP export; local usage stats — DONE: `fluidvoice
       history --export PATH.zip` (history + retained audio; audio outside the
       audio dir refused, missing skipped), History-window Export… menu item,
