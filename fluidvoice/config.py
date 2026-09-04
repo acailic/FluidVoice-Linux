@@ -46,6 +46,7 @@ DEFAULTS: dict[str, Any] = {
         "cancel_key": "Escape",
         "rewrite_key": "",  # optional keysym for Rewrite mode (needs [ai])
         "command_key": "",  # optional keysym for Command mode (needs [ai])
+        "paste_key": "",  # optional keysym: re-type the last transcription
     },
     "recording": {
         "command": "auto",  # auto | pw-record | parecord
@@ -380,7 +381,7 @@ def write_template(path: Path | None = None) -> Path:
 _SAVE_WHITELIST: dict[str, list[str]] = {
     "general": ["language", "copy_to_clipboard", "tray_enabled",
                 "terminal_apps", "pause_when_locked"],
-    "hotkey": ["key", "modifiers", "mode", "cancel_key", "rewrite_key",
+    "hotkey": ["key", "modifiers", "mode", "cancel_key", "rewrite_key", "paste_key",
                 "command_key"],
     "recording": ["command", "device", "mic_priority", "max_seconds",
                   "skip_silent",
@@ -490,6 +491,7 @@ SETTING_RANGES: dict[tuple[str, str], Any] = {
     ("hotkey", "key"): ("str", 64),
     ("hotkey", "cancel_key"): ("str", 64),
     ("hotkey", "rewrite_key"): ("str", 64),
+    ("hotkey", "paste_key"): ("str", 64),
     ("hotkey", "command_key"): ("str", 64),
     ("command", "max_turns"): ("int", (1, 20)),
     ("command", "working_dir"): ("str", 4096),
@@ -550,7 +552,7 @@ SETTING_LISTS = (("processing", "filler_words"), ("processing", "dictionary"),
 ALLOWED_SETTINGS: dict[str, set] = {
     "general": {"language", "copy_to_clipboard", "tray_enabled",
                 "terminal_apps", "pause_when_locked"},
-    "hotkey": {"key", "modifiers", "mode", "cancel_key", "rewrite_key",
+    "hotkey": {"key", "modifiers", "mode", "cancel_key", "rewrite_key", "paste_key",
                "command_key"},
     "recording": {"command", "device", "mic_priority", "max_seconds",
                   "skip_silent",

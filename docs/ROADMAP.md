@@ -37,7 +37,8 @@ sources. Everything below is a known, classified gap — see
       it" escape honored. Immediate-stop countdown UI: still future — the
       energy+ZCR trailing-silence VAD foundation landed with the segmented
       preview engine (2026-09-05); only the countdown UI remains.
-- [x] Paste-last-transcription — DONE: `fluidvoice paste-last` + socket action.
+- [x] Paste-last-transcription — DONE: `fluidvoice paste-last` + socket
+      action + global `hotkey.paste_key` shortcut (upstream parity, 2026-09-05).
 - [x] Per-app prompt sets — DONE: `ai.per_app_prompts` rules matched against
       the recording-start app (Settings → AI → Per-app prompts, per-rule
       editor; the frontmost-app hint was already captured).

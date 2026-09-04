@@ -93,14 +93,16 @@ class TestApplySettings:
                           "spoken_send_phrase": "send it now",
                           "spoken_send_key": "shift+enter",
                           "pause_media": False},
-            "hotkey": {"rewrite_key": "F8", "modifiers": ["ctrl"]},
+            "hotkey": {"rewrite_key": "F8", "modifiers": ["ctrl"],
+                       "paste_key": "F7"},
             "general": {"tray_enabled": False},
             "model": {"eager_warmup": False},
             "processing": {"gaav_enabled": True},
         })
-        assert rejected == [] and len(changed) == 11
+        assert rejected == [] and len(changed) == 12
         assert cfg["recording"]["preview_overlay_size"] == "large"
         assert cfg["hotkey"]["rewrite_key"] == "F8"
+        assert cfg["hotkey"]["paste_key"] == "F7"
         assert cfg["model"]["eager_warmup"] is False
 
     def test_garbage_rejected_nothing_half_applied(self, cfg):

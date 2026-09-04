@@ -1405,6 +1405,9 @@ class SettingsWindow(Adw.PreferencesWindow):
                            capture=True))
         hk.add(self._entry("hotkey", "command_key",
                            "Command key (optional, needs AI)", capture=True))
+        hk.add(self._entry("hotkey", "paste_key",
+                           "Paste-last key (optional) — re-types last text",
+                           capture=True))
         mods = Adw.ActionRow(title="Extra modifiers",
                              subtitle="held in addition to the dictation key")
         for mod in ("ctrl", "alt", "shift", "super"):

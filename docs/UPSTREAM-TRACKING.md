@@ -170,7 +170,7 @@ new that Linux doesn't have" a one-command answer.
 | Train by Voice (pronunciation samples) | ⏳ | not started |
 | Optional/configurable spoken punctuation | ✅ | toggles + full rule table ported |
 | All Whisper models restored | ✅ | tiny→large-v3-turbo |
-| Copy latest transcript from menu bar | ✅ | `fluidvoice paste-last` + optional copy-to-clipboard |
+| Copy latest transcript from menu bar | ✅ | `fluidvoice paste-last` + socket action + `hotkey.paste_key` global shortcut + optional copy-to-clipboard |
 
 ### v1.6.0 (the release our port was audited against)
 

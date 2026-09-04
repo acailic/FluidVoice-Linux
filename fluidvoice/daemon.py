@@ -322,6 +322,7 @@ class Daemon:
         self._command_entries: list[dict] = []  # panel conversation feed
         self._command_timer: threading.Timer | None = None
         self._command_hotkey = None
+        self._paste_hotkey = None
         self._watchdog: threading.Timer | None = None
         self._preview: Any = None
         self._closing_display: Any = None
@@ -727,6 +728,8 @@ class Daemon:
             self._rewrite_hotkey.stop()
         if self._command_hotkey:
             self._command_hotkey.stop()
+        if self._paste_hotkey:
+            self._paste_hotkey.stop()
         if self._srv:
             try:
                 self._srv.close()
@@ -802,6 +805,20 @@ class Daemon:
             except HotkeyError as e:
                 self._command_hotkey = None
                 log(f"WARN command hotkey unavailable: {e}")
+                error = error or str(e)
+        paste_key = (hk.get("paste_key") or "").strip()
+        if paste_key:
+            try:
+                self._paste_hotkey = HotkeyListener(
+                    key=paste_key, modifiers=[], mode="toggle",
+                    on_toggle=self._on_paste_hotkey, log=log)
+                self._paste_hotkey.start()
+                for line in self._paste_hotkey.summary:
+                    log(line)
+                self._log_grab_state(self._paste_hotkey, "paste ", paste_key)
+            except HotkeyError as e:
+                self._paste_hotkey = None
+                log(f"WARN paste hotkey unavailable: {e}")
                 error = error or str(e)
         return error
 
@@ -1507,6 +1524,12 @@ class Daemon:
             Path(tmp).unlink(missing_ok=True)
             with self._lock:
                 self.busy = False
+
+    def _on_paste_hotkey(self) -> None:
+        ok, detail = self.paste_last()
+        if not ok and detail:
+            ui.notify("SayItErmano", f"Paste last: {detail}",
+                      enabled=self.cfg["notifications"]["enabled"])
 
     def paste_last(self) -> tuple[bool, str | None]:
         """Re-type the most recent transcription (upstream paste-last hotkey)."""
