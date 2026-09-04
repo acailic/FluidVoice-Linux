@@ -92,6 +92,23 @@ class TestRecorderLifecycle:
             r.start(tmp_path / "x.wav")
         assert r.proc is None
 
+    def test_start_returns_once_pcm_flows(self, monkeypatch, tmp_path):
+        sleeps: list[float] = []
+        monkeypatch.setattr(rec.time, "sleep", lambda s: sleeps.append(s))
+        monkeypatch.setattr(rec.subprocess, "Popen", lambda args, **kw: FakeProc())
+        (tmp_path / "x.raw").write_bytes(b"\0" * 4096)  # PCM already flowing
+        r = rec.Recorder()
+        r.start(tmp_path / "x.wav")
+        assert r.proc is not None
+        assert sleeps == []  # short-circuits on first PCM - no fixed sleep
+
+    def test_start_survives_alive_but_silent_recorder(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(rec.time, "sleep", lambda s: None)
+        monkeypatch.setattr(rec.subprocess, "Popen", lambda args, **kw: FakeProc())
+        r = rec.Recorder()
+        r.start(tmp_path / "x.wav")  # no PCM ever arrives -> still proceeds
+        assert r.proc is not None
+
     def test_stop_sends_sigint_and_returns_path(self, no_real_popen, tmp_path):
         r = rec.Recorder()
         r.start(tmp_path / "x.wav")

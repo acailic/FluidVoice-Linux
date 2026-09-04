@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -253,3 +254,52 @@ class TestParakeetSelection:
                             lambda n: n == "parakeet-tdt-0.6b-v2")
         s = backends.backend_status()["parakeet"]
         assert s == "available (CPU · v2 yes, v3 no)"
+
+
+class TestFasterWhisperWarmup:
+    """warmup() = load + one throwaway inference, so the first real
+    dictation doesn't pay CUDA kernel setup. Hermetic: _model is injected,
+    no faster-whisper import or model download."""
+
+    @staticmethod
+    def _backend(model):
+        from types import SimpleNamespace
+
+        from fluidvoice.backends import faster_whisper_backend as fw
+        be = object.__new__(fw.FasterWhisperBackend)
+        be.model_name, be.language = "small", "en"
+        be.device, be.compute = "cpu", "int8"
+        be._WhisperModel = None
+        be._model = model
+        return be
+
+    @staticmethod
+    def _fake_model(fail=False):
+        from types import SimpleNamespace
+
+        class Inner:
+            def __init__(self):
+                self.paths = []
+
+            def transcribe(self, path, language=None, **kw):
+                if fail:
+                    raise RuntimeError("probe boom")
+                self.paths.append(path)
+                seg = SimpleNamespace(start=0.0, end=1.0, text=" hi",
+                                      avg_logprob=-0.1)
+                info = SimpleNamespace(language="en", duration=1.0)
+                return iter([seg]), info
+
+        return Inner()
+
+    def test_warmup_runs_throwaway_inference(self):
+        model = self._fake_model()
+        be = self._backend(model)
+        be.warmup()
+        assert len(model.paths) == 1
+        wav = model.paths[0]
+        assert str(wav).endswith(".wav") and not Path(wav).exists()  # cleaned up
+
+    def test_warmup_swallows_inference_errors(self):
+        be = self._backend(self._fake_model(fail=True))
+        be.warmup()  # must not raise - load errors still would

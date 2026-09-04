@@ -31,6 +31,14 @@ def pick_command(prefer: str = "auto") -> tuple[str, list[str]]:
     raise RecorderError("no recorder found: install pipewire (pw-record) or pulseaudio-utils (parecord)")
 
 
+# Start probe: poll for early death / first PCM instead of sleeping a fixed
+# 350 ms (toggle latency was pinned to that sleep; spawn-to-first-PCM is
+# ~90 ms for pw-record). 2048 bytes = 1024 frames (~64 ms of audio), the
+# same partial-write threshold the daemon's first_pcm_timeout uses.
+PROBE_SECONDS = 0.35
+PROBE_TICK_S = 0.01
+
+
 class Recorder:
     """Record 16 kHz mono s16 WAV to a file, started/stopped around a hotkey."""
 
@@ -71,12 +79,23 @@ class Recorder:
             args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             start_new_session=True,
         )
-        # Fail fast if the recorder dies immediately (bad device, no mic, ...)
-        time.sleep(0.35)
-        if self.proc.poll() is not None:
-            stderr = (self.proc.stderr.read() or b"").decode(errors="replace").strip()
-            self.proc = None
-            raise RecorderError(f"{cmd} exited immediately: {stderr}")
+        # Fail fast if the recorder dies immediately (bad device, no mic, ...),
+        # but return as soon as PCM is flowing. If it stays alive without PCM
+        # for the whole probe window, proceed anyway: a live-but-silent source
+        # (muted mic, wrong device) is the daemon first_pcm_timeout watchdog's
+        # job, not ours.
+        probe = Path(raw_path)
+        for _ in range(int(PROBE_SECONDS / PROBE_TICK_S)):
+            if self.proc.poll() is not None:
+                stderr = (self.proc.stderr.read() or b"").decode(errors="replace").strip()
+                self.proc = None
+                raise RecorderError(f"{cmd} exited immediately: {stderr}")
+            try:
+                if probe.stat().st_size > 2048:
+                    break
+            except OSError:
+                pass
+            time.sleep(PROBE_TICK_S)
         # Drain stderr for the rest of the session: a chatty recorder would
         # otherwise fill the 64 KB pipe buffer and silently block mid-recording.
         proc = self.proc
