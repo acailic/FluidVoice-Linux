@@ -418,8 +418,12 @@ class TestFirstPcmWatchdog:
                       use_hotkey=False, use_sounds=False)
         d.toggle()
         deadline = time.monotonic() + 3
-        while d.recording and time.monotonic() < deadline:
-            time.sleep(0.05)
+        # the watchdog flips recording=False before its notify lands - wait
+        # for the full end state, not just the flip
+        while (d.recording or not any("no audio" in (t + b).lower()
+                                      for t, b in quiet_ui["notify"])) \
+                and time.monotonic() < deadline:
+            time.sleep(0.02)
         assert not d.recording
         assert rec.stopped >= 1
         assert any("no audio" in (t + b).lower() for t, b in quiet_ui["notify"])
