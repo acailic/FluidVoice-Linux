@@ -406,7 +406,8 @@ class TestCommandSettings:
         assert cfg["command"] == {"max_turns": 4, "working_dir": "",
                                   "timeout_seconds": 60.0,
                                   "confirm_timeout_s": 120.0,
-                                  "destructive_patterns": []}
+                                  "destructive_patterns": [],
+                                  "context_window_s": 300.0}
 
     def test_apply_accepts_command_keys(self, cfg):
         changed, rejected = apply_settings(cfg, {
@@ -437,8 +438,14 @@ class TestCommandSettings:
         assert "command.max_turns" in rejected  # 0
         assert "command.working_dir" in rejected
         assert "command.timeout_seconds" in rejected
+        _, rejected4 = apply_settings(cfg, {
+            "command": {"context_window_s": -1}})
+        _, rejected5 = apply_settings(cfg, {
+            "command": {"context_window_s": 90000}})
         assert "command.max_turns" in rejected2  # 21
         assert "command.max_turns" in rejected3  # "four"
+        assert "command.context_window_s" in rejected4  # < 0
+        assert "command.context_window_s" in rejected5  # > 86400
         assert cfg["command"] == before  # untouched
 
     def test_save_whitelist_writes_command_section(self, tmp_path, monkeypatch):
@@ -447,15 +454,18 @@ class TestCommandSettings:
         cfg = copy.deepcopy(DEFAULTS)
         cfg["hotkey"]["command_key"] = "F9"
         cfg["command"].update(max_turns=6, working_dir="/tmp",
-                              timeout_seconds=30, confirm_timeout_s=60)
+                              timeout_seconds=30, confirm_timeout_s=60,
+                              context_window_s=0.0)
         save_config(cfg)
         text = (tmp_path / "c.toml").read_text()
         assert "[command]" in text
         assert "command_key = \"F9\"" in text
         assert "max_turns = 6" in text
         assert "destructive_patterns = []" in text
+        assert "context_window_s = 0.0" in text
         loaded = load_config(tmp_path / "c.toml")
         assert loaded["command"] == {"max_turns": 6, "working_dir": "/tmp",
                                      "timeout_seconds": 30.0,
                                      "confirm_timeout_s": 60.0,
-                                     "destructive_patterns": []}
+                                     "destructive_patterns": [],
+                                     "context_window_s": 0.0}

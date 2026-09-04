@@ -305,6 +305,7 @@ class Daemon:
         self._backend_factory = backend_factory
         self._pipeline_factory = pipeline_factory
         self._command_session_factory = command_session_factory
+        self._command_context = None  # lazily built CommandContextStore
         self.backend: Any = None  # lazy: loads model on first use
         self.recording = False
         self.busy = False  # transcription/insertion in flight
@@ -1539,21 +1540,33 @@ class Daemon:
         # Turn 1 runs AFTER busy clears, so there is no busy-flag race with
         # the hotkey-confirm handoff below.
         if mode == "command" and out.get("mode") == "command":
-            self._begin_command(str(out.get("text", "")))
+            self._begin_command(str(out.get("text", "")), app=app_hint)
 
     # -- command mode ---------------------------------------------------------
 
-    def _begin_command(self, instruction: str) -> None:
+    def _begin_command(self, instruction: str,
+                       app: str | None = None) -> None:
         """Turn 1: ask the model for the first proposal (background thread;
-        the user is not blocked - not even by the LLM latency)."""
+        the user is not blocked - not even by the LLM latency). `app` scopes
+        the follow-up context store (last results in the SAME focused app)."""
         from . import command as command_mod
+        if instruction.strip().lower() in command_mod.NEW_SESSION_PHRASES:
+            if self._command_context is not None:
+                self._command_context.clear(app)
+            log("command context cleared (spoken 'new session')")
+            ui.notify("SayItErmano", "Command context cleared",
+                      enabled=self.cfg["notifications"]["enabled"])
+            return
         self._command_entries = [{"kind": "user", "text": instruction}]
         self._command_panel(self._command_entries, status="Working...",
                             awaiting=None)
 
         def _work():
             factory = self._command_session_factory or command_mod.CommandSession
-            session = factory(self.cfg)
+            if self._command_context is None:
+                self._command_context = command_mod.CommandContextStore()
+            session = factory(self.cfg, context_store=self._command_context,
+                              app=app)
             try:
                 proposal = session.start(instruction)
             except command_mod.CommandError as e:

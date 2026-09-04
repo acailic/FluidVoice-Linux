@@ -568,6 +568,157 @@ class TestSessionLoop:
         assert s.executed  # command ran, history just not persisted
 
 
+class TestContextStore:
+    """CommandContextStore: per-app last-5 windowed follow-up memory."""
+
+    def _outcome(self, command="ls", output="files", exit_code=0):
+        return cm.CommandOutcome(command=command, success=exit_code == 0,
+                                 exit_code=exit_code, output=output)
+
+    def test_record_snapshot_round_trip(self):
+        t = [100.0]
+        store = cm.CommandContextStore(clock=lambda: t[0])
+        store.record("zed", self._outcome("ls /tmp", "junk"), purpose="list")
+        snap = store.snapshot("zed", 300.0)
+        assert snap is not None and len(snap) == 1
+        assert snap[0]["command"] == "ls /tmp"
+        assert snap[0]["purpose"] == "list"
+        assert snap[0]["exit_code"] == 0 and snap[0]["success"] is True
+        assert snap[0]["output"] == "junk"
+        assert snap[0]["ts"] == 100.0
+
+    def test_cap_five_sixth_drops_oldest(self):
+        t = [0.0]
+        store = cm.CommandContextStore(clock=lambda: t[0])
+        for i in range(6):
+            t[0] = float(i)
+            store.record("zed", self._outcome(f"cmd{i}"))
+        snap = store.snapshot("zed", 300.0)
+        assert [e["command"] for e in snap] == \
+            [f"cmd{i}" for i in range(1, 6)]
+
+    def test_expiry_from_most_recent_record(self):
+        t = [100.0]
+        store = cm.CommandContextStore(clock=lambda: t[0])
+        store.record("zed", self._outcome())
+        assert store.snapshot("zed", 300.0, now=399.0) is not None
+        assert store.snapshot("zed", 300.0, now=401.0) is None
+        # expired entries are pruned, not just hidden
+        assert store.snapshot("zed", 300.0, now=402.0) is None
+        assert store._apps.get("zed") is None
+
+    def test_zero_window_disables(self):
+        store = cm.CommandContextStore()
+        store.record("zed", self._outcome())
+        assert store.snapshot("zed", 0.0) is None
+
+    def test_clear_app_scoped_and_all(self):
+        store = cm.CommandContextStore()
+        store.record("zed", self._outcome())
+        store.record("firefox", self._outcome())
+        store.clear("zed")
+        assert store.snapshot("zed", 300.0) is None
+        assert store.snapshot("firefox", 300.0) is not None
+        store.clear()
+        assert store.snapshot("firefox", 300.0) is None
+
+    def test_unknown_app_no_snapshot(self):
+        store = cm.CommandContextStore()
+        assert store.snapshot("nope", 300.0) is None
+
+    def test_output_clipped_to_500(self):
+        store = cm.CommandContextStore()
+        store.record("zed", self._outcome(output="x" * 2000))
+        snap = store.snapshot("zed", 300.0)
+        assert len(snap[0]["output"]) == 500
+
+    def test_record_without_app_noop(self):
+        store = cm.CommandContextStore()
+        store.record("", self._outcome())
+        assert store.snapshot("", 300.0) is None
+
+
+class TestSessionContext:
+    """Follow-up context wiring in CommandSession."""
+
+    def _run_one(self, cfg, store, app, instruction="do it"):
+        client = StubAIClient(
+            [reply(("echo first", "a")), done_reply("ok")])
+        s = cm.CommandSession(cfg, client=client, context_store=store,
+                              app=app)
+        s.start(instruction)
+        s.confirm()
+        return client, s
+
+    def test_followup_sees_prior_output(self, cfg):
+        ai_ready(cfg)
+        cfg["command"]["context_window_s"] = 300.0
+        store = cm.CommandContextStore()
+        _, s1 = self._run_one(cfg, store, "zed")
+        assert s1.executed[0].command == "echo first"
+        client2, s2 = self._run_one(cfg, store, "zed", "then this")
+        ctx = [m for m in client2.calls[0]
+               if m["content"].startswith(cm.CONTEXT_MESSAGE_PREFIX)]
+        assert ctx, "context message missing"
+        assert '"command": "echo first"' in ctx[0]["content"]
+        assert '"purpose": "a"' in ctx[0]["content"]
+        assert 'first' in ctx[0]["content"]  # the real runner's stdout
+
+    def test_different_app_does_not_see_it(self, cfg):
+        ai_ready(cfg)
+        store = cm.CommandContextStore()
+        self._run_one(cfg, store, "zed")
+        client2, _ = self._run_one(cfg, store, "firefox")
+        assert not [m for m in client2.calls[0]
+                    if m["content"].startswith(cm.CONTEXT_MESSAGE_PREFIX)]
+
+    def test_after_expiry_it_does_not(self, cfg):
+        ai_ready(cfg)
+        t = [0.0]
+        store = cm.CommandContextStore(clock=lambda: t[0])
+        self._run_one(cfg, store, "zed")
+        t[0] = 1000.0  # past the 300 s window
+        client2, _ = self._run_one(cfg, store, "zed")
+        assert not [m for m in client2.calls[0]
+                    if m["content"].startswith(cm.CONTEXT_MESSAGE_PREFIX)]
+
+    def test_after_clear_it_does_not(self, cfg):
+        ai_ready(cfg)
+        store = cm.CommandContextStore()
+        self._run_one(cfg, store, "zed")
+        store.clear("zed")
+        client2, _ = self._run_one(cfg, store, "zed")
+        assert not [m for m in client2.calls[0]
+                    if m["content"].startswith(cm.CONTEXT_MESSAGE_PREFIX)]
+
+    def test_zero_window_config_disables(self, cfg):
+        ai_ready(cfg)
+        cfg["command"]["context_window_s"] = 0.0
+        store = cm.CommandContextStore()
+        self._run_one(cfg, store, "zed")
+        client2, _ = self._run_one(cfg, store, "zed")
+        assert not [m for m in client2.calls[0]
+                    if m["content"].startswith(cm.CONTEXT_MESSAGE_PREFIX)]
+
+    def test_confirm_records_outcome(self, cfg):
+        ai_ready(cfg)
+        store = cm.CommandContextStore()
+        self._run_one(cfg, store, "zed")
+        snap = store.snapshot("zed", 300.0)
+        assert snap is not None
+        assert snap[0]["command"] == "echo first"
+        assert snap[0]["purpose"] == "a"
+
+    def test_no_store_or_no_app_is_v1_behavior(self, cfg):
+        ai_ready(cfg)
+        client = StubAIClient([reply(("echo x",)), done_reply("ok")])
+        s = cm.CommandSession(cfg, client=client)  # no store, no app
+        s.start("go")
+        s.confirm()
+        assert [m["role"] for m in client.calls[-1]] == \
+            ["system", "user", "assistant", "user"]
+
+
 class TestRunShell:
     def test_success(self, tmp_path):
         out = cm.run_shell("echo hello", cwd=tmp_path, timeout=10)
@@ -689,8 +840,8 @@ class TestDaemonCommandMode:
 
         # done-immediately session: turn 1 finishes without a proposal
         d = self._daemon(cfg, pipeline_factory=CapturingPipeline)
-        d._command_session_factory = lambda c: cm.CommandSession(
-            c, client=StubAIClient(['{"done": true, "summary": "nothing"}']))
+        d._command_session_factory = lambda c, **kw: cm.CommandSession(
+            c, client=StubAIClient([done_reply("nothing")]), **kw)
         d.start_command()
         d.toggle()
         assert self._wait(lambda: seen.get("mode") == "command"
@@ -786,8 +937,8 @@ class TestDaemonCommandMode:
         client = StubAIClient(replies or [reply(("echo hello", "greet"))])
         sessions = []
 
-        def factory(c):
-            kw = {"client": client}
+        def factory(c, **kw):
+            kw["client"] = client
             if runner is not None:
                 kw["runner"] = runner
             s = cm.CommandSession(c, **kw)
@@ -1029,6 +1180,95 @@ class TestDaemonCommandMode:
         cmds = [e for e in entries if e.get("mode") == "command"]
         assert len(cmds) == 1
         assert cmds[0]["destructive"] is True
+
+    # -- follow-up context (v2) ---------------------------------------------
+
+    def test_new_session_phrase_clears_context_without_llm(self, cfg, quiet_ui):
+        ai_ready(cfg)
+        d = self._daemon(cfg)
+        store = cm.CommandContextStore()
+        store.record("firefox", cm.CommandOutcome(
+            command="ls", success=True, exit_code=0, output="files"))
+        d._command_context = store
+        calls = []
+
+        class CountingClient:
+            def chat_messages(self, messages, temperature=None):
+                calls.append(1)
+                return done_reply("x")
+
+        d._command_session_factory = \
+            lambda c, **kw: cm.CommandSession(c, client=CountingClient(), **kw)
+        d._begin_command("  New Session  ", app="firefox")
+        assert d._command_context.snapshot("firefox", 300.0) is None
+        assert any("context cleared" in (t + b).lower()
+                   for t, b in quiet_ui["notify"])
+        import time as _t
+        _t.sleep(0.15)
+        assert calls == []  # no LLM call ever
+        assert not d.busy and not d._command_pending
+
+    def test_new_session_phrase_scoped_to_app(self, cfg, quiet_ui):
+        ai_ready(cfg)
+        d = self._daemon(cfg)
+        store = cm.CommandContextStore()
+        store.record("firefox", cm.CommandOutcome(
+            command="ls", success=True, exit_code=0, output=""))
+        store.record("zed", cm.CommandOutcome(
+            command="pwd", success=True, exit_code=0, output=""))
+        d._command_context = store
+        d._command_session_factory = \
+            lambda c, **kw: cm.CommandSession(
+                c, client=StubAIClient([done_reply("x")]), **kw)
+        d._begin_command("new command session", app="firefox")
+        assert store.snapshot("firefox", 300.0) is None
+        assert store.snapshot("zed", 300.0) is not None
+
+    def test_normal_instruction_flows_with_context(self, cfg, quiet_ui):
+        ai_ready(cfg)
+        d = self._daemon(cfg)
+        store = cm.CommandContextStore()
+        store.record("zed", cm.CommandOutcome(
+            command="du -sh .", success=True, exit_code=0, output="1.2G	."),
+            purpose="checking")
+        d._command_context = store
+        seen = {}
+
+        class Capturing:
+            def chat_messages(self, messages, temperature=None):
+                seen["msgs"] = [dict(m) for m in messages]
+                return reply(("echo done", "finish"))
+
+        d._command_session_factory = \
+            lambda c, **kw: cm.CommandSession(c, client=Capturing(), **kw)
+        d._begin_command("what is biggest", app="zed")
+        assert self._wait(lambda: "msgs" in seen)
+        ctx = [m for m in seen["msgs"]
+               if m["content"].startswith(cm.CONTEXT_MESSAGE_PREFIX)]
+        assert ctx and "du -sh ." in ctx[0]["content"]
+        # instruction right after the context message
+        assert seen["msgs"][-1]["content"] == "what is biggest"
+        d.cancel_pending_command()
+
+    def test_app_hint_reaches_begin_command(self, cfg, quiet_ui):
+        """The pipeline's app_hint (focused window at recording start) is
+        what scopes the context store."""
+        ai_ready(cfg)
+        got = {}
+
+        class CapturingPipeline:
+            def __init__(self, c, backend):
+                pass
+
+            def run(self, wav, app_hint, mode="dictate",
+                    rewrite_context=None):
+                return {"mode": "command", "text": "do it", "raw": "do it"}
+
+        d = self._daemon(cfg, pipeline_factory=CapturingPipeline)
+        d._begin_command = lambda instruction, app=None: got.update(
+            app=app, instruction=instruction)
+        d._process(None, "kitty", mode="command")
+        assert got == {"app": "kitty", "instruction": "do it"}
 
     def test_restart_and_shutdown_cover_command_hotkey(self, cfg, quiet_ui,
                                                        monkeypatch):

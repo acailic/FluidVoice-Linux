@@ -153,6 +153,7 @@ DEFAULTS: dict[str, Any] = {
         "timeout_seconds": 60.0,  # per-command subprocess timeout
         "confirm_timeout_s": 120.0,  # auto-cancel a pending confirmation
         "destructive_patterns": [],  # user additions to the built-in list
+        "context_window_s": 300.0,   # follow-up context window (0 = off)
     },
 }
 
@@ -334,6 +335,11 @@ audio_budget_gb = 4.0
 # instead of once. Examples:
 # destructive_patterns = ["git push", "shutdown"]
 destructive_patterns = []
+# Follow-up context: seconds the last 5 executed command results stay
+# available to the next voice command in the SAME focused app (0 disables,
+# 300 is the default). Say "new session" to clear it immediately; nothing
+# is persisted, a daemon restart starts cold.
+context_window_s = 300.0
 """
 
 
@@ -394,7 +400,8 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
     "updates": ["check", "notify"],
     "history": ["save", "save_audio", "audio_budget_gb"],
     "command": ["max_turns", "working_dir", "timeout_seconds",
-                "confirm_timeout_s", "destructive_patterns"],
+                "confirm_timeout_s", "destructive_patterns",
+                "context_window_s"],
 }
 
 
@@ -478,6 +485,7 @@ SETTING_RANGES: dict[tuple[str, str], Any] = {
     ("command", "working_dir"): ("str", 4096),
     ("command", "timeout_seconds"): ("float", (1, 3600)),
     ("command", "confirm_timeout_s"): ("float", (5, 600)),
+    ("command", "context_window_s"): ("float", (0, 86400)),
     ("recording", "device"): ("str", 256),
     ("recording", "max_seconds"): ("float", (1, 86400)),
     ("recording", "spoken_send_phrase"): ("str", 64),
@@ -557,7 +565,8 @@ ALLOWED_SETTINGS: dict[str, set] = {
     "updates": {"check", "notify"},
     "history": {"save", "save_audio", "audio_budget_gb"},
     "command": {"max_turns", "working_dir", "timeout_seconds",
-                "confirm_timeout_s", "destructive_patterns"},
+                "confirm_timeout_s", "destructive_patterns",
+                "context_window_s"},
 }
 RESTART_REQUIRED = {"model.eager_warmup"}
 ENGINE_KEYS = {"model.backend", "model.name", "model.device",
