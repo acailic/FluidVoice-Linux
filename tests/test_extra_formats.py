@@ -60,41 +60,111 @@ class TestSpokenSendParser:
 
 
 class TestSpokenSendPipeline:
-    def _run(self, tmp_path, cfg, backend_text, **pipeline_kw):
+    def _run(self, tmp_path, cfg, backend_text, app_hint=None, **pipeline_kw):
         keys = []
+        inserted = []
         pipe = dm.DictationPipeline(
             cfg, StubBackend(backend_text),
-            inserter=lambda t, c: "typed",
+            inserter=lambda t, c: inserted.append(t) or "typed",
             key_presser=lambda spec: keys.append(spec), **pipeline_kw)
         wav = make_wav(tmp_path / "utt.wav")
-        return pipe, pipe.run(wav, None), keys
+        return pipe, pipe.run(wav, app_hint), keys, inserted
 
     def test_enter_pressed_after_insertion(self, tmp_path, cfg, quiet_ui):
         cfg["recording"]["spoken_send_enabled"] = True
-        _, out, keys = self._run(tmp_path, cfg, "hello world send it")
+        _, out, keys, inserted = self._run(tmp_path, cfg, "hello world send it")
         assert out is not None and keys == ["enter"]
         assert out["text"] == "hello world"
         assert "enter" in out["strategy"]
 
     def test_disabled_by_default(self, tmp_path, cfg, quiet_ui):
-        _, out, keys = self._run(tmp_path, cfg, "hello world send it")
+        _, out, keys, _ = self._run(tmp_path, cfg, "hello world send it")
         assert out is not None and keys == []
 
     def test_custom_key_combo(self, tmp_path, cfg, quiet_ui):
         cfg["recording"]["spoken_send_enabled"] = True
         cfg["recording"]["spoken_send_key"] = "shift+enter"
-        _, out, keys = self._run(tmp_path, cfg, "chat reply send it")
+        _, out, keys, _ = self._run(tmp_path, cfg, "chat reply send it")
         assert keys == ["shift+enter"]
 
     def test_literal_escape_no_key(self, tmp_path, cfg, quiet_ui):
         cfg["recording"]["spoken_send_enabled"] = True
-        _, out, keys = self._run(tmp_path, cfg, "type literal send it")
+        _, out, keys, _ = self._run(tmp_path, cfg, "type literal send it")
         assert keys == [] and "send it" in out["text"]
 
     def test_gaav_applied_after_ai(self, tmp_path, cfg, quiet_ui):
         cfg["processing"]["gaav_enabled"] = True
-        _, out, _ = self._run(tmp_path, cfg, "Hello world.")
+        _, out, _, _ = self._run(tmp_path, cfg, "Hello world.")
         assert out["text"] == "hello world"
+
+
+class TestSpokenSendTerminalBlocklist:
+    """In terminal apps the phrase still strips and the text still
+    inserts, but Enter is never pressed (upstream strip-but-no-Enter,
+    ContentView.swift:2786-2798)."""
+
+    def _run(self, tmp_path, cfg, backend_text, app_hint):
+        keys = []
+        inserted = []
+        pipe = dm.DictationPipeline(
+            cfg, StubBackend(backend_text),
+            inserter=lambda t, c: inserted.append(t) or "typed",
+            key_presser=lambda spec: keys.append(spec))
+        wav = make_wav(tmp_path / "utt.wav")
+        return pipe.run(wav, app_hint), keys, inserted
+
+    def test_enter_suppressed_in_terminal(self, tmp_path, cfg, quiet_ui):
+        cfg["recording"]["spoken_send_enabled"] = True
+        out, keys, inserted = self._run(
+            tmp_path, cfg, "/ fix the deploy send it", "kitty")
+        assert inserted == ["/fix the deploy"]  # phrase stripped, squeeze applied
+        assert keys == []                       # Enter NEVER pressed
+        assert out["strategy"] == "typed"      # no +enter suffix
+
+    def test_enter_pressed_in_non_terminal(self, tmp_path, cfg, quiet_ui):
+        cfg["recording"]["spoken_send_enabled"] = True
+        out, keys, inserted = self._run(
+            tmp_path, cfg, "hello world send it", "firefox")
+        assert keys == ["enter"]
+        assert out["strategy"] == "typed+enter"
+
+    def test_blocklist_is_list_driven(self, tmp_path, cfg, quiet_ui):
+        cfg["recording"]["spoken_send_enabled"] = True
+        cfg["general"]["terminal_apps"] = []
+        out, keys, _ = self._run(tmp_path, cfg, "rm -rf send it", "kitty")
+        assert keys == ["enter"]  # empty list -> nothing blocked
+
+    def test_no_app_hint_presses_enter(self, tmp_path, cfg, quiet_ui):
+        # focus unknown at recording start -> cannot prove terminal -> send
+        cfg["recording"]["spoken_send_enabled"] = True
+        out, keys, _ = self._run(tmp_path, cfg, "hello send it", None)
+        assert keys == ["enter"]
+
+    def test_disabled_spoken_send_unaffected(self, tmp_path, cfg, quiet_ui):
+        out, keys, inserted = self._run(
+            tmp_path, cfg, "hello world send it", "kitty")
+        assert inserted == ["hello world send it"]  # phrase kept
+        assert keys == []
+
+    def test_custom_list_blocks(self, tmp_path, cfg, quiet_ui):
+        cfg["recording"]["spoken_send_enabled"] = True
+        cfg["general"]["terminal_apps"] = ["contour"]
+        out, keys, inserted = self._run(
+            tmp_path, cfg, "hello send it", "Contour")
+        assert keys == [] and inserted == ["hello"]
+
+    def test_skip_badge_set_on_pill(self, tmp_path, cfg, quiet_ui):
+        cfg["recording"]["spoken_send_enabled"] = True
+        badges = []
+        pipe = dm.DictationPipeline(
+            cfg, StubBackend("hello send it"),
+            inserter=lambda t, c: "typed",
+            key_presser=lambda spec: None)
+        pipe._set_pill_badge = badges.append
+        wav = make_wav(tmp_path / "utt.wav")
+        pipe.run(wav, "kitty")
+        assert "⏎ skipped (terminal)" in badges
+        assert pipe._pending_send_skipped_terminal is False  # consumed
 
 
 class TestRewriteMessages:

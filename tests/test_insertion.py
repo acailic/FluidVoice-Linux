@@ -41,11 +41,22 @@ def base_cfg(mode="auto", threshold=1200, delay=8):
                           "paste_threshold_chars": threshold}}
 
 
+def full_cfg(mode="auto", threshold=1200, delay=8, apps=None, space=True):
+    from fluidvoice.config import DEFAULTS
+    import copy
+    cfg = copy.deepcopy(DEFAULTS)
+    cfg["insertion"].update(mode=mode, type_delay_ms=delay,
+                            paste_threshold_chars=threshold,
+                            terminal_autocomplete_space=space)
+    if apps is not None:
+        cfg["general"]["terminal_apps"] = apps
+    return cfg
+
+
 class TestTyped:
     def test_command_construction(self, runner):
         assert insertion.insert_text("hello world", base_cfg()) == "typed"
-        cmd = runner["run"][0]
-        assert cmd[:2] == ["xdotool", "type"]
+        cmd = next(c for c in runner["run"] if c[:2] == ["xdotool", "type"])
         assert "--clearmodifiers" in cmd
         assert cmd[cmd.index("--delay") + 1] == "8"
         assert cmd[-1] == "hello world"
@@ -131,6 +142,77 @@ class TestActiveWindowClass:
     def test_no_display(self, runner, monkeypatch):
         monkeypatch.delenv("DISPLAY", raising=False)
         assert insertion.active_window_class() is None
+
+
+class TestTerminalAutocompleteSpace:
+    """general.terminal_apps matching + the one-space autocomplete rule."""
+
+    def test_class_matching(self):
+        assert insertion.is_terminal_app("gnome-terminal-server", full_cfg())
+        assert insertion.is_terminal_app("Kitty", full_cfg())       # case
+        assert insertion.is_terminal_app("GHOSTTY", full_cfg())     # -insensitive
+        assert insertion.is_terminal_app("org.wezfurlong.wezterm",
+                                         full_cfg())                  # substring
+        assert not insertion.is_terminal_app("firefox", full_cfg())
+        assert not insertion.is_terminal_app(None, full_cfg())
+        assert not insertion.is_terminal_app("", full_cfg())
+
+    def test_custom_list_honored(self):
+        cfg = full_cfg(apps=["contour"])
+        assert insertion.is_terminal_app("Contour Term", cfg)
+        assert not insertion.is_terminal_app("kitty", cfg)
+
+    def test_empty_list_matches_nothing(self):
+        cfg = full_cfg(apps=[])
+        assert not insertion.is_terminal_app("kitty", cfg)
+
+    def test_trailing_space_helper(self):
+        assert insertion.terminal_trailing_space("git checkout") \
+            == "git checkout "
+        assert insertion.terminal_trailing_space("done.") == "done."
+        assert insertion.terminal_trailing_space("already ") == "already "
+        assert insertion.terminal_trailing_space("") == ""
+
+    def test_typed_text_in_terminal_gains_space(self, runner):
+        assert insertion.insert_text("git checkout", full_cfg(),
+                                     wm_class="kitty") == "typed"
+        cmd = runner["run"][0]
+        assert cmd[-1] == "git checkout "  # trailing space committed
+
+    def test_punctuation_ending_no_space(self, runner):
+        insertion.insert_text("done.", full_cfg(), wm_class="kitty")
+        assert runner["run"][0][-1] == "done."
+
+    def test_already_spaced_idempotent(self, runner):
+        insertion.insert_text("already ", full_cfg(), wm_class="kitty")
+        assert runner["run"][0][-1] == "already "
+
+    def test_paste_path_never_gains_space(self, runner):
+        assert insertion.insert_text("x" * 2000, full_cfg(),
+                                     wm_class="kitty") == "paste"
+        writes = [c for c in runner["popen"] if c[0] == "xclip"]
+        assert writes and writes[0][-1] is not None  # clipboard used
+        typed = [c for c in runner["run"] if c[:2] == ["xdotool", "type"]]
+        assert typed == []  # nothing typed, nothing spaced
+
+    def test_disabled_by_config(self, runner):
+        insertion.insert_text("git checkout", full_cfg(space=False),
+                              wm_class="kitty")
+        assert runner["run"][0][-1] == "git checkout"
+
+    def test_non_terminal_app_no_space(self, runner):
+        insertion.insert_text("git checkout", full_cfg(), wm_class="firefox")
+        assert runner["run"][0][-1] == "git checkout"
+
+    def test_none_wm_class_resolved_live(self, runner, monkeypatch):
+        monkeypatch.setattr(insertion, "active_window_class", lambda: "kitty")
+        insertion.insert_text("git checkout", full_cfg())
+        assert runner["run"][0][-1] == "git checkout "
+
+    def test_none_wm_class_headless_no_lookup_crash(self, runner, monkeypatch):
+        monkeypatch.setattr(insertion, "active_window_class", lambda: None)
+        insertion.insert_text("git checkout", full_cfg())
+        assert runner["run"][0][-1] == "git checkout"
 
 
 class TestClipboardFallback:

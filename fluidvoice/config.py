@@ -21,6 +21,13 @@ DEFAULTS: dict[str, Any] = {
         "language": "auto",  # whisper language code or "auto"
         "copy_to_clipboard": False,  # upstream copyTranscriptionToClipboard
         "tray_enabled": True,  # panel/tray icon while the daemon runs
+        # case-insensitive WM_CLASS substrings: spoken-send never presses
+        # Enter here and typed insertions gain a trailing autocomplete space
+        "terminal_apps": [
+            "gnome-terminal", "kgx", "konsole", "xterm", "alacritty",
+            "kitty", "wezterm", "ghostty", "foot", "tilix", "terminator",
+            "guake", "yakuake", "st-256color", "warp",
+        ],
     },
     "hotkey": {
         # X11 keysym name. Modifier-only keys (Right_Control, Right_Alt,
@@ -76,6 +83,9 @@ DEFAULTS: dict[str, Any] = {
         "gaav_enabled": False,
         "gaav_lowercase_first": True,
         "gaav_remove_trailing_period": True,
+        # chat-app literal squeeze: "/ fix" -> "/fix", "@ John Smith" ->
+        # "@John Smith" (upstream DictationLiteralFormatting, literal forms)
+        "slash_mention_squeeze": True,
     },
     "ai": {
         # OpenAI-compatible chat endpoint (OpenAI, Groq, Ollama /v1, LM Studio, llama.cpp server...)
@@ -94,6 +104,7 @@ DEFAULTS: dict[str, Any] = {
         "mode": "typed",  # typed | paste | auto (typed, falls back to paste)
         "type_delay_ms": 8,
         "paste_threshold_chars": 1200,  # longer texts use clipboard paste
+        "terminal_autocomplete_space": True,  # one trailing space in terminals
     },
     "sounds": {
         "enabled": True,
@@ -146,6 +157,10 @@ TEMPLATE = """\
 language = "auto"
 # Also copy every transcription to the clipboard
 copy_to_clipboard = false
+# Case-insensitive WM_CLASS substrings identifying terminals. In these apps
+# spoken-send never presses Enter (a half-typed shell line would EXECUTE)
+# and typed insertions gain one trailing space so autocomplete commits.
+terminal_apps = ["gnome-terminal", "kgx", "konsole", "xterm", "alacritty", "kitty", "wezterm", "ghostty", "foot", "tilix", "terminator", "guake", "yakuake", "st-256color", "warp"]
 
 [hotkey]
 # X11 keysym name of the dictation hotkey. Examples:
@@ -206,6 +221,9 @@ punctuation_enabled = true
 punctuation_prefix = "literal"
 # Custom dictionary: [[ { triggers = ["miro board"], replacement = "Miro board" } ]]
 dictionary = []
+# Chat-app literal squeeze: "/ fix the deploy" -> "/fix the deploy",
+# "@ John Smith" -> "@John Smith" (runs after AI cleanup, before GAAV)
+slash_mention_squeeze = true
 
 [ai]
 # Optional AI polish of the raw transcript (FluidVoice's headline feature).
@@ -230,6 +248,9 @@ max_retries = 3
 mode = "auto"
 type_delay_ms = 8
 paste_threshold_chars = 1200
+# One trailing space after typed insertions in terminal apps (general.
+# terminal_apps) so the shell's autocomplete commits the last token
+terminal_autocomplete_space = true
 
 [sounds]
 enabled = true
@@ -274,7 +295,8 @@ def write_template(path: Path | None = None) -> Path:
 # ---------------------------------------------------------------------------
 
 _SAVE_WHITELIST: dict[str, list[str]] = {
-    "general": ["language", "copy_to_clipboard", "tray_enabled"],
+    "general": ["language", "copy_to_clipboard", "tray_enabled",
+                "terminal_apps"],
     "hotkey": ["key", "modifiers", "mode", "cancel_key", "rewrite_key",
                 "command_key"],
     "recording": ["command", "device", "mic_priority", "max_seconds",
@@ -288,10 +310,12 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
               "eager_warmup"],
     "processing": ["remove_filler_words", "filler_words", "punctuation_enabled",
                    "punctuation_prefix", "dictionary", "gaav_enabled",
-                   "gaav_lowercase_first", "gaav_remove_trailing_period"],
+                   "gaav_lowercase_first", "gaav_remove_trailing_period",
+                   "slash_mention_squeeze"],
     "ai": ["enabled", "base_url", "model", "api_key", "api_key_env", "temperature",
            "timeout_seconds", "max_retries", "per_app_prompts"],
-    "insertion": ["mode", "type_delay_ms", "paste_threshold_chars"],
+    "insertion": ["mode", "type_delay_ms", "paste_threshold_chars",
+                  "terminal_autocomplete_space"],
     "sounds": ["enabled", "volume"],
     "notifications": ["enabled"],
     "history": ["save", "save_audio", "audio_budget_gb"],
@@ -400,15 +424,18 @@ SETTING_BOOLS = {("general", "copy_to_clipboard"), ("general", "tray_enabled"),
                  ("processing", "gaav_enabled"),
                  ("processing", "gaav_lowercase_first"),
                  ("processing", "gaav_remove_trailing_period"),
+                 ("processing", "slash_mention_squeeze"),
                  ("ai", "enabled"), ("sounds", "enabled"),
                  ("notifications", "enabled"),
                  ("history", "save"), ("history", "save_audio"),
+                 ("insertion", "terminal_autocomplete_space"),
                  ("model", "eager_warmup")}
 # list-valued pass-through keys the UI owns
 SETTING_LISTS = (("processing", "filler_words"), ("processing", "dictionary"),
                  ("hotkey", "modifiers"), ("recording", "mic_priority"))
 ALLOWED_SETTINGS: dict[str, set] = {
-    "general": {"language", "copy_to_clipboard", "tray_enabled"},
+    "general": {"language", "copy_to_clipboard", "tray_enabled",
+                "terminal_apps"},
     "hotkey": {"key", "modifiers", "mode", "cancel_key", "rewrite_key",
                "command_key"},
     "recording": {"command", "device", "mic_priority", "max_seconds",
@@ -423,10 +450,11 @@ ALLOWED_SETTINGS: dict[str, set] = {
     "processing": {"remove_filler_words", "filler_words",
                    "punctuation_enabled", "punctuation_prefix", "dictionary",
                    "gaav_enabled", "gaav_lowercase_first",
-                   "gaav_remove_trailing_period"},
+                   "gaav_remove_trailing_period", "slash_mention_squeeze"},
     "ai": {"enabled", "base_url", "model", "api_key_env", "temperature",
            "timeout_seconds", "max_retries", "per_app_prompts"},
-    "insertion": {"mode", "type_delay_ms", "paste_threshold_chars"},
+    "insertion": {"mode", "type_delay_ms", "paste_threshold_chars",
+                  "terminal_autocomplete_space"},
     "sounds": {"enabled", "volume"},
     "notifications": {"enabled"},
     "history": {"save", "save_audio", "audio_budget_gb"},
@@ -469,6 +497,8 @@ def coerce_setting(section: str, key: str, value: Any) -> tuple[bool, Any]:
             return (False, value)
     if (section, key) == ("recording", "mic_priority"):
         return _coerce_mic_priority(value)
+    if (section, key) == ("general", "terminal_apps"):
+        return _coerce_terminal_apps(value)
     if (section, key) in SETTING_LISTS:
         if not isinstance(value, list):
             return (False, value)
@@ -510,6 +540,32 @@ def _coerce_mic_priority(value: Any) -> tuple[bool, Any]:
         seen.add(pattern.lower())
         cleaned.append(pattern)
     if len(cleaned) > 20:
+        return (False, value)
+    return (True, cleaned)
+
+
+def _coerce_terminal_apps(value: Any) -> tuple[bool, Any]:
+    """general.terminal_apps: case-insensitive WM_CLASS substrings
+    identifying terminal apps (spoken-send blocklist + autocomplete
+    spacing). Entries are stripped and empties dropped; >64-char entries or
+    >32 patterns reject the whole list; duplicates (case-insensitive) keep
+    the first occurrence."""
+    if not isinstance(value, list) \
+            or any(not isinstance(p, str) for p in value):
+        return (False, value)
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in value:
+        pattern = raw.strip()
+        if not pattern:
+            continue
+        if len(pattern) > 64:
+            return (False, value)
+        if pattern.lower() in seen:
+            continue
+        seen.add(pattern.lower())
+        cleaned.append(pattern)
+    if len(cleaned) > 32:
         return (False, value)
     return (True, cleaned)
 

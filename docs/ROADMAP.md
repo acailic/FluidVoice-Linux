@@ -60,8 +60,15 @@ sources. Everything below is a known, classified gap — see
       destructive-command confirmation list.
 - [ ] GAAV mode + continuous-dictation formatting (smart caps from the text
       before the caret; needs preceding-text capture via AT-SPI).
-- [ ] Slash-command/mention literal formatting (`/ fix`, `@ John Smith` in
-      Slack/Discord/Teams) + terminal autocomplete spacing.
+- [x] Slash-command/mention literal formatting (`/ fix`, `@ John Smith` in
+      Slack/Discord/Teams) + terminal autocomplete spacing — DONE: literal
+      squeeze ported from upstream `DictationLiteralFormatting` (runs after
+      AI cleanup, `processing.slash_mention_squeeze`; literal-`@` pass is a
+      port addition mirroring upstream's spoken-mention name grammar) plus
+      one trailing space on typed insertions in `general.terminal_apps`
+      (`insertion.terminal_autocomplete_space`) and the spoken-send terminal
+      blocklist. Upstream's spoken forms (`slash fix`, `at sign John`) stay
+      tracked in UPSTREAM-TRACKING.
 - [ ] Insertion hardening: paste-verification before clipboard restore,
       transient marks so clipboard managers ignore dictation, per-app paste
       quirks (terminals), AT-SPI insertion fallback.

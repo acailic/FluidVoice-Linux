@@ -1,13 +1,18 @@
 """Text post-processing pipeline (port of FluidVoice's chain).
 
 Order matches upstream: filler removal -> custom dictionary -> spoken
-punctuation formatting ("literal comma" etc.).
+punctuation formatting ("literal comma" etc.). The slash/mention literal
+squeeze (chat apps) runs LATER, after AI cleanup — see daemon.py
+(DictationPipeline._after_ai_formatting) and processing/slash.py.
 """
 from __future__ import annotations
 
 from .dictionary import apply_custom_dictionary
 from .fillers import remove_filler_words
 from .punctuation import format_spoken_punctuation
+from .slash import squeeze_slash_mentions  # noqa: F401 - re-export
+
+__all__ = ["post_process", "squeeze_slash_mentions"]
 
 
 def post_process(text: str, cfg: dict, app_hint: str | None = None) -> str:

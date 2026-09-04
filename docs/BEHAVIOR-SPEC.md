@@ -157,9 +157,61 @@ upstream aliases incl. `left/right parentheses`, `opening/closing double
 quote`, `plus`, `equal`, `equals`), longest-alias-first matching, and the
 real cleanup passes (comma sandwiched between two symbols; comma before %
 after a digit; original-text trailing period before actions). `double quote`
-toggles like `quote`. Not yet ported: user-editable alias tables,
-slash-command/mention literal formatting (`/ fix`, `@ John Smith` in
-Slack/Discord/Teams), terminal autocomplete spacing.
+toggles like `quote`. Not yet ported: user-editable alias tables; the
+SPOKEN literal forms (`slash fix`, `forward slash fix`, `at sign John`,
+`tag John`, and the relaxed slack/discord/teams `at John` form). The
+slash-command/mention LITERAL squeeze is now ported — see §2.1.
+
+### 2.1 Slash/mention literal squeeze + terminal safety
+
+**Slash literal squeeze** (chat apps): port of Fluid-oss
+`ASRService+DictationLiteralFormatting.swift:91-94` — regex
+`(?<![\p{L}\p{N}_])/\s+([A-Za-z][A-Za-z0-9_-]{1,39})(?![A-Za-z0-9_-])`, replaced by
+`"/" + token.lowercased()` (`:283`). `\s+` (not one space); tokens must be
+letter-first, 2–40 chars of `[A-Za-z0-9_-]`; the lowercased token must not be
+in the 53-entry rejected list (`:101-109` verbatim — `the`, `tmp`, `from`, …);
+otherwise the whole match is skipped. Runs UNCONDITIONALLY (the live upstream
+behavior is ungated by app — same finding as the punctuation port, §2).
+Known upstream false positive kept for parity: `"I / think we should"` →
+`"I /think we should"` (`km / h`, `24 / 7` are safe — letter-first, ≥2 chars).
+
+**Mention literal squeeze**: upstream has NO literal `@ John` rule (its
+mention passes are spoken-form only: `explicitMentionRegex :121-124`
+"at sign/tag/mention John", relaxed `at John` gated on slack/discord/teams).
+This port adds a literal-`@` pass keyed on the sigil whose name grammar
+mirrors the explicit-mention pass: 1–3 tokens of `[A-Za-z0-9_.-]` (upstream
+`isValidMentionName :349-371`), internal spacing preserved (`:343`), the
+25-entry mention rejected list (`:141-146` verbatim — `home`, `today`,
+`work`, …), the possessive guard (skip when the next char is `'`/`’`,
+`:374-380`), and whole-match skip on any rejected token. Unconditional.
+
+**Chain position:** AFTER AI cleanup, BEFORE GAAV — upstream
+`ContentView.swift:2656-2661` ("Normalize literal command and mention syntax
+after AI cleanup and before final user preferences."), because AI cleanup
+would re-split `/fix`. In this port the squeeze tops
+`DictationPipeline._after_ai_formatting` (`daemon.py`); dictate route only.
+Config: `processing.slash_mention_squeeze` — default **true** (documented
+divergence: upstream `literalDictationFormattingEnabled` defaults false,
+`SettingsStore.swift:4124-4126`; this port defaults its formatting passes on).
+
+**Terminal autocomplete spacing** (Linux-specific adaptation): typed
+insertions into a `general.terminal_apps` window ending in a word character
+gain exactly one trailing space (`insert_text`, `insertion.py`) so the
+shell's autocomplete commits. Upstream has no append rule — its
+`applyTerminalLiteralAutocompleteSpacing :236-261` STRIPS trailing spaces in
+codex/chatgpt/claude/cursor/windsurf and slack/discord/teams windows instead
+(that strip rule stays unported ⏳). The space is typing-only: clipboard
+copy and history keep the text without it.
+
+**Spoken-send terminal blocklist**: when the recording-start WM_CLASS matches
+`general.terminal_apps`, the spoken-send phrase still strips and the text
+still inserts, but Enter is NEVER pressed — nothing is substituted (no
+newline, no other key), the pill badge reads `⏎ skipped (terminal)` (upstream
+"Text inserted — send skipped", `ContentView.swift:2786-2798`; blocklist
+identity check `:1928-1937`, configurable per-app capture at recording
+start). Upstream's `/ send it` edge (strip leaves a bare `/` upstream because
+its phrase strip is pre-AI): this port strips post-AI, so `/ send it` types
+`/send` + Enter outside terminals — accepted divergence.
 
 ---
 

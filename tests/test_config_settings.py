@@ -227,6 +227,71 @@ class TestMicPriority:
         assert loaded["recording"]["mic_priority"] == ["bluez", "usb-cam"]
 
 
+class TestNewFormattingKeys:
+    """Chat/terminal formatting keys: terminal_apps + the two booleans."""
+
+    def test_defaults(self, cfg):
+        assert cfg["processing"]["slash_mention_squeeze"] is True
+        assert cfg["insertion"]["terminal_autocomplete_space"] is True
+        apps = cfg["general"]["terminal_apps"]
+        assert apps  # non-empty
+        assert "kitty" in apps and "warp" in apps  # warp: upstream blocks it
+
+    def test_defaults_documented_in_template(self):
+        for key in ("terminal_apps", "slash_mention_squeeze",
+                    "terminal_autocomplete_space"):
+            assert key in TEMPLATE
+
+    def test_booleans_accepted_and_rejected(self, cfg):
+        for section, key in (("processing", "slash_mention_squeeze"),
+                             ("insertion", "terminal_autocomplete_space")):
+            changed, rejected = apply_settings(
+                cfg, {section: {key: False}})
+            assert rejected == [] and cfg[section][key] is False
+            _, rejected = apply_settings(
+                cfg, {section: {key: "true"}})  # non-bool rejects
+            assert rejected == [f"{section}.{key}"]
+
+    def test_terminal_apps_cleaned(self):
+        ok, cleaned = coerce_setting(
+            "general", "terminal_apps",
+            [" Kitty ", "", "GHOSTTY", "kitty"])
+        assert ok is True and cleaned == ["Kitty", "GHOSTTY"]
+
+    @pytest.mark.parametrize("bad", [
+        "kitty",                       # not a list
+        [42],                          # non-str entry
+        ["x" * 65],                    # single entry over 64 chars
+        [f"t{i}" for i in range(33)],  # 33 entries (max 32)
+    ])
+    def test_terminal_apps_rejects_bad_values(self, bad):
+        ok, out = coerce_setting("general", "terminal_apps", bad)
+        assert ok is False and out == bad
+
+    def test_terminal_apps_empty_list_is_valid(self):
+        ok, cleaned = coerce_setting("general", "terminal_apps", [])
+        assert ok is True and cleaned == []
+
+    def test_apply_settings_applies_and_reports(self, cfg):
+        changed, rejected = apply_settings(
+            cfg, {"general": {"terminal_apps": ["contour"]}})
+        assert rejected == [] and "general.terminal_apps" in changed
+        assert cfg["general"]["terminal_apps"] == ["contour"]
+
+    def test_save_whitelist_roundtrip(self, tmp_path, monkeypatch):
+        from fluidvoice import paths as p
+        monkeypatch.setattr(p, "config_file", lambda: tmp_path / "c.toml")
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["general"]["terminal_apps"] = ["kitty", "contour"]
+        cfg["processing"]["slash_mention_squeeze"] = False
+        cfg["insertion"]["terminal_autocomplete_space"] = False
+        save_config(cfg)
+        loaded = load_config(tmp_path / "c.toml")
+        assert loaded["general"]["terminal_apps"] == ["kitty", "contour"]
+        assert loaded["processing"]["slash_mention_squeeze"] is False
+        assert loaded["insertion"]["terminal_autocomplete_space"] is False
+
+
 class TestCommandSettings:
     """Command mode keys: hotkey.command_key + the [command] section."""
 

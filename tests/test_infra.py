@@ -130,6 +130,42 @@ class TestDoctorParakeet:
                    and "parakeet-tdt-0.6b-v2" in l for l in lines)
 
 
+class TestDoctorFormattingLines:
+    """_formatting_lines: one resolution line per new formatting key."""
+
+    def test_defaults_on(self):
+        from fluidvoice import doctor
+        lines = doctor._formatting_lines(DEFAULTS)
+        assert len(lines) == 3
+        assert any("slash/mention squeeze: on" in l
+                   and "processing.slash_mention_squeeze" in l for l in lines)
+        assert any("terminal autocomplete space: on" in l
+                   and "insertion.terminal_autocomplete_space" in l
+                   for l in lines)
+        apps = DEFAULTS["general"]["terminal_apps"]
+        apps_line = next(l for l in lines if "terminal_apps" in l)
+        assert f"terminal_apps ({len(apps)})" in apps_line
+        assert "kitty" in apps_line and "spoken-send Enter suppressed" in apps_line
+
+    def test_disabled_shows_off(self):
+        import copy
+        from fluidvoice import doctor
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["processing"]["slash_mention_squeeze"] = False
+        cfg["insertion"]["terminal_autocomplete_space"] = False
+        lines = doctor._formatting_lines(cfg)
+        assert any("slash/mention squeeze: off" in l for l in lines)
+        assert any("terminal autocomplete space: off" in l for l in lines)
+
+    def test_empty_list_counts_zero(self):
+        import copy
+        from fluidvoice import doctor
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["general"]["terminal_apps"] = []
+        lines = doctor._formatting_lines(cfg)
+        assert any("terminal_apps (0)" in l and "none" in l for l in lines)
+
+
 class TestControlSocket:
     def test_round_trip(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr(control.paths, "socket_path", lambda: tmp_path / "s.sock")

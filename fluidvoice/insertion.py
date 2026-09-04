@@ -91,8 +91,35 @@ def insert_paste(text: str) -> None:
                 pass
 
 
-def insert_text(text: str, cfg: dict) -> str:
-    """Insert `text` at the caret. Returns the strategy used."""
+def is_terminal_app(wm_class: str | None, cfg: dict) -> bool:
+    """True when the WM_CLASS matches any general.terminal_apps entry
+    (case-insensitive substring — the config drives both the spoken-send
+    Enter blocklist and terminal autocomplete spacing)."""
+    apps = cfg.get("general", {}).get("terminal_apps") or []
+    if not wm_class:
+        return False
+    lowered = wm_class.lower()
+    return any(p.lower() in lowered for p in apps)
+
+
+def terminal_trailing_space(text: str) -> str:
+    """One trailing space iff the text ends in a word character, so a
+    terminal's autocomplete commits the last token (Linux adaptation —
+    upstream strips trailing spaces in chat apps instead, :236-261).
+    Idempotent: space/punctuation-ending and empty texts are unchanged."""
+    if not text or not re.search(r"\w$", text):
+        return text
+    return text + " "
+
+
+def insert_text(text: str, cfg: dict, wm_class: str | None = None) -> str:
+    """Insert `text` at the caret. Returns the strategy used.
+
+    wm_class: the insertion target's WM_CLASS (None -> live lookup). In
+    terminal apps (general.terminal_apps) typed insertions ending in a word
+    character gain one trailing space (insertion.terminal_autocomplete_space)
+    so autocomplete commits; the space is typing-only — clipboard copy and
+    history keep the text without it."""
     mode = cfg["insertion"]["mode"]
     threshold = cfg["insertion"].get("paste_threshold_chars", 1200)
     delay = cfg["insertion"].get("type_delay_ms", 8)
@@ -104,6 +131,10 @@ def insert_text(text: str, cfg: dict) -> str:
         except InsertError:
             if mode == "paste":
                 raise
+    if cfg["insertion"].get("terminal_autocomplete_space", True):
+        wm = active_window_class() if wm_class is None else wm_class
+        if wm and is_terminal_app(wm, cfg):
+            text = terminal_trailing_space(text)
     insert_typed(text, delay)
     return "typed"
 

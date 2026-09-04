@@ -66,7 +66,8 @@ new that Linux doesn't have" a one-command answer.
 | Write/Rewrite mode (⌥R) | ✅ | `hotkey.rewrite_key`, verbatim upstream edit prompts |
 | Spoken punctuation ("literal …") | ✅ | full live rule table (108 aliases, spacing semantics) |
 | Filler removal + custom dictionary | ✅ | same defaults and matching semantics |
-| Spoken-send ("send it" → Enter) | ✅ | configurable phrase; upstream's terminal-blocklist not ported ⏳ |
+| Spoken-send ("send it" → Enter) | ✅ | configurable phrase; terminal blocklist ✅ (`general.terminal_apps` — phrase strips, text inserts, Enter suppressed) |
+| Slash-command/mention literal formatting (`/ fix`, `@ John Smith`) | ✅ / ⏳ | literal forms ported (squeeze after AI cleanup, `processing.slash_mention_squeeze`); upstream's SPOKEN forms (`slash fix`, `at sign John`, `tag John`) ⏳ |
 | Command mode (voice → actions) | ✅ v1 | strict-JSON single-tool protocol (no native tool_calls), every command confirmed, pill overlay instead of notch; chat store/tool schema later |
 | Per-app prompt sets | ⏳ v0.2 | frontmost-app hint already captured |
 | Smart typing via accessibility APIs | ✅ / 🚧 | xdotool on X11 ✅; Wayland insertion 🚧 v0.3 (ydotool/wtype); AT-SPI fallback ⏳ |
@@ -103,7 +104,7 @@ new that Linux doesn't have" a one-command answer.
 | Settings: split AI providers / cleanup styles; side-panel nav; simplified welcome | ✅ | native Settings window (Adw Preferences pages) covers the same knobs — v1.1 adds dictionary/filler editors + language picker; richer upstream provider profiles remain on the roadmap |
 | Honor "Send Custom Prompt Only" for dictation-shortcut prompt overrides | ⏳ | shortcut prompt overrides not ported at all yet |
 | File transcription: chunked API uploads, `.opus`/`.oga` input | ⏳ | `transcribe` accepts opus/oga + 10 more verified formats with ffmpeg fallback; `--json` exports timestamps/segments; **chunked API uploads still pending** |
-| Spoken-send commands, quiet-countdown completion, terminal blocklist | ✅ / ⏳ | spoken-send shipped in our `a1390f5`; terminal blocklist ⏳ |
+| Spoken-send commands, quiet-countdown completion, terminal blocklist | ✅ | spoken-send shipped in our `a1390f5`; terminal blocklist ✅ (Enter suppressed in `general.terminal_apps`, pill shows "⏎ skipped (terminal)"); quiet-countdown ⏳ |
 | Incremental Parakeet preview finalization (experimental) | 🚧 | parakeet-specific; lands with v0.4 streaming work |
 | Private AI (Fluid Intelligence) in Edit mode + model verification fixes | ➖ | FI is closed-source; edit mode works with any endpoint ✅ |
 | Long-dictation fallback for token-dense Fluid-1 output | ➖ | FI-specific |

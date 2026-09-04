@@ -82,6 +82,24 @@ def _parakeet_lines(cfg: dict) -> list[str]:
     return lines
 
 
+def _formatting_lines(cfg: dict) -> list[str]:
+    """Chat/terminal formatting resolution: one line per key."""
+    p = cfg.get("processing", {})
+    i = cfg.get("insertion", {})
+    apps = cfg.get("general", {}).get("terminal_apps") or []
+    names = ", ".join(apps) if apps else "none"
+    return [
+        f"  slash/mention squeeze: "
+        f"{'on' if p.get('slash_mention_squeeze', True) else 'off'} "
+        f"(processing.slash_mention_squeeze)",
+        f"  terminal autocomplete space: "
+        f"{'on' if i.get('terminal_autocomplete_space', True) else 'off'} "
+        f"(insertion.terminal_autocomplete_space)",
+        f"  terminal_apps ({len(apps)}): {names} "
+        f"(spoken-send Enter suppressed here)",
+    ]
+
+
 def run() -> int:
     print(f"SayItErmano v{__version__} doctor\n")
     ok = True
@@ -137,6 +155,10 @@ def run() -> int:
 
     print("\nparakeet:")
     for line in _parakeet_lines(cfg):
+        print(line)
+
+    print("\nchat/terminal formatting:")
+    for line in _formatting_lines(cfg):
         print(line)
 
     print(f"\ncontrol socket: {paths.socket_path()} "

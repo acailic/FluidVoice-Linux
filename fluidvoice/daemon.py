@@ -28,6 +28,7 @@ from .media import MediaController
 from .micmon import match_priority as micmon_match_priority
 from .processing import post_process
 from .processing.per_app import match_app_prompt, system_prompt_for
+from .processing.slash import squeeze_slash_mentions
 from .recorder import Recorder, RecorderError
 
 
@@ -81,6 +82,7 @@ class DictationPipeline:
         self.rewriter = rewriter
         self.log = logger
         self._pending_send_key: str | None = None
+        self._pending_send_skipped_terminal = False
         self.notify = lambda title, body="": ui.notify(title, body, enabled=cfg["notifications"]["enabled"])
 
     # -- steps ------------------------------------------------------------
@@ -144,10 +146,14 @@ class DictationPipeline:
         return {"mode": "command", "text": instruction, "raw": raw,
                 "duration_s": round(duration, 2)}
 
-    def _after_ai_formatting(self, text: str) -> str:
-        """GAAV + spoken-send stripping (upstream post-AI steps)."""
+    def _after_ai_formatting(self, text: str, app_hint: str | None = None) -> str:
+        """Slash/mention squeeze + GAAV + spoken-send stripping (upstream
+        post-AI steps; the literal squeeze runs after AI cleanup and before
+        GAAV — upstream ContentView.swift:2658-2661)."""
         from .processing.extra_formats import apply_gaav, parse_spoken_send
         p = self.cfg.get("processing", {})
+        if p.get("slash_mention_squeeze", True):
+            text = squeeze_slash_mentions(text)
         if p.get("gaav_enabled"):
             text = apply_gaav(text,
                              lowercase_first=p.get("gaav_lowercase_first", True),
@@ -155,8 +161,19 @@ class DictationPipeline:
         if self.cfg["recording"].get("spoken_send_enabled"):
             result = parse_spoken_send(text,
                                        self.cfg["recording"].get("spoken_send_phrase", "send it"))
-            self._pending_send_key = (self.cfg["recording"].get("spoken_send_key", "enter")
-                                      if result.should_send else None)
+            self._pending_send_key = None
+            self._pending_send_skipped_terminal = False
+            if result.should_send:
+                # terminal blocklist (upstream ContentView.swift:1928-1937,
+                # :2786-2798): the phrase still strips and the text still
+                # inserts, but Enter is never pressed — executing a
+                # half-typed shell line is worse than not sending
+                if app_hint and insertion.is_terminal_app(app_hint, self.cfg):
+                    self._pending_send_skipped_terminal = True
+                    self.log("spoken-send: Enter suppressed (terminal app)")
+                else:
+                    self._pending_send_key = self.cfg["recording"].get(
+                        "spoken_send_key", "enter")
             return result.text
         return text
 
@@ -207,6 +224,7 @@ class DictationPipeline:
         """Returns the result dict (raw/text/ai/strategy) or None if nothing was typed."""
         from .audio_utils import pad_wav
         started = time.monotonic()
+        self._pending_send_skipped_terminal = False
         try:
             duration = duration_seconds(str(wav))
             if self._should_skip(wav, duration):
@@ -231,7 +249,7 @@ class DictationPipeline:
             if mode == "command":
                 return self._command(text, raw, duration, wav)
             polished, ai_used = self._polish(text, app_hint=app_hint)
-            polished = self._after_ai_formatting(polished)
+            polished = self._after_ai_formatting(polished, app_hint=app_hint)
             strategy = self._insert(polished)
             if self._pending_send_key:
                 spec, self._pending_send_key = self._pending_send_key, None
@@ -239,6 +257,9 @@ class DictationPipeline:
                 self.key_presser(spec)
                 self._set_pill_badge("⏎ sent")
                 strategy += f"+{spec}"
+            elif self._pending_send_skipped_terminal:
+                self._pending_send_skipped_terminal = False
+                self._set_pill_badge("⏎ skipped (terminal)")
             out = {"raw": raw, "text": polished, "ai": ai_used,
                    "strategy": strategy, "confidence": conf}
             self.log(f"typed ({strategy}, {len(polished)} chars, {duration:.1f}s audio, "

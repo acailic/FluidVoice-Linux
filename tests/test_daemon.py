@@ -192,6 +192,49 @@ class TestPipeline:
                            history_writer=lambda e, w: writer.append(e))
         assert out is not None and writer == []
 
+    def test_slash_squeeze_applied(self, tmp_path, cfg, quiet_ui):
+        inserted = []
+        _, out = self._run(tmp_path, cfg, StubBackend("/ fix the deploy"),
+                           inserter=lambda t, c: (inserted.append(t), "typed")[1])
+        assert inserted == ["/fix the deploy"]
+        assert out["text"] == "/fix the deploy"
+
+    def test_mention_squeeze_applied(self, tmp_path, cfg, quiet_ui):
+        inserted = []
+        _, out = self._run(tmp_path, cfg, StubBackend("ping @ John Smith now"),
+                           inserter=lambda t, c: (inserted.append(t), "typed")[1])
+        assert inserted == ["ping @John Smith now"]
+
+    def test_squeeze_runs_after_ai_polish(self, tmp_path, cfg, quiet_ui):
+        # post-AI position proof: the polisher would re-split "/fix" if the
+        # squeeze ran pre-AI (upstream applies it after AI cleanup)
+        cfg["ai"]["enabled"] = True
+        inserted = []
+        _, out = self._run(
+            tmp_path, cfg, StubBackend("/ fix the deploy"),
+            polisher=lambda t: f"[ai] {t}",
+            inserter=lambda t, c: (inserted.append(t), "typed")[1])
+        assert inserted == ["[ai] /fix the deploy"]
+        assert out["ai"] is True
+
+    def test_squeeze_disabled_by_config(self, tmp_path, cfg, quiet_ui):
+        cfg["processing"]["slash_mention_squeeze"] = False
+        inserted = []
+        _, out = self._run(tmp_path, cfg, StubBackend("/ fix the deploy"),
+                           inserter=lambda t, c: (inserted.append(t), "typed")[1])
+        assert inserted == ["/ fix the deploy"]
+
+    def test_rewrite_mode_not_squeezed(self, tmp_path, cfg, quiet_ui):
+        # rewrite keeps today's behavior: the instruction text is untouched
+        cfg["ai"]["enabled"] = True
+        wav = make_wav(tmp_path / "r.wav")
+        pipe = dm.DictationPipeline(
+            cfg, StubBackend("/ make this shorter"),
+            inserter=lambda t, c: "typed",
+            rewriter=lambda instruction, context: f"RE({instruction})")
+        out = pipe.run(wav, None, mode="rewrite", rewrite_context=None)
+        assert out["text"] == "RE(/ make this shorter)"
+
 
 def inserted(text):
     """Shared inserter stub: records nothing, reports 'typed'."""

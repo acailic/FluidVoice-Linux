@@ -272,15 +272,26 @@ whispercpp_model = "ggml-base.bin"  # catalog name or path — download via Sett
 # name = "parakeet-tdt-0.6b-v2"     # or parakeet-tdt-0.6b-v3 (multilingual)
 device = "auto"             # auto | cuda | cpu
 
+[general]
+# Case-insensitive WM_CLASS substrings identifying terminals — spoken-send
+# never presses Enter here and typed insertions gain one autocomplete space
+terminal_apps = ["gnome-terminal", "kgx", "konsole", "xterm", "alacritty", "kitty", "wezterm", "ghostty", "foot", "tilix", "terminator", "guake", "yakuake", "st-256color", "warp"]
+
 [recording]
 mic_priority = ["bluez", "usb-cam"]  # fallback order when the chosen mic vanishes
 # (Bluetooth headset first, then a USB webcam; switch never happens mid-take)
 
 [processing]
 dictionary = [ { triggers = ["miro board"], replacement = "Miro board" } ]
+# Chat-app literal squeeze: "/ fix the deploy" -> "/fix the deploy",
+# "@ John Smith" -> "@John Smith" (runs after AI cleanup)
+slash_mention_squeeze = true
 
 [insertion]
 mode = "auto"               # typed | paste | auto (paste for long texts)
+# One trailing space after typed insertions in terminal apps so the shell's
+# autocomplete commits
+terminal_autocomplete_space = true
 ```
 
 ## Development & testing
