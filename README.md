@@ -125,7 +125,48 @@ sayit-ermano cancel            # abort a recording
 sayit-ermano transcribe x.opus --json   # one-shot file transcription
 sayit-ermano history -n 10
 sayit-ermano config init       # write ~/.config/sayit-ermano/config.toml
+sayit-ermano update            # check for a newer release + print the upgrade command
 ```
+
+### pipx / pip (any distro)
+
+Works on any Linux with Python 3.11+ — a pipx install lands under
+`~/.local/pipx` (or `~/.local/share/pipx`) and never touches the system
+Python:
+
+```bash
+pipx install sayit-ermano          # from PyPI (publishing is manual — if the
+                                   # latest release isn't on PyPI yet, use:)
+pipx install git+https://github.com/acailic/SayItErmano.git@linux
+```
+
+Upgrades are one command (`sayit-ermano update` detects the pipx install
+and prints exactly this):
+
+```bash
+pipx upgrade sayit-ermano
+```
+
+You can also install a locally built wheel (e.g. after `git clone` +
+`uv build --wheel`): `pipx install ./dist/sayit_ermano-<ver>-py3-none-any.whl`.
+Verify an install any time with `./scripts/verify-pipx.sh` (entry points,
+data files, and the updater's install-method detection, in a sandbox).
+
+Using the one-shot user install instead? Its bundled venv can be upgraded
+directly (the exact line `sayit-ermano update` prints for that layout):
+
+```bash
+~/.local/share/sayit-ermano/venv/bin/pip install -U sayit-ermano
+```
+
+(re-running the one-shot installer is the fully supported path — it also
+restarts the daemon and cleans up duplicate installs.)
+
+### Arch Linux (AUR)
+
+An AUR recipe is maintained in [`packaging/aur/`](packaging/aur/)
+(`sayit-ermano-bin`, built from the release `.deb` asset) — community-
+adopted, **not published by us** (project rule: manual releases only).
 
 ### Requirements
 
@@ -255,6 +296,36 @@ dictation tools (Handy, Vocalinux, nerd-dictation, …),
 [docs/UPSTREAM-TRACKING.md](docs/UPSTREAM-TRACKING.md) for the
 macOS-vs-Linux capability matrix and the upstream changelog we track
 (refresh it with `scripts/upstream-diff.sh`).
+
+## Updates
+
+SayItErmano checks GitHub **once per daemon start and once a day** for a
+newer release (10 s timeout, on a background thread — startup is never
+delayed). When a newer release is seen you get **one desktop
+notification**; `sayit-ermano status`, the History window's status row,
+Settings → About and `sayit-ermano doctor` show it too. Nothing is ever
+installed automatically — run:
+
+```bash
+sayit-ermano update    # prints the exact copy-paste upgrade command for
+                       # YOUR install method (deb dpkg -i / one-shot
+                       # installer / pipx upgrade / git pull)
+sayit-ermano update --dismiss   # stop the notification for this release
+```
+
+`doctor` also warns when a system deb (`/opt/sayit-ermano`) and a user
+install (`~/.local/share/sayit-ermano`) coexist — the two-daemon hotkey
+fight this project's lock file guards against at runtime.
+
+Disable the checks entirely:
+
+```toml
+[updates]
+check = false   # no GitHub probe at all (notify = false keeps checks, drops
+                # only the desktop notification)
+```
+
+(`SAYITERMANO_SKIP_UPDATE_CHECK=1` does the same per-run.)
 
 ## Configuration
 

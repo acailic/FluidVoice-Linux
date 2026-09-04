@@ -1,0 +1,27 @@
+pkgbase = sayit-ermano-bin
+	pkgdesc = Local voice dictation with AI polish (community Linux port of FluidVoice)
+	pkgver = 0.5.0
+	pkgrel = 1
+	url = https://github.com/acailic/SayItErmano
+	arch = x86_64
+	license = GPL-3.0-or-later
+	depends = python
+	depends = pipewire-audio-utils
+	depends = xdotool
+	depends = xclip
+	depends = libnotify
+	depends = python-gobject
+	depends = gtk4
+	depends = libadwaita
+	depends = zstd
+	optdepends = pulseaudio-utils: legacy PulseAudio recording fallback
+	provides = sayit-ermano
+	provides = fluidvoice-linux
+	conflicts = sayit-ermano
+	conflicts = fluidvoice-linux
+	replaces = fluidvoice-linux
+	noextract = sayit-ermano-bin_0.5.0.deb
+	source_x86_64 = sayit-ermano-bin_0.5.0.deb::https://github.com/acailic/SayItErmano/releases/download/v0.5.0/sayit-ermano_0.5.0-1_amd64.deb
+	sha256sums_x86_64 = SKIP
+
+pkgname = sayit-ermano-bin

@@ -283,9 +283,12 @@ class HistoryWindow(Adw.ApplicationWindow):
         self.warmup_spinner = Gtk.Spinner()
         self.warmup_lbl = Gtk.Label(css_classes=["dim-label"])
         self.today_lbl = Gtk.Label(css_classes=["dim-label"])
+        # update check-and-assist surface (fluidvoice/update.py): hidden
+        # until the daemon's status payload reports update_available
+        self.update_lbl = Gtk.Label(css_classes=["dim-label"], visible=False)
         for w in (self.state_dot, self.state_lbl, self.backend_lbl,
                   self.gpu_lbl, self.model_lbl, self.warmup_spinner,
-                  self.warmup_lbl, self.today_lbl):
+                  self.warmup_lbl, self.today_lbl, self.update_lbl):
             status.append(w)
         vbox.append(status)
 
@@ -521,6 +524,7 @@ class HistoryWindow(Adw.ApplicationWindow):
             self.state_lbl.set_text("daemon offline")
             self.state_dot.set_from_icon_name("dialog-warning-symbolic")
             self.state_dot.set_css_classes(["warning"])
+            self.update_lbl.set_visible(False)
             return
         self.down_banner.set_revealed(False)
         self.mic_btn.set_sensitive(True)
@@ -551,6 +555,18 @@ class HistoryWindow(Adw.ApplicationWindow):
             self.warmup_spinner.stop()
             self.warmup_lbl.set_text(
                 f"model error: {warm['error']}" if warm.get("error") else "")
+        upd = st.get("update_available")
+        if upd:
+            # text + tooltip only; the upgrade command comes from the status
+            # payload (no network in the UI)
+            self.update_lbl.set_text(f"update available: v{upd}")
+            self.update_lbl.set_css_classes(["dim-label", "warning"])
+            self.update_lbl.set_tooltip_text(
+                (st.get("update") or {}).get("upgrade_command")
+                or "run 'sayit-ermano update' for the upgrade command")
+            self.update_lbl.set_visible(True)
+        else:
+            self.update_lbl.set_visible(False)
         self.title_widget.set_subtitle(self.state_lbl.get_text())
 
     @staticmethod

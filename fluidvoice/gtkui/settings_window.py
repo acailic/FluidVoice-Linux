@@ -514,12 +514,28 @@ class SettingsWindow(Adw.PreferencesWindow):
         if st:  # about rows (daemon offline keeps the placeholder em-dash)
             self.about_backend_row.set_subtitle(st.get("backend") or "—")
             self.about_gpu_row.set_subtitle("yes" if st.get("cuda") else "no")
+            self._apply_about_update(st)
 
     def _active_model(self) -> str:
         name = str(self.cfg.get("model", {}).get("name", "auto"))
         if name in ("", "auto"):
             return backends.resolve_model_name(name)
         return backends.ALIASES.get(name.lower(), name.lower())
+
+    def _apply_about_update(self, st: dict) -> None:
+        """About → Update row from the daemon status payload (no network
+        here - the daemon's checker owns the probe; see update.py)."""
+        u = st.get("update") or {}
+        if st.get("update_available"):
+            self.about_update_row.set_subtitle(
+                f"v{st['update_available']} available — "
+                "run 'sayit-ermano update'")
+        elif not u.get("enabled"):
+            self.about_update_row.set_subtitle("checks disabled")
+        elif u.get("checked"):
+            self.about_update_row.set_subtitle("up to date")
+        else:
+            self.about_update_row.set_subtitle("checking…")
 
     def _pick_model(self, btn, name: str) -> None:
         try:
@@ -1603,6 +1619,10 @@ class SettingsWindow(Adw.PreferencesWindow):
         self.about_gpu_row = Adw.ActionRow(title="GPU (CUDA)", subtitle="—")
         grp.add(self.about_backend_row)
         grp.add(self.about_gpu_row)
+        # update check-and-assist surface (fluidvoice/update.py), fed by the
+        # same daemon status poll as the backend/GPU rows
+        self.about_update_row = Adw.ActionRow(title="Update", subtitle="—")
+        grp.add(self.about_update_row)
         for title, value in (
                 ("Config file", str(paths.config_file())),
                 ("Control socket", str(paths.socket_path())),

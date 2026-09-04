@@ -119,7 +119,13 @@ sources. Everything below is a known, classified gap — see
       history --export PATH.zip` (history + retained audio; audio outside the
       audio dir refused, missing skipped), History-window Export… menu item,
       today line in the window header + `fluidvoice status` (local midnight).
-- [ ] Auto-updater (or packaged releases); onboarding.
+- [x] Auto-updater (or packaged releases); onboarding — DONE: check-and-assist
+      updater (`fluidvoice/update.py`; daily GitHub check on a daemon thread
+      that never blocks startup, one notification per newer release with
+      dismiss state in `update-state.json`, `sayit-ermano update` prints the
+      copy-paste upgrade command per detected install method, doctor drift
+      WARN for deb+user double installs; NO silent self-update).
+      Onboarding's one added sentence: the update check + how to disable it.
 - [x] Mouse-button push-to-talk + lock suppression — DONE: `recording.
       push_to_talk_button` (e.g. "button8"; 6–255, buttons 1–5 click/scroll
       refused) arms an XGrabButton passive grab per lock-mask combo; the
@@ -141,7 +147,12 @@ sources. Everything below is a known, classified gap — see
       control socket; the former web page was retired with it).
 - [ ] Local HTTP API (upstream exposes an OpenAI-style server on 127.0.0.1
       with /v1/transcribe, /v1/history, dictionary routes).
-- [ ] Packaging: AUR, nix, pipx (deb is DONE - packaging/build-deb.sh: launcher entry, login autostart, icon, systemd unit, bundled venv).
+- [x] Packaging: AUR, pipx (deb is DONE - packaging/build-deb.sh: launcher entry,
+      login autostart, icon, systemd unit, bundled venv) — DONE: pipx verified
+      from a locally built wheel (`scripts/verify-pipx.sh`: entry points, data
+      files, pipx method detection; PyPI publish stays manual by project rule),
+      AUR `sayit-ermano-bin` recipe in packaging/aur/ (instructions only, not
+      published by us). nix still open.
 
 ## Non-goals
 - Bundling a closed-source "Fluid Intelligence" equivalent — use any local

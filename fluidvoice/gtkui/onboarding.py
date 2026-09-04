@@ -38,7 +38,17 @@ class OnboardingWindow(Adw.ApplicationWindow):
         self.model_lbl = Gtk.Label(wrap=True, xalign=0.0, css_classes=["dim-label"])
         self.hotkey_lbl = Gtk.Label(wrap=True, xalign=0.0, css_classes=["dim-label"])
         self.ai_lbl = Gtk.Label(wrap=True, xalign=0.0, css_classes=["dim-label"])
-        for lbl in (self.mic_lbl, self.model_lbl, self.hotkey_lbl, self.ai_lbl):
+        # the ONLY onboarding addition for the update feature (scope rule):
+        # a static sentence so new installs know a check happens
+        self.updates_lbl = Gtk.Label(wrap=True, xalign=0.0,
+                                     css_classes=["dim-label"])
+        self.updates_lbl.set_text(
+            "Updates: SayItErmano checks GitHub once a day for a newer "
+            "release and notifies you (`sayit-ermano update` prints the "
+            "upgrade command; disable with `updates.check = false` in "
+            "the config).")
+        for lbl in (self.mic_lbl, self.model_lbl, self.hotkey_lbl,
+                    self.ai_lbl, self.updates_lbl):
             box.append(lbl)
 
         self.try_btn = Gtk.Button(label="Record 3 seconds",

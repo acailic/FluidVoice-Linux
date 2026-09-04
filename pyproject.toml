@@ -24,6 +24,11 @@ dependencies = [
     "faster-whisper>=1.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/acailic/SayItErmano"
+Issues = "https://github.com/acailic/SayItErmano/issues"
+Releases = "https://github.com/acailic/SayItErmano/releases"
+
 [project.optional-dependencies]
 torch = ["openai-whisper"]          # only if you want the torch/CUDA backend
 # CPU wheel; the CUDA execution provider is used automatically when the

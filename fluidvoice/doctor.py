@@ -253,6 +253,65 @@ def _mouse_ptt_lines(cfg: dict) -> list[str]:
     return lines
 
 
+def _update_lines(cfg: dict, *, check=None) -> list[str]:
+    """Version/updates report: current vs latest, install method, and the
+    copy-paste upgrade block. `check` is injectable (tests pass a stub);
+    the default does one real GitHub fetch honoring the env kill-switch.
+    A network failure is a single informational line - `ok` must NOT flip
+    false on offline (that would make every air-gapped machine 'broken')."""
+    from . import update as update_mod
+    upd = cfg.get("updates", {}) or {}
+    if update_mod.update_skipped():
+        return ["update check: skipped (SAYITERMANO_SKIP_UPDATE_CHECK=1)"]
+    if not upd.get("check", True):
+        return ["update check: disabled (updates.check = false)"]
+    if check is None:
+        release, error = update_mod.fetch_latest_result()
+    else:
+        res = check()
+        if isinstance(res, tuple):
+            release, error = res
+        else:
+            release, error = res, None if res is not None \
+                else "offline or GitHub API error"
+    info = update_mod.detect_install_method()
+    if release is None:
+        return [f"version: {__version__} -> latest unknown "
+                f"(offline or GitHub API error{': ' + error if error else ''})",
+                f"  install: {info['method']} ({info['marker']})"]
+    latest = release.get("version") or "?"
+    if update_mod.is_newer(latest, __version__):
+        lines = [f"version: {__version__} -> latest {latest} "
+                 "(update available: sayit-ermano update)",
+                 f"  install: {info['method']} ({info['marker']})"]
+        block = update_mod.upgrade_command(info["method"], release).splitlines()
+        lines.append("  upgrade: " + block[0])
+        for extra in block[1:]:
+            lines.append("           " + extra)
+        digest = update_mod.deb_checksum(release)
+        if digest:
+            lines.append(f"  sha256: {digest.removeprefix('sha256:')}")
+        return lines
+    return [f"version: {__version__} -> latest {latest} (up to date)",
+            f"  install: {info['method']} ({info['marker']})"]
+
+
+def _duplicate_install_lines(home: Path | None = None) -> list[str]:
+    """The 2026-09-04 incident guard: a system deb (/opt/sayit-ermano,
+    XDG-autostarted) AND a user install (~/.local/share/sayit-ermano)
+    both present means two daemons fight over the XGrabKey hotkey. Pure
+    path existence - no network, unit-testable."""
+    home = Path(home) if home is not None else Path.home()
+    deb = Path("/opt/sayit-ermano")
+    user = home / ".local" / "share" / "sayit-ermano"
+    if deb.is_dir() and user.is_dir():
+        return ["  WARNING: both a system deb (/opt/sayit-ermano) and a user "
+                "install (~/.local/share/sayit-ermano) are present — two "
+                "daemons fight over the hotkey; remove one "
+                "(sudo apt remove sayit-ermano, or drop the user layout)"]
+    return []
+
+
 def run() -> int:
     print(f"SayItErmano v{__version__} doctor\n")
     ok = True
@@ -267,13 +326,19 @@ def run() -> int:
               "ydotool/wtype (see README)")
         ok = False
 
-    print(f"\nconfig: {paths.config_file()} ({'exists' if paths.config_file().exists() else 'not created yet - defaults in use'})")
-    for line in _history_lines():
-        print(line)
     try:
         cfg = load_config(paths.config_file())
     except Exception:
         cfg = {}
+    print("\nversion/updates:")
+    for line in _update_lines(cfg):
+        print(line)
+    for line in _duplicate_install_lines():
+        print(line)
+
+    print(f"\nconfig: {paths.config_file()} ({'exists' if paths.config_file().exists() else 'not created yet - defaults in use'})")
+    for line in _history_lines():
+        print(line)
     print("\ndictionary learning:")
     print(_suggestions_line(cfg))
     for line in _models_cache_lines(cfg):

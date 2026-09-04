@@ -63,6 +63,13 @@ def dictionary_suggestions_file() -> Path:
     return config_dir() / "dictionary-suggestions.json"
 
 
+def update_state_file() -> Path:
+    """Update-check state: {last_check, last_seen, notified, dismissed}
+    (see fluidvoice/update.py). Beside the config, not in data/, because it
+    is machine-local bookkeeping, not user content."""
+    return config_dir() / "update-state.json"
+
+
 def prompt_profiles_file() -> Path:
     """Named presets of the AI base prompt ({name: prompt})."""
     return config_dir() / "prompt-profiles.json"

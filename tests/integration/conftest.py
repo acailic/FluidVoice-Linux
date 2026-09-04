@@ -59,6 +59,9 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     # test daemons must never launch the GUI (onboarding/tray app spawns)
     monkeypatch.setenv("SAYITERMANO_NO_APP_SPAWN", "1")
+    # integration stays offline: no GitHub update probe from the daemon's
+    # checker or the CLI/doctor invocations (fluidvoice/update.py kill-switch)
+    monkeypatch.setenv("SAYITERMANO_SKIP_UPDATE_CHECK", "1")
     return cfg
 
 

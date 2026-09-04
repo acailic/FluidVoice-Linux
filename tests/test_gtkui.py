@@ -964,3 +964,73 @@ class TestHistoryScience:
         assert not row.text_lbl.get_visible()  # ...with the user's text
         assert c.updated == [(55.0, "risky edit")]
         w.close()
+
+
+class TestUpdateSurfacing:
+    """Update check-and-assist surfaces (fluidvoice/update.py): the
+    history-window status label, the Settings About row, and the single
+    onboarding sentence."""
+
+    def test_status_row_hidden_without_update(self, loop):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        w = HistoryWindow(client=StubClient(ENTRIES))
+        w.present()
+        pump(loop)
+        w._apply_status({"recording": False, "busy": False,
+                         "backend": "b", "cuda": False})
+        assert w.update_lbl.get_visible() is False
+        w._apply_status(None)  # daemon down: still hidden
+        assert w.update_lbl.get_visible() is False
+        w.close()
+
+    def test_status_row_shows_update_with_tooltip(self, loop):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        w = HistoryWindow(client=StubClient(ENTRIES))
+        w.present()
+        pump(loop)
+        w._apply_status({"recording": False, "busy": False,
+                         "backend": "b", "cuda": False,
+                         "update_available": "0.6.0",
+                         "update": {"enabled": True, "method": "deb",
+                                    "upgrade_command":
+                                        "sudo apt install -y ./a.deb"}})
+        assert w.update_lbl.get_visible() is True
+        assert w.update_lbl.get_text() == "update available: v0.6.0"
+        assert "warning" in w.update_lbl.get_css_classes()
+        assert w.update_lbl.get_tooltip_text() == "sudo apt install -y ./a.deb"
+        # cleared again when the payload says so
+        w._apply_status({"recording": False, "busy": False,
+                         "backend": "b", "cuda": False})
+        assert w.update_lbl.get_visible() is False
+        w.close()
+
+    def test_settings_about_update_row_states(self, loop):
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        w = SettingsWindow(client=StubClient())
+        w.present()
+        pump(loop)
+        # StubClient status: no checker reported -> "checks disabled"
+        assert w.about_update_row.get_subtitle() == "checks disabled"
+        w._apply_about_update({"update_available": None, "update":
+                               {"enabled": True, "checked": True}})
+        assert w.about_update_row.get_subtitle() == "up to date"
+        w._apply_about_update({"update_available": "0.6.0", "update":
+                               {"enabled": True, "checked": True,
+                                "method": "deb"}})
+        assert w.about_update_row.get_subtitle() == \
+            "v0.6.0 available — run 'sayit-ermano update'"
+        w._apply_about_update({"update_available": None, "update":
+                               {"enabled": True, "checked": False}})
+        assert w.about_update_row.get_subtitle() == "checking…"
+        w.close()
+
+    def test_onboarding_has_updates_sentence(self, loop):
+        from fluidvoice.gtkui.onboarding import OnboardingWindow
+        w = OnboardingWindow(client=StubClient())
+        w.present()
+        pump(loop)
+        text = w.updates_lbl.get_text()
+        assert "checks GitHub once a day" in text
+        assert "sayit-ermano update" in text
+        assert "updates.check = false" in text
+        w.close()

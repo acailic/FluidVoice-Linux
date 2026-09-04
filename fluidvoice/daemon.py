@@ -20,6 +20,7 @@ from typing import Any, Callable
 from . import __version__, backends, control, insertion, ui
 from . import history as history_mod
 from . import paths
+from . import update as update_mod
 from .ai.client import AIClient, AIError
 from .ai.prompts import base_prompt_for
 from .audio_utils import duration_seconds, is_silent
@@ -333,6 +334,7 @@ class Daemon:
         self._mouse_ptt: Any = None  # MousePTTListener when configured
         self._locked = False  # session locked/suspended (lockmon flips)
         self._lockmon: Any = None  # lockmon.LockMonitor when active
+        self._update: Any = None  # update.UpdateChecker when active
         self._rewrite_hotkey = None
         self._srv: Any = None
         self._process_thread: threading.Thread | None = None
@@ -372,6 +374,7 @@ class Daemon:
         self._start_tray()
         self._start_micmon()
         self._start_lockmon()
+        self._start_update_checker()
         self._maybe_first_run_onboard()
 
         ready = threading.Event()
@@ -535,6 +538,41 @@ class Daemon:
         self._lockmon = mon
         log("lock watch active (hotkeys pause while the screen is locked)")
 
+    def _start_update_checker(self) -> None:
+        """Best-effort update check (the tray/micmon contract): one GitHub
+        releases check now + daily, one desktop notification per newer
+        release, never any self-installation (see fluidvoice/update.py).
+        All I/O happens on the checker thread - startup never blocks."""
+        try:
+            notif_on = self.cfg.get("notifications", {}).get("enabled", True)
+            upd_cfg = self.cfg.get("updates", {})
+
+            def _notify(title: str, body: str) -> None:
+                ui.notify(title, body, timeout_ms=8000,
+                          enabled=notif_on and upd_cfg.get("notify", True))
+
+            checker = update_mod.UpdateChecker(self.cfg, on_notify=_notify,
+                                               log=log)
+            if checker.start():
+                self._update = checker
+                log("update check active (daily)")
+        except Exception as e:  # noqa: BLE001 - updater must never kill startup
+            log(f"WARN update checker unavailable: {e}")
+
+    def _update_status(self) -> dict:
+        """The update sub-dict + flat convenience keys for the status
+        action (CLI/UI read the flat ones; the dict carries the rest,
+        including the copy-paste upgrade_command)."""
+        if self._update is not None:
+            upd = self._update.status()
+        else:
+            upd = {"enabled": False, "checked": False, "latest": None,
+                   "update_available": None, "url": None, "error": None,
+                   "checked_at": None,
+                   "method": update_mod.detect_install_method()["method"],
+                   "upgrade_command": ""}
+        return dict(upd)
+
     def _on_locked(self, locked: bool) -> None:
         """lockmon callback - transitions only (the monitor dedups). The
         transition logs once here; per-press gating in toggle() stays
@@ -671,6 +709,9 @@ class Daemon:
         if self._lockmon:
             self._lockmon.stop()
             self._lockmon = None
+        if self._update:
+            self._update.stop()
+            self._update = None
         self._stop_preview()
         self._close_closing_display()
         self.cancel_pending_command()  # pill + Escape grab gone before hotkeys
@@ -1044,6 +1085,7 @@ class Daemon:
             ok, detail = self.insert_text_action(str(req.get("text", "")))
             return {"ok": ok, "error": detail if not ok else None}
         if action == "status":
+            upd = self._update_status()
             return {"ok": True, "recording": self.recording, "busy": self.busy,
                     "backend": self.backend.name if self.backend else None,
                     "version": __version__,
@@ -1061,7 +1103,13 @@ class Daemon:
                     "active_model": self._active_model_name(),
                     "active_model_key": backends.backend_model_key(self.backend)
                                        or backends.config_model_key(self.cfg),
-                    "today": history_mod.today_stats(history_mod.read_all())}
+                    "today": history_mod.today_stats(history_mod.read_all()),
+                    # update check-and-assist (fluidvoice/update.py): the
+                    # dict carries everything; the two flat keys are the
+                    # CLI/UI convenience surface
+                    "update": upd,
+                    "update_available": upd.get("update_available"),
+                    "update_url": upd.get("url")}
         if action == "shutdown":
             self._quit_gracefully()
             return {"ok": True}

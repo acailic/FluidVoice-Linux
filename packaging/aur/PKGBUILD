@@ -1,0 +1,36 @@
+# Maintainer: upstream does NOT publish to the AUR (project rule: manual
+# releases only). This recipe is maintained here for whoever wants to adopt
+# it — see packaging/aur/README.md for the bump/adopt/lint workflow.
+#
+# -bin package: repackages the official release .deb asset (source = release
+# asset, not git). The deb ships /opt/sayit-ermano (bundled venv), /usr/bin
+# and /usr/share payloads, a systemd user unit, and /etc/xdg/autostart —
+# all of it is intended, including the autostart (the hotkey daemon must
+# run per session; disable per-user with `systemctl --user` or by removing
+# the autostart file).
+pkgname=sayit-ermano-bin
+pkgver=0.5.0
+pkgrel=1
+pkgdesc="Local voice dictation with AI polish (community Linux port of FluidVoice)"
+arch=('x86_64')
+url="https://github.com/acailic/SayItErmano"
+license=('GPL-3.0-or-later')
+depends=('python' 'pipewire-audio-utils' 'xdotool' 'xclip' 'libnotify'
+         'python-gobject' 'gtk4' 'libadwaita' 'zstd')
+optdepends=('pulseaudio-utils: legacy PulseAudio recording fallback')
+provides=('sayit-ermano' 'fluidvoice-linux')
+conflicts=('sayit-ermano' 'fluidvoice-linux')
+replaces=('fluidvoice-linux')
+source_x86_64=("${pkgname}_${pkgver}.deb::${url}/releases/download/v${pkgver}/sayit-ermano_${pkgver}-1_amd64.deb")
+# Fill from the release page (the asset digest printed by `sayit-ermano
+# update` in v0.5.0+): `b2sum`/`sha256sum` of the downloaded asset. SKIP is
+# only acceptable while the recipe is unadopted.
+sha256sums_x86_64=('SKIP')
+noextract=("${pkgname}_${pkgver}.deb")
+
+package() {
+    # The deb's payload is data.tar.zst (verified with `ar t` on the v0.4.0+
+    # assets; bsdtar auto-detects the compression — do NOT pin -J/-z flags).
+    bsdtar -xOf "${srcdir}/${pkgname}_${pkgver}.deb" data.tar.\* \
+        | bsdtar -xf- -C "${pkgdir}"
+}

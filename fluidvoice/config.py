@@ -135,6 +135,13 @@ DEFAULTS: dict[str, Any] = {
     "notifications": {
         "enabled": True,
     },
+    "updates": {
+        # check GitHub releases for a newer version (once per daemon start
+        # + daily; see fluidvoice/update.py). The updater NEVER installs
+        # anything - it notifies and prints the upgrade command.
+        "check": True,
+        "notify": True,  # desktop notification when a newer release appears
+    },
     "history": {
         "save": True,
         "save_audio": False,
@@ -303,6 +310,16 @@ volume = 1.0
 [notifications]
 enabled = true
 
+[updates]
+# Check GitHub releases for a newer version (once per daemon start +
+# daily) and notify when one appears. `sayit-ermano update` prints the
+# copy-paste upgrade command for this install method; nothing is ever
+# installed automatically. Set check = false to disable every probe
+# (SAYITERMANO_SKIP_UPDATE_CHECK=1 does the same per-run).
+check = true
+# Desktop notification when a newer release is first seen
+notify = true
+
 [history]
 save = true
 save_audio = false
@@ -364,6 +381,7 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
                   "terminal_paste_key"],
     "sounds": ["enabled", "volume"],
     "notifications": ["enabled"],
+    "updates": ["check", "notify"],
     "history": ["save", "save_audio", "audio_budget_gb"],
     "command": ["max_turns", "working_dir", "timeout_seconds",
                 "confirm_timeout_s"],
@@ -491,6 +509,7 @@ SETTING_BOOLS = {("general", "copy_to_clipboard"), ("general", "tray_enabled"),
                  ("processing", "slash_mention_squeeze"),
                  ("ai", "enabled"), ("sounds", "enabled"),
                  ("notifications", "enabled"),
+                 ("updates", "check"), ("updates", "notify"),
                  ("history", "save"), ("history", "save_audio"),
                  ("insertion", "terminal_autocomplete_space"),
                  ("insertion", "verify_paste"),
@@ -525,6 +544,7 @@ ALLOWED_SETTINGS: dict[str, set] = {
                   "terminal_paste_key"},
     "sounds": {"enabled", "volume"},
     "notifications": {"enabled"},
+    "updates": {"check", "notify"},
     "history": {"save", "save_audio", "audio_budget_gb"},
     "command": {"max_turns", "working_dir", "timeout_seconds",
                 "confirm_timeout_s"},

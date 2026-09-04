@@ -73,6 +73,16 @@ def main(argv: list[str] | None = None) -> int:
                    help="run the first-run onboarding flow")
     sub.add_parser("doctor", help="environment check")
 
+    p = sub.add_parser(
+        "update",
+        help="check for a newer release and print the upgrade command for "
+             "this install (nothing is executed)")
+    p.add_argument("--dismiss", action="store_true",
+                   help="stop the update notification for the current/latest "
+                             "release (records it in the update state)")
+    p.add_argument("--json", action="store_true",
+                   help="raw JSON output")
+
     args = parser.parse_args(argv)
     if not args.cmd:
         parser.print_help()
@@ -225,6 +235,71 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "doctor":
         return doctor_mod.run()
 
+    if args.cmd == "update":
+        return _cmd_update(args)
+
+    return 0
+
+
+def _cmd_update(args) -> int:
+    """`sayit-ermano update`: one sync check (10 s timeout, env kill-
+    switch honored) + the detected-method copy-paste block. Informational
+    only - NOTHING is executed. Exit 0 even when offline."""
+    from . import update as update_mod
+    info = update_mod.detect_install_method()
+    method, marker = info["method"], info["marker"]
+
+    if args.dismiss:
+        ver = update_mod.dismiss_update()
+        print(f"dismissed {ver} (no notification until a newer release)")
+        return 0
+
+    skipped = update_mod.update_skipped()
+    release = None
+    error = None
+    if not skipped:
+        release, error = update_mod.fetch_latest_result()
+
+    latest = (release or {}).get("version")
+    # offline / skipped: still show a usable block from the last-seen state
+    # (or just the releases URL when nothing was ever seen)
+    if release is None:
+        last_seen = update_mod._read_state(None).get("last_seen")
+        if last_seen:
+            release = {"tag": f"v{last_seen}", "version": last_seen,
+                       "url": update_mod.RELEASES_URL, "assets": []}
+
+    available = bool(latest) and update_mod.is_newer(latest, __version__)
+    command = update_mod.upgrade_command(method, release)
+    checksum = update_mod.deb_checksum(release) if available else None
+
+    payload = {"current": __version__, "method": method, "marker": marker,
+               "latest": latest, "update_available": latest if available else None,
+               "url": (release or {}).get("url") if available else None,
+               "upgrade_command": command, "sha256": checksum,
+               "skipped": skipped, "error": error}
+    if args.json:
+        print(json.dumps(payload))
+        return 0
+
+    print(f"SayItErmano {__version__} (install: {method} — {marker})")
+    if skipped:
+        print("check skipped (SAYITERMANO_SKIP_UPDATE_CHECK=1)")
+    elif latest is None:
+        print(f"latest release: unknown (offline or GitHub API error"
+              f"{': ' + error if error else ''})")
+    elif available:
+        print(f"latest release: v{latest} — update available")
+    else:
+        print(f"latest release: v{latest} — up to date")
+    print("upgrade (copy-paste):")
+    for line in command.splitlines():
+        print(f"  {line}")
+    if checksum:
+        print(f"sha256: {checksum.removeprefix('sha256:')}"
+              "   (published digest - verify after download)")
+    if available:
+        print("(--dismiss stops the notification for this release)")
     return 0
 
 
@@ -259,6 +334,9 @@ def _describe(resp: dict) -> str:
         if "today" in resp:
             from . import history
             text += "\ntoday: " + history.format_today(resp["today"])
+        if resp.get("update_available"):
+            text += (f"\nupdate available: {resp['update_available']} "
+                     "(sayit-ermano update)")
         return text
     return json.dumps(resp)
 
