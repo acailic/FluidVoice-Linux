@@ -502,3 +502,77 @@ class TestDaemonWiring:
         assert rec.stopped == 1
         assert d.recording is False
         d._watchdog and d._watchdog.cancel()
+
+    def test_vad_stop_finishes_via_full_take_decode(self, tmp_path,
+                                                    monkeypatch):
+        """Brief item 4 pin: the VAD stop finishes the take through the
+        legacy full-take decode - one backend.transcribe over the COMPLETE
+        wav, never a window mosaic. A future refactor that swaps stop-time
+        transcription to concatenated preview windows fails here."""
+        import wave as wave_mod
+        from fluidvoice import daemon as dm
+
+        take_s = 3.0  # > the 2 s preview window: a mosaic would truncate
+
+        class RecordingBackend:
+            name = "faster-whisper"
+
+            def __init__(self):
+                self.calls = []  # (wav path, seconds decoded at call time)
+
+            def transcribe(self, wav_path, language=None):
+                with wave_mod.open(str(wav_path), "rb") as wf:
+                    self.calls.append(
+                        (Path(wav_path), wf.getnframes() / wf.getframerate()))
+                return {"text": "final text", "language": "en",
+                        "duration": take_s}
+
+        class Rec:
+            def __init__(self):
+                self.stopped = 0
+                self.raw_path = None
+
+            def stop(self):
+                self.stopped += 1
+                p = tmp_path / "utt.wav"
+                with wave_mod.open(str(p), "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
+                    wf.writeframes(pcm(take_s))  # the whole take
+                return p
+
+            def cancel(self):
+                self.stopped += 1
+
+        captured = []
+        backend = RecordingBackend()
+        rec = Rec()
+        d = self.make_daemon(tmp_path, monkeypatch, rec)
+        # Capture at the pipeline's injectable inserter seam: the
+        # DictationPipeline default arg binds insertion.insert_text at
+        # import time, so patching the module attribute never reaches it
+        # (the sibling's module-attr stub covers only direct daemon calls).
+        def pipeline_factory(cfg, be):
+            return dm.DictationPipeline(
+                cfg, be, inserter=lambda text, c: captured.append(text)
+                or "typed")
+        d._pipeline_factory = pipeline_factory
+        d.backend = backend
+        d.recording = True
+        d._watchdog = threading.Timer(999.0, d._auto_stop)
+
+        d._vad_auto_stop()
+
+        assert rec.stopped == 1
+        assert d.recording is False
+        assert d._watchdog is None  # _stop_recording_locked cancelled it
+        assert d._process_thread is not None
+        d._process_thread.join(timeout=5)
+        assert not d._process_thread.is_alive()
+        # the typed text is the backend's single full-decode result, not a
+        # preview mosaic
+        assert captured == ["final text"]
+        assert len(backend.calls) == 1
+        decoded_s = backend.calls[0][1]
+        assert decoded_s >= take_s - 0.05  # whole take, no 2 s truncation
