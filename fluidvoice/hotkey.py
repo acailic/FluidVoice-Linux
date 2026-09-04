@@ -33,6 +33,10 @@ _LOCK_MASKS = [0, X.Mod2Mask, X.LockMask, X.Mod5Mask,
                X.Mod2Mask | X.LockMask, X.Mod2Mask | X.Mod5Mask,
                X.LockMask | X.Mod5Mask, X.Mod2Mask | X.LockMask | X.Mod5Mask]
 
+# A refused hotkey combo warns once after this many distinct attempts,
+# then stays quiet until the next recording-idle period (retries never stop).
+_MAX_GRAB_ATTEMPTS = 10
+
 MODIFIER_ONLY_KEYSYMS = {
     XK.XK_Shift_L, XK.XK_Shift_R, XK.XK_Control_L, XK.XK_Control_R,
     XK.XK_Alt_L, XK.XK_Alt_R, XK.XK_Super_L, XK.XK_Super_R,
@@ -117,13 +121,18 @@ class HotkeyListener:
 
     def __init__(self, key: str, modifiers: list[str], mode: str,
                  on_toggle, on_cancel=None, cancel_key: str | None = None,
-                 display_name: str | None = None):
+                 display_name: str | None = None,
+                 log=None, on_grab_change=None):
         self.key = key
         self.mode = mode
         self.on_toggle = on_toggle
         self.on_cancel = on_cancel
         self.cancel_key = cancel_key
         self.display_name = display_name
+        self.log = log or (lambda m: print(f"[sayit-ermano] {m}", flush=True))
+        # fired (best-effort) whenever hotkey health flips, so surfaces
+        # (tray tooltip, status) can follow blocking/recovery live
+        self._on_grab_change = on_grab_change or (lambda healthy: None)
         self._mods = sum(MODIFIER_MASKS.get(m, 0) for m in modifiers)
         self._thread: threading.Thread | None = None
         self._stop_flag = threading.Event()
@@ -134,6 +143,21 @@ class HotkeyListener:
         self._want_cancel = False   # recording active -> grab the cancel key
         self._cancel_grabbed = False
         self._cancel_grab_warned = False
+        # Grab health, per (keycode, full modifier mask) combo: python-xlib
+        # never raises BadAccess through grab_key - it hands the error to a
+        # per-request onerror callback (a truthy return suppresses the
+        # printing default handler). A combo the X server refuses (another
+        # client already holds it) is tracked here as data and retried by
+        # _sync_hotkey_grab on the poll-loop cadence until it succeeds.
+        # _pending holds combos whose latest grab is issued but not yet
+        # error-pumped: optimistic marks must never read as healthy (the
+        # retry thread and the readers race - a blocked daemon must never
+        # transiently report a good grab).
+        self._combo_ok: dict[tuple[int, int], bool] = {}
+        self._combo_attempts: dict[tuple[int, int], int] = {}
+        self._pending: set[tuple[int, int]] = set()
+        self._refuse_warned = False
+        self._was_healthy: bool | None = None  # None until first sync
         self._summary: list[str] = []
 
     # -- setup ---------------------------------------------------------------
@@ -143,12 +167,109 @@ class HotkeyListener:
         code = self._display.keysym_to_keycode(keysym)
         return code or 0
 
-    def _grab(self, keycode: int) -> None:
+    def _grab(self, keycode: int, masks=None) -> None:
+        """Issue one grab per lock-mask combo, routing refusals to data.
+
+        Each grab_key carries an onerror closure keyed by (keycode, full
+        mask) so a BadAccess (another client holds that combo) marks the
+        combo missing instead of hitting python-xlib's printing default
+        handler - grab_key itself never raises for it. Marked optimistically
+        True; the closure flips it False when the server says no. `masks`
+        (full modifier masks, _mods already folded in) narrows the issue to
+        the combos a caller knows are missing; default = every combo."""
         assert self._display is not None
+        if masks is None:
+            masks = [self._mods | extra for extra in _LOCK_MASKS]
         root = self._display.screen().root
-        for extra in _LOCK_MASKS:
-            root.grab_key(keycode, self._mods | extra, False,
-                          X.GrabModeAsync, X.GrabModeAsync)
+        for mask in masks:
+            combo = (keycode, mask)
+            self._combo_ok[combo] = True
+            self._pending.add(combo)
+            root.grab_key(keycode, mask, False,
+                          X.GrabModeAsync, X.GrabModeAsync,
+                          onerror=self._make_grab_onerror(combo))
+
+    def _settle_grabs(self, keycode: int, masks=None) -> None:
+        """Pump errors for recently issued grabs and mark them resolved:
+        after sync() every onerror the server had queued has fired, so the
+        optimistic marks that survive are settled truth."""
+        if masks is None:
+            masks = [self._mods | extra for extra in _LOCK_MASKS]
+        try:
+            self._display.sync()
+        except Exception:
+            return  # display dying: leave pending (reads as unresolved)
+        for mask in masks:
+            self._pending.discard((keycode, mask))
+
+    def _make_grab_onerror(self, combo: tuple[int, int]):
+        """Per-request error handler for one grab combo. Must stay trivial
+        (dict writes + one log) and must return truthy, or the error falls
+        through to the printing default handler."""
+        def _onerror(_error, _request) -> int:
+            self._combo_ok[combo] = False
+            self._pending.discard(combo)
+            attempts = self._combo_attempts.get(combo, 0) + 1
+            self._combo_attempts[combo] = attempts
+            if attempts >= _MAX_GRAB_ATTEMPTS and not self._refuse_warned:
+                self._refuse_warned = True
+                self.log(f"WARN hotkey grab still refused after {attempts} "
+                         "attempts - held by another client?")
+            return 1  # handled: suppress the printing default handler
+        return _onerror
+
+    @property
+    def hotkey_grabbed(self) -> bool:
+        """True = all lock-mask combos of the hotkey are believed held.
+        Partial coverage (some Num/Caps/Scroll states refused) is False:
+        the hotkey would only work in some lock states, so it is reported
+        and retried until complete. Grabs issued but not yet error-pumped
+        (in-flight retries) do NOT count - a blocked daemon must never
+        transiently read as healthy."""
+        return self._keycode != 0 and all(
+            self._combo_ok.get((self._keycode, self._mods | extra), False)
+            and (self._keycode, self._mods | extra) not in self._pending
+            for extra in _LOCK_MASKS)
+
+    def _sync_hotkey_grab(self) -> None:
+        """Self-heal: re-attempt missing hotkey combos, then resolve errors.
+
+        Called from setup() and as the first step of every poll-loop tick
+        (the same ~10 ms cadence _sync_cancel_grab rides). A healthy grab
+        issues zero extra X traffic; a refused one retries every tick so a
+        released holder is re-taken within ~1 s, with the refusal WARN
+        capped (see _MAX_GRAB_ATTEMPTS). The daemon must never sit "ready"
+        with a dead hotkey."""
+        try:
+            if self._display is None or not self._keycode:
+                return
+            missing = [self._mods | extra for extra in _LOCK_MASKS
+                       if not self._combo_ok.get(
+                           (self._keycode, self._mods | extra), False)
+                       or (self._keycode, self._mods | extra) in self._pending]
+            if not missing:
+                return  # healthy: nothing to do, no X traffic
+            healthy_before = self.hotkey_grabbed
+            self._grab(self._keycode, masks=missing)
+            self._settle_grabs(self._keycode, masks=missing)
+            healthy_after = self.hotkey_grabbed
+            if healthy_after != healthy_before:
+                try:
+                    self._on_grab_change(healthy_after)
+                except Exception:
+                    pass
+            if (healthy_after and not healthy_before
+                    and self._was_healthy is not None):
+                # recovered after a refusal (not the initial grab): the
+                # blocking period is over - log it once and re-arm the
+                # WARN cycle for any future refusal
+                self.log("hotkey grab recovered")
+                for extra in _LOCK_MASKS:
+                    self._combo_attempts.pop((self._keycode, self._mods | extra), None)
+                self._refuse_warned = False
+            self._was_healthy = healthy_after
+        except Exception:
+            pass  # a display closing under stop() must not kill the loop
 
     def _resolve_cancel(self) -> str:
         """Config value -> keysym name. None/"" mean the macOS default
@@ -169,7 +290,12 @@ class HotkeyListener:
         self._keycode = self._keycode_for(resolve_keysym(self.key))
         if not self._keycode:
             raise HotkeyError(f"key '{self.key}' has no keycode on this keymap")
-        self._grab(self._keycode)
+        self._sync_hotkey_grab()  # grab + record per-combo health
+        if not self.hotkey_grabbed:
+            # another client holds some combos; retries start immediately in
+            # _run(), but the listener's cap-WARN stays quiet here - the
+            # daemon owns the startup WARN + notification for this moment
+            self._refuse_warned = True
         # cancel acts ONLY while recording (macOS overlay-up semantics)
         cancel = self._resolve_cancel()
         self._cancel_keycode = self._keycode_for(resolve_keysym(cancel)) \
@@ -212,6 +338,7 @@ class HotkeyListener:
             self.mode = "toggle"  # push-to-talk needs a non-modifier key
         try:
             while not self._stop_flag.is_set():
+                self._sync_hotkey_grab()  # re-take refused combos (~10 ms)
                 self._sync_cancel_grab()
                 if d.pending_events() == 0:
                     self._stop_flag.wait(0.01)  # poll: responsive to grabs/stop
@@ -245,6 +372,8 @@ class HotkeyListener:
         grabbed only while recording (macOS parity: Escape dismisses the
         overlay and discards, and does nothing when idle)."""
         self._want_cancel = bool(active)
+        if not active:
+            self._refuse_warned = False  # new idle period may WARN again
 
     def _sync_cancel_grab(self) -> None:
         if self._display is None or not self._cancel_keycode:
@@ -255,9 +384,10 @@ class HotkeyListener:
         try:
             if self._want_cancel:
                 self._grab(self._cancel_keycode)
+                self._settle_grabs(self._cancel_keycode)
             else:
                 root.ungrab_key(self._cancel_keycode, X.AnyModifier)
-            self._display.sync()
+                self._display.sync()
             self._cancel_grabbed = self._want_cancel
             self._cancel_grab_warned = False
         except Exception:
@@ -267,8 +397,8 @@ class HotkeyListener:
             # once per recording so a dead cancel key is log-diagnosable.
             if self._want_cancel and not self._cancel_grab_warned:
                 self._cancel_grab_warned = True
-                print(f"[sayit-ermano] WARN cancel key '{self.cancel_key}' "
-                      "grab failed - held by another client?", flush=True)
+                self.log(f"WARN cancel key '{self.cancel_key}' "
+                         "grab failed - held by another client?")
             # best-effort; cancel via CLI still works
 
     def _hotkey_still_down(self, d, keycode: int) -> bool:
@@ -319,7 +449,8 @@ class HotkeyListener:
             if self._escape_keycode:
                 try:
                     root.grab_key(self._escape_keycode, X.AnyModifier, False,
-                                  X.GrabModeAsync, X.GrabModeAsync)
+                                  X.GrabModeAsync, X.GrabModeAsync,
+                                  onerror=lambda _e, _r: 1)  # swallow refusals
                 except Exception:
                     pass  # best-effort: cancel via CLI still works
             try:
@@ -350,6 +481,7 @@ class HotkeyListener:
                         pass
                 try:
                     self._grab(keycode)  # re-arm the dictation hotkey
+                    self._settle_grabs(keycode)
                 except Exception:
                     pass
         finally:

@@ -6,7 +6,7 @@ pre-release). These are the Linux-native tools in the same space:
 
 | Tool | Engine | AI polish | Spoken punctuation | Global hotkey | Insertion | X11/Wayland |
 |---|---|---|---|---|---|---|
-| **FluidVoiceLinux (this)** | faster-whisper / whisper.cpp / torch (CUDA) | ✅ verbatim FluidVoice prompt, any OpenAI-compatible endpoint | ✅ full "literal" rule table w/ contexts | ✅ XGrabKey (toggle+hold) | typed + paste w/ restore | X11 now / Wayland roadmap |
+| **SayItErmano (this, formerly FluidVoiceLinux)** | faster-whisper / whisper.cpp / torch (CUDA) | ✅ verbatim FluidVoice prompt, any OpenAI-compatible endpoint | ✅ full "literal" rule table w/ contexts | ✅ XGrabKey (toggle+hold) | typed + paste w/ restore | X11 now / Wayland roadmap |
 | [Handy](https://github.com/cjpais/handy) | whisper.cpp | ➖ | ➖ | ✅ | paste | both (Tauri) |
 | [Vocalinux](https://github.com/jatinkrmalik/vocalinux) | whisper.cpp/VOSK + Silero VAD | ➖ | ➖ | ✅ | xdotool/ydotool | both |
 | [nerd-dictation](https://github.com/ideasman42/nerd-dictation) | VOSK | ➖ | ➖ | ✅ (its own) | xdotool | X11 (community Wayland) |

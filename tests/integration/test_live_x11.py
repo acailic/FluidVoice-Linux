@@ -217,6 +217,57 @@ class TestHoldPassthroughLive:
 
 
 @requires_x11
+class TestHotkeyGrabRecovery:
+    """Self-healing (live incident 2026-09-04): a second client holding
+    the hotkey must leave the daemon loudly blocked (WARN + status false),
+    and within ~1 s of that holder letting go the grab is re-taken and
+    actually fires - no restart."""
+
+    def test_conflicting_holder_blocks_then_recovery(self,
+                                                     daemon_blocked_hotkey,
+                                                     tmp_path):
+        log_path = tmp_path / "daemon.log"
+        # 1. blocked: the daemon must never sit "ready" while keyless
+        deadline = time.monotonic() + 2
+        status = {}
+        while time.monotonic() < deadline:
+            status = control.request("status")
+            if status.get("hotkey_grabbed") is False:
+                break
+            time.sleep(0.1)
+        assert status.get("hotkey_grabbed") is False, \
+            "status should report the refused grab"
+        log_text = log_path.read_text()
+        assert "grab refused - held by another client, will retry" in log_text
+
+        # 2. the conflicting holder lets go -> grab re-taken (expected well
+        #    under 1 s on the ~10 ms retry cadence; slack for slow CI)
+        daemon_blocked_hotkey.release()
+        deadline = time.monotonic() + 5
+        recovered = False
+        while time.monotonic() < deadline:
+            if control.request("status").get("hotkey_grabbed") is True:
+                recovered = True
+                break
+            time.sleep(0.05)
+        assert recovered, "grab not re-taken within 5 s of holder release"
+        assert "hotkey grab recovered" in log_path.read_text()
+
+        # 3. the re-taken grab actually fires (not just believed healthy)
+        subprocess.run(["xdotool", "key", "F9"], check=True, timeout=5)
+        recording = False
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if control.request("status")["recording"]:
+                recording = True
+                break
+            time.sleep(0.1)
+        assert recording, "re-taken F9 grab did not toggle recording"
+        control.request("cancel")
+        assert control.request("status")["recording"] is False
+
+
+@requires_x11
 class TestSelectionHoldLive:
     """SelectionHold against the live X server: a background reader is
     observed by wait_read from a NEW window (the paste-verify signal), and

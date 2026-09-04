@@ -255,7 +255,9 @@ class _FakeRoot:
         self.escape_grab_error = None
 
     def grab_key(self, keycode, modifiers, owner_events, pointer_mode,
-                 keyboard_mode):
+                 keyboard_mode, onerror=None):
+        # onerror: the listener now routes every grab through a per-request
+        # handler (BadAccess never raises through the real grab_key)
         if self.escape_grab_error and keycode == self._display.escape_keycode:
             raise self.escape_grab_error
         self._display.calls.append(f"grab_key:{keycode}:{modifiers}")

@@ -1,6 +1,6 @@
 # SayItErmano — Status Ledger
 
-Last updated: 2026-09-04 · v0.5.0 · **826 automated tests** (794 offline + 32 integration)
+Last updated: 2026-09-04 · v0.5.0 · **854 automated tests** (821 offline + 33 integration)
 · verified against upstream `altic-dev/FluidVoice` by a 5-agent audit
 (prompts/AI, punctuation rules, daemon pipeline, models, security).
 
@@ -35,7 +35,7 @@ matrix + upstream changelog with its refresh loop).
   download + hot-swap; upstream `whisper-*` names accepted.
 - Text insertion: `xdotool type` (clipboard-free) or clipboard paste with
   restore; auto-paste for long texts; leading-dash guard; clipboard fallback;
-  **insertion hardening**: for the duration of a paste FluidVoice owns the
+  **insertion hardening**: for the duration of a paste SayItErmano owns the
   CLIPBOARD selection (python-xlib) and serves it with clipboard-manager
   hygiene markers, the paste keystroke is verified by observing the target
   read the selection (a 0.25 s quiesce first lets the eager managers reveal
@@ -89,7 +89,7 @@ matrix + upstream changelog with its refresh loop).
   a 3 s `pactl list short sources` diff poll notices connects/disconnects;
   when the configured microphone disappears and a priority pattern matches
   (case-insensitive substring, first pattern wins — e.g. `bluez` for a
-  Bluetooth headset), FluidVoice switches and notifies. Switching never
+  Bluetooth headset), SayItErmano switches and notifies. Switching never
   happens mid-dictation (the take finishes on the still-open stream, the
   fallback lands ≤ 3 s after it), `device = ""` (auto) is never overridden,
   and a working device is never preemptively upgraded. Same reselect runs
@@ -177,7 +177,22 @@ matrix + upstream changelog with its refresh loop).
 - systemd user unit (DISPLAY/XAUTHORITY aware, tied to graphical session);
   installer generates it with real paths and enables it.
 - Python 3.11+, GPLv3, published as the `linux` branch of the fork
-  `acailic/FluidVoice`.
+  `acailic/SayItErmano`.
+- Hotkey-grab self-healing (P1, `docs/research/2026-09-04-product-proposals.md`):
+  every listener grab carries a per-request python-xlib `onerror` (a truthy
+  return suppresses the printing default handler — BadAccess never raises
+  through `grab_key`), so a refused combo (stale deb autostart, WM rebind,
+  any second grab holder) becomes per-combo data, not stderr noise; the
+  poll loop re-attempts missing combos every ~10 ms tick (zero X traffic
+  when healthy, WARN-capped), startup logs WARN + desktop notification
+  when refused, and health is surfaced in `status` (`hotkey_grabbed`),
+  the tray tooltip (` - hotkey blocked!`, live-refreshed on flip) and
+  `doctor` (ok / BLOCKED / disabled / unknown). Live-verified 2026-09-04:
+  deliberate conflicting holder of all 8 F9 lock-mask combos → daemon
+  WARNed + `hotkey_grabbed:false`, and within one tick of the holder
+  closing its connection the grab was re-taken, `status` flipped true and
+  a synthetic F9 press toggled recording — no restart
+  (`tests/integration/test_live_x11.py::TestHotkeyGrabRecovery`).
 
 ---
 
@@ -286,5 +301,6 @@ c      catalog (v2 English / v3 multilingual, int8) with sha256-verified
 | Socket config actions (get/set-config, select-model) + apply_settings | unit (fake backend factory) + real-daemon socket integration |
 | Mic monitoring (pactl poll/diff/priority matching, daemon auto-switch, tray ordering) | unit (fake pactl runner, stub recorder daemon) |
 | Recorder / insertion / history / backends | stub or subprocess-mock tests |
+| Hotkey grab self-healing (error routing, retry state machine, warn cap, status/tooltip/notify/doctor surfaces) | fake-Display unit tests (no X server) + live X11 conflicting-holder recovery (blocked → WARN → release → re-take → F9 fires) |
 | End-to-end speech | JFK sample through GPU transcription (pytest `-m slow`) |
 | Live hardware loop | mic→GPU transcription via speaker playback; hotkey grab on X11; acoustic JFK transcription verified verbatim |

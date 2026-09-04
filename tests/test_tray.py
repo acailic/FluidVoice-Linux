@@ -101,7 +101,7 @@ class TestMenuModel:
         assert mic["children"][0]["label"] == "Auto (system default)"
         assert mic["children"][0]["kind"] == KIND_CHECK
         assert any(i.get("kind") == KIND_SEPARATOR for i in menu)
-        assert "Quit Fluid Voice" in labels
+        assert "Quit SayItErmano" in labels
 
     def test_set_device_updates_config_and_recorder(self, monkeypatch):
         import copy

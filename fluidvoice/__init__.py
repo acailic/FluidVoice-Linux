@@ -1,4 +1,4 @@
-"""SayItErmano - FluidVoice for Linux.
+"""SayItErmano - FluidVoice behavior ported to Linux.
 
 A community port of altic-dev/FluidVoice (macOS) behavior to Linux:
 global-hotkey dictation -> local speech-to-text -> optional AI polish ->

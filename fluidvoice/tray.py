@@ -464,6 +464,16 @@ class TrayIcon:
             except Exception:
                 pass
 
+    def refresh(self) -> None:
+        """Re-push icon/tooltip/menu from the current state, callable from
+        any thread (applied on the loop thread). Used when hotkey grab
+        health flips so the tooltip's blocked suffix follows recovery live."""
+        if self.active and self._loop is not None:
+            try:
+                self._glib.idle_add(self._apply_state)
+            except Exception:
+                pass
+
     # -- state (thread-safe; applied on the loop thread) ----------------------
 
     def set_recording(self, recording: bool) -> None:

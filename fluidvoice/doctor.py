@@ -125,6 +125,27 @@ def _suggestions_line(cfg: dict) -> str:
             f"({paths.dictionary_suggestions_file()})")
 
 
+def _hotkey_grab_line() -> list[str]:
+    """Last-known hotkey grab state straight from the daemon (the same
+    control-socket query the other daemon checks use). The listener tracks
+    per-combo grab health and retries refused grabs, so doctor reflects
+    the live truth - not a 'ready' that may be keyless."""
+    from . import control
+    try:
+        if not paths.socket_path().exists():
+            raise FileNotFoundError("no control socket")
+        status = control.request("status")
+    except Exception:  # noqa: BLE001 - daemon down / older daemon / timeout
+        return ["  hotkey grab: unknown (daemon down)"]
+    state = status.get("hotkey_grabbed")
+    if state is None:
+        return ["  hotkey grab: disabled (--no-hotkey or older daemon)"]
+    if state is False:
+        return ["  hotkey grab: BLOCKED (held by another client - daemon is "
+                "retrying)"]
+    return ["  hotkey grab: ok"]
+
+
 def run() -> int:
     print(f"SayItErmano v{__version__} doctor\n")
     ok = True
@@ -194,6 +215,7 @@ def run() -> int:
 
     print(f"\ncontrol socket: {paths.socket_path()} "
           f"({'alive' if paths.socket_path().exists() else 'daemon not running'})")
+    print("\n".join(_hotkey_grab_line()))
     if _gtk_available():
         print("settings app: GTK 4 + libadwaita OK (`sayit-ermano app`)")
     else:

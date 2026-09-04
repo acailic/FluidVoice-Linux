@@ -1,4 +1,4 @@
-"""Unix-socket control channel (`fluidvoice toggle|cancel|status`)."""
+"""Unix-socket control channel (`sayit-ermano toggle|cancel|status`)."""
 from __future__ import annotations
 
 import json

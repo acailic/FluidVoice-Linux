@@ -62,20 +62,31 @@ def isolated_env(tmp_path, monkeypatch):
     return cfg
 
 
-def _spawn_and_wait(tmp_path: Path, extra_args: list) -> subprocess.Popen:
+def _spawn_and_wait(tmp_path: Path, extra_args: list,
+                    log_to: Path | None = None) -> subprocess.Popen:
     from fluidvoice import paths
     args = [str(REPO / ".venv/bin/fluidvoice"), "daemon", *extra_args]
-    proc = subprocess.Popen(args, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True,
-                            env={**os.environ})
+    if log_to is not None:
+        # file mode: daemon log() flushes every line, so the file is already
+        # complete without draining a pipe; _stop_daemon skips its rewrite
+        with open(log_to, "w") as out:
+            proc = subprocess.Popen(args, stdout=out, stderr=subprocess.STDOUT,
+                                    text=True, env={**os.environ})
+        proc._fv_log_to_file = True
+    else:
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True,
+                                env={**os.environ})
     socket = paths.socket_path()
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if socket.exists():
             break
         if proc.poll() is not None:
-            (tmp_path / "daemon.log").write_text(proc.stdout.read())
-            raise RuntimeError("daemon died at startup, log in %s" % (tmp_path / "daemon.log"))
+            if not getattr(proc, "_fv_log_to_file", False):
+                (tmp_path / "daemon.log").write_text(proc.stdout.read())
+            raise RuntimeError("daemon died at startup, log in %s"
+                                % (tmp_path / "daemon.log"))
         time.sleep(0.2)
     else:
         proc.terminate()
@@ -90,6 +101,8 @@ def _stop_daemon(proc: subprocess.Popen, tmp_path: Path) -> None:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+    if getattr(proc, "_fv_log_to_file", False):
+        return  # log_to mode: the file was written directly, already complete
     if proc.stdout:
         (tmp_path / "daemon.log").write_text(proc.stdout.read())
 
@@ -118,6 +131,49 @@ def daemon_hold_hotkey(isolated_env, tmp_path):
         isolated_env.read_text().replace('key = "F9"\n', 'key = "F9"\nmode = "hold"\n'))
     proc = _spawn_and_wait(tmp_path, ["--no-sounds"])
     yield proc
+    _stop_daemon(proc, tmp_path)
+
+
+@pytest.fixture()
+def daemon_blocked_hotkey(isolated_env, tmp_path):
+    """A real daemon whose F9 grab is refused by a deliberate conflicting
+    holder: this fixture pre-grabs ALL lock-mask combos of F9 on the root
+    window (the exact masks the daemon will request -> deterministic
+    BadAccess x8), then spawns the daemon logging to a file. Yielded handle:
+    .proc (the daemon) and .release() (drops the conflicting grabs by
+    closing the holder's X connection - X frees its passive grabs)."""
+    from Xlib import X, XK
+    from Xlib.display import Display
+
+    from fluidvoice.hotkey import _LOCK_MASKS
+
+    holder = Display()
+    keycode = holder.keysym_to_keycode(XK.string_to_keysym("F9"))
+    assert keycode, "F9 has no keycode on this keymap"
+    root = holder.screen().root
+    for extra in _LOCK_MASKS:
+        root.grab_key(keycode, extra, False, X.GrabModeAsync, X.GrabModeAsync)
+    holder.sync()
+    proc = _spawn_and_wait(tmp_path, ["--no-sounds"],
+                           log_to=tmp_path / "daemon.log")
+
+    class _Handle:
+        def __init__(self, display, daemon_proc):
+            self._display = display
+            self.proc = daemon_proc
+            self.released = False
+
+        def release(self):
+            if not self.released:
+                self.released = True
+                try:
+                    self._display.close()  # X auto-releases passive grabs
+                except Exception:
+                    pass
+
+    handle = _Handle(holder, proc)
+    yield handle
+    handle.release()
     _stop_daemon(proc, tmp_path)
 
 

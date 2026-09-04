@@ -285,7 +285,7 @@ def build_social():
     d.text(((W - d.textlength(name, font=f_name)) / 2, 350), name,
            font=f_name, fill=(240, 240, 246))
 
-    tag = "FluidVoice for Linux — voice dictation with local AI polish"
+    tag = "SayItErmano — local voice dictation with AI polish"
     f_tag = font(FONT_MED, 33)
     d.text(((W - d.textlength(tag, font=f_tag)) / 2, 470), tag,
            font=f_tag, fill=(178, 178, 192))

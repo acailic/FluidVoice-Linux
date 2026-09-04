@@ -376,7 +376,7 @@ class Daemon:
         import os as _os
         cfg_shown = _os.environ.get("SAYITERMANO_CONFIG") or paths.config_file()
         log("ready - press the hotkey to dictate "
-            f"(or run `fluidvoice toggle`; config: {cfg_shown})")
+            f"(or run `sayit-ermano toggle`; config: {cfg_shown})")
 
         stop = threading.Event()
         signal.signal(signal.SIGTERM, lambda *_: stop.set())
@@ -447,7 +447,7 @@ class Daemon:
              "action": lambda: self._open_settings("/history")},
             {"kind": "item", "label": "Microphone", "children": mics},
             {"kind": "separator"},
-            {"kind": "item", "label": "Quit Fluid Voice",
+            {"kind": "item", "label": "Quit SayItErmano",
              "action": self._quit_gracefully},
         ]
 
@@ -572,7 +572,11 @@ class Daemon:
                 state = "Ready"
         hk = self.cfg["hotkey"].get("key", "")
         hint = f" — {hk} or click to dictate" if hk else ""
-        return f"SayItErmano: {state}{hint}"
+        tip = f"SayItErmano: {state}{hint}"
+        hotkey = self._hotkey  # snapshot: the tray thread reads this too
+        if hotkey is not None and not hotkey.hotkey_grabbed:
+            tip += " - hotkey blocked!"
+        return tip
 
     def _spawn_app(self, *args: str) -> None:
         """Launch the native GTK app in the same interpreter/env as us."""
@@ -646,15 +650,17 @@ class Daemon:
                 on_toggle=self.toggle,
                 on_cancel=self.cancel,
                 cancel_key=hk.get("cancel_key", "Escape"),
-            )
+                log=log,
+                on_grab_change=lambda healthy: self._refresh_tray())
             self._hotkey.start()
             for line in self._hotkey.summary:
                 log(line)
+            self._log_grab_state(self._hotkey, "", hk["key"])
         except HotkeyError as e:
             self._hotkey = None
             log(f"WARN hotkey unavailable: {e}")
             ui.notify("SayItErmano", f"Hotkey unavailable: {e}\n"
-                      "Bind a DE shortcut to `fluidvoice toggle` instead.",
+                      "Bind a DE shortcut to `sayit-ermano toggle` instead.",
                       timeout_ms=8000, enabled=self.cfg["notifications"]["enabled"])
             error = str(e)
         rewrite_key = (hk.get("rewrite_key") or "").strip()
@@ -662,10 +668,11 @@ class Daemon:
             try:
                 self._rewrite_hotkey = HotkeyListener(
                     key=rewrite_key, modifiers=[], mode="toggle",
-                    on_toggle=self.start_rewrite)
+                    on_toggle=self.start_rewrite, log=log)
                 self._rewrite_hotkey.start()
                 for line in self._rewrite_hotkey.summary:
                     log(line)
+                self._log_grab_state(self._rewrite_hotkey, "rewrite ", rewrite_key)
             except HotkeyError as e:
                 self._rewrite_hotkey = None
                 log(f"WARN rewrite hotkey unavailable: {e}")
@@ -677,15 +684,45 @@ class Daemon:
                     key=command_key, modifiers=[], mode="toggle",
                     on_toggle=self._on_command_hotkey,
                     on_cancel=self.cancel_pending_command,
-                    cancel_key=hk.get("cancel_key", "Escape"))
+                    cancel_key=hk.get("cancel_key", "Escape"), log=log)
                 self._command_hotkey.start()
                 for line in self._command_hotkey.summary:
                     log(line)
+                self._log_grab_state(self._command_hotkey, "command ", command_key)
             except HotkeyError as e:
                 self._command_hotkey = None
                 log(f"WARN command hotkey unavailable: {e}")
                 error = error or str(e)
         return error
+
+    def _log_grab_state(self, listener, label: str, key: str) -> None:
+        """Startup honesty: a refused grab (another client already holds
+        the key) must be loud - WARN log + desktop notification - instead
+        of the old silent keyless 'ready'. The listener keeps retrying on
+        its poll cadence and logs 'hotkey grab recovered' itself."""
+        try:
+            healthy = listener.hotkey_grabbed
+        except Exception:
+            return
+        if healthy:
+            return
+        log(f"WARN {label}hotkey '{key}' grab refused - "
+            "held by another client, will retry")
+        ui.notify("SayItErmano",
+                  "Hotkey grab refused — another app holds the key; "
+                  "retrying automatically", timeout_ms=8000,
+                  enabled=self.cfg["notifications"]["enabled"])
+
+    def _refresh_tray(self) -> None:
+        """Push the current state to the tray from the hotkey thread: a
+        grab-health flip must reach the tooltip (' - hotkey blocked!')
+        without waiting for the next recording transition."""
+        tray = self._tray
+        if tray is not None:
+            try:
+                tray.refresh()
+            except Exception:
+                pass
 
     def _restart_hotkey(self) -> None:
         """Re-grab the hotkeys after a settings change (frees the old grabs
@@ -822,6 +859,10 @@ class Daemon:
             return {"ok": True, "recording": self.recording, "busy": self.busy,
                     "backend": self.backend.name if self.backend else None,
                     "version": __version__,
+                    # None = hotkey disabled/--no-hotkey; False = every
+                    # lock-mask combo not held (blocked, daemon retrying)
+                    "hotkey_grabbed": (self._hotkey.hotkey_grabbed
+                                       if self._hotkey is not None else None),
                     "warmup": dict(self.warmup),
                     "active_model": self._active_model_name(),
                     "today": history_mod.today_stats(history_mod.read_all())}

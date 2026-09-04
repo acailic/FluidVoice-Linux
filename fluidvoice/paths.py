@@ -1,4 +1,4 @@
-"""XDG paths used by SayItErmano (FluidVoice for Linux).
+"""XDG paths used by SayItErmano (community Linux port of FluidVoice).
 
 The app's own identity is "sayit-ermano"; directories from a pre-rename
 install (~/.config/fluidvoice, ~/.local/share/fluidvoice, ~/.cache/fluidvoice)

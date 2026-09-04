@@ -19,7 +19,7 @@ LARGE_INPUT_BYTES = 25 * 1024 * 1024
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="sayit-ermano",
-        description="SayItErmano - local voice dictation with AI polish (FluidVoice for Linux)")
+        description="SayItErmano - local voice dictation with AI polish (community Linux port of FluidVoice)")
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="cmd")
 
