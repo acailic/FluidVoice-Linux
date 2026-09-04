@@ -177,6 +177,31 @@ def _language_lines(cfg: dict) -> list[str]:
     return lines
 
 
+def _preview_lines(cfg: dict) -> list[str]:
+    """Live-preview resolution: engine kind, window size, VAD auto-stop."""
+    r = cfg.get("recording", {}) or {}
+    if not r.get("preview_enabled", True):
+        return ["  disabled (recording.preview_enabled = false)"]
+    m = cfg.get("model", {}) or {}
+    backend = str(m.get("backend") or "auto")
+    if r.get("preview_segmented", True):
+        engine = (f"segmented (constant-cost windows, backend '{backend}') "
+                  "- legacy whole-buffer only while the model loads")
+        window = f"{float(r.get('preview_segment_s', 2.0)):g} s window, 50% hop"
+    else:
+        engine = "legacy whole-buffer re-decode (recording.preview_segmented = false)"
+        window = None
+    vad = float(r.get("preview_vad_silence_s", 2.0))
+    lines = [f"  engine: {engine}"]
+    if window:
+        lines.append(f"  windows: {window} (recording.preview_segment_s)")
+    lines.append(
+        f"  vad auto-stop: {vad:g} s trailing silence "
+        "(recording.preview_vad_silence_s; 0 = off)" if vad > 0 else
+        "  vad auto-stop: off (recording.preview_vad_silence_s = 0)")
+    return lines
+
+
 def _insertion_lines(cfg: dict) -> list[str]:
     """Insertion hardening resolution: one line per key."""
     i = cfg.get("insertion", {})
@@ -410,6 +435,10 @@ def run() -> int:
 
     print("\nlanguage resolution:")
     for line in _language_lines(cfg):
+        print(line)
+
+    print("\nlive preview:")
+    for line in _preview_lines(cfg):
         print(line)
 
     print("\nchat/terminal formatting:")

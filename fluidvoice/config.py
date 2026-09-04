@@ -66,6 +66,12 @@ DEFAULTS: dict[str, Any] = {
         "preview_min_audio": 1.0,  # seconds before the first partial
         "preview_bottom_offset": 64,  # pill px above the screen bottom edge
         "preview_overlay_size": "medium",  # pill | small | medium | large (macOS sizes)
+        # Segmented streaming preview: fixed windows (50% hop), one decode
+        # per tick instead of re-decoding the whole take; the trailing-
+        # silence VAD auto-stops the take after vad_silence_s of quiet.
+        "preview_segmented": True,
+        "preview_segment_s": 2.0,      # window length in seconds
+        "preview_vad_silence_s": 2.0,  # 0 disables the auto-stop
         "pause_media": True,  # pause MPRIS players while dictating (resume after)
         # mouse push-to-talk: "button8"/"b8" (6-255; 1-5 refused - they would
         # break the desktop). Empty = off. Independent of hotkey.mode - the
@@ -382,6 +388,8 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
                   "spoken_send_key", "preview_enabled", "preview_mode",
                   "preview_interval", "preview_min_audio",
                   "preview_bottom_offset", "preview_overlay_size",
+                  "preview_segmented", "preview_segment_s",
+                  "preview_vad_silence_s",
                   "pause_media", "push_to_talk_button",
                   "push_to_talk_modifiers"],
     "model": ["backend", "name", "device", "compute", "whispercpp_model",
@@ -477,6 +485,8 @@ SETTING_RANGES: dict[tuple[str, str], Any] = {
     ("recording", "preview_interval"): ("float", (0.3, 10.0)),
     ("recording", "preview_min_audio"): ("float", (0.3, 10.0)),
     ("recording", "preview_bottom_offset"): ("int", (0, 400)),
+    ("recording", "preview_segment_s"): ("float", (1.0, 6.0)),
+    ("recording", "preview_vad_silence_s"): ("float", (0.0, 10.0)),
     ("hotkey", "key"): ("str", 64),
     ("hotkey", "cancel_key"): ("str", 64),
     ("hotkey", "rewrite_key"): ("str", 64),
@@ -517,6 +527,7 @@ SETTING_ENUMS: dict[tuple[str, str], set] = {
 SETTING_BOOLS = {("general", "copy_to_clipboard"), ("general", "tray_enabled"),
                  ("general", "pause_when_locked"),
                  ("recording", "pause_media"), ("recording", "preview_enabled"),
+                 ("recording", "preview_segmented"),
                  ("recording", "skip_silent"),
                  ("recording", "spoken_send_enabled"),
                  ("processing", "remove_filler_words"),
@@ -548,6 +559,8 @@ ALLOWED_SETTINGS: dict[str, set] = {
                   "preview_enabled", "preview_mode", "preview_interval",
                   "preview_min_audio", "preview_bottom_offset",
                   "preview_overlay_size", "pause_media",
+                  "preview_segmented", "preview_segment_s",
+                  "preview_vad_silence_s",
                   "push_to_talk_button", "push_to_talk_modifiers"},
     "model": {"backend", "name", "device", "compute", "whispercpp_model",
               "eager_warmup", "languages"},

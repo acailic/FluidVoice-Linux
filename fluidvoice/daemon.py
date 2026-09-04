@@ -1273,18 +1273,20 @@ class Daemon:
             t.start()
 
     def _start_preview(self, raw_path) -> None:
-        """Live transcription preview while recording (best-effort)."""
+        """Live transcription preview while recording (best-effort).
+
+        Segmented engine first (constant per-tick decode cost, streaming
+        preview on every backend, trailing-silence VAD auto-stop); the
+        legacy whole-buffer engine stays as the faster-whisper fallback."""
         rcfg = self.cfg["recording"]
         if not rcfg.get("preview_enabled", True) or raw_path is None:
             return
         try:
             from .overlay import FluidOverlay
             from .preview import (NotifyPreview, PreviewEngine,
-                                  faster_whisper_transcriber)
-            backend = self.backend
-            model = getattr(backend, "_model", None)
-            if backend is None or model is None:
-                return  # not a ready faster-whisper backend
+                                  SegmentedPreviewEngine,
+                                  faster_whisper_transcriber,
+                                  preview_transcriber)
             mode = rcfg.get("preview_mode", "auto")
             if mode in ("auto", "overlay"):
                 # FluidOverlay itself falls back to notifications when the
@@ -1300,17 +1302,38 @@ class Daemon:
             else:
                 display = NotifyPreview()
                 actual = "notify"
+            language = backends.effective_language(self.cfg, self.backend)
+            engine = None
+            kind = None
+            if rcfg.get("preview_segmented", True):
+                made = preview_transcriber(self.cfg, self.backend, language)
+                if made is not None:
+                    transcriber, bname = made
+                    engine = SegmentedPreviewEngine(
+                        Path(raw_path), transcriber, display.show,
+                        interval=float(rcfg.get("preview_interval", 1.2)),
+                        min_audio=float(rcfg.get("preview_min_audio", 1.0)),
+                        segment_s=float(rcfg.get("preview_segment_s", 2.0)),
+                        vad_silence_s=float(
+                            rcfg.get("preview_vad_silence_s", 2.0)),
+                        on_silence=self._vad_auto_stop)
+                    kind = f"segmented/{bname}"
+            if engine is None:
+                model = getattr(self.backend, "_model", None)
+                if self.backend is None or model is None:
+                    display.close()
+                    return  # not a ready faster-whisper backend
+                engine = PreviewEngine(
+                    Path(raw_path),
+                    faster_whisper_transcriber(model, language),
+                    display.show,
+                    interval=float(rcfg.get("preview_interval", 1.2)),
+                    min_audio=float(rcfg.get("preview_min_audio", 1.0)))
+                kind = "legacy/faster-whisper"
             display.start()
-            engine = PreviewEngine(
-                Path(raw_path),
-                faster_whisper_transcriber(
-                    model, backends.effective_language(self.cfg, self.backend)),
-                display.show,
-                interval=float(rcfg.get("preview_interval", 1.2)),
-                min_audio=float(rcfg.get("preview_min_audio", 1.0)))
             engine.start()
             self._preview = (engine, display)
-            log(f"preview started ({actual})")
+            log(f"preview started ({actual}, {kind})")
         except Exception as e:
             log(f"WARN preview unavailable: {e}")
 
@@ -1320,6 +1343,14 @@ class Daemon:
             return
         engine, display = preview
         engine.stop()
+        stats = getattr(engine, "stats", None)
+        if stats and stats.get("decodes"):
+            mean_ms = stats["decode_ms_sum"] / stats["decodes"]
+            lag = max(0.0, stats["audio_s"] - stats["covered_s"])
+            log(f"preview stats: decodes={stats['decodes']} "
+                f"commits={stats['commits']} mean_decode_ms={mean_ms:.0f} "
+                f"ticks={stats['ticks']} audio_s={stats['audio_s']:.1f} "
+                f"lag_s={lag:.1f}")
         if finishing:
             # Keep the pill up in its processing state (flat bars + shimmer,
             # like the Mac) until the final text is inserted.
@@ -1327,6 +1358,16 @@ class Daemon:
             self._closing_display = display
         else:
             display.close()
+
+    def _vad_auto_stop(self) -> None:
+        # Trailing-silence VAD (segmented preview thread): same finish path
+        # as the max-duration watchdog, just a different reason. Re-check
+        # under the lock - the user may have stopped the take just now.
+        with self._lock:
+            if not self.recording:
+                return
+            log("trailing silence detected, stopping")
+            self._stop_recording_locked()
 
     def _close_closing_display(self) -> None:
         display, self._closing_display = self._closing_display, None

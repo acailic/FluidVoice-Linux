@@ -1470,6 +1470,17 @@ class SettingsWindow(Adw.PreferencesWindow):
         preview.add(self._spin("recording", "preview_min_audio",
                                "First partial after (s)", 0.3, 10.0, 0.1,
                                digits=1))
+        preview.add(self._switch("recording", "preview_segmented",
+                                 "Streaming (segmented)",
+                                 "constant-cost windows instead of whole-take "
+                                 "re-decode; all backends"))
+        preview.add(self._spin("recording", "preview_segment_s",
+                               "Segment window (s)", 1.0, 6.0, 0.5, digits=1))
+        preview.add(self._spin("recording", "preview_vad_silence_s",
+                               "Stop after silence (s)", 0.0, 10.0, 0.5,
+                               digits=1,
+                               subtitle="0 keeps the old behavior (hotkey "
+                               "stops every take)"))
         page.add(preview)
 
         polish = Adw.PreferencesGroup(title="Text polish")
