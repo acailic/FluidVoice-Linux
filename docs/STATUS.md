@@ -268,6 +268,12 @@ matrix + upstream changelog with its refresh loop).
 | D6: token-level difflib over the whole edit, not upstream's anchored in-range character diff expanded to token boundaries | our edit boundary is one whole History entry (a single edit event), so anchoring is trivially satisfied |
 | D7: no config toggle (upstream `automaticDictionaryLearningEnabled`, default on) | upstream's toggle gates an interruptive overlay; a passive list that only records what the user already typed needs no gate — `history.save = false` disables the signal at the source |
 | D1 corollary: suggest-only, unlike the Windows port which silently auto-adds (windows-v0.0.8: "FluidVoice adds it to your custom dictionary, with a card to undo") | silent dictionary growth degrades trust (research §5) — nothing enters without an explicit Accept |
+| C1: EVERY command needs the hotkey confirm; upstream auto-executes non-destructive commands when its confirm setting is on (`CommandModeService.swift:439-456`: destructive → `PendingCommand`, non-destructive → run) | voice → shell is the highest-blast-radius path in the port; one uniform gate beats two mental models, and the request's safety brief mandates confirm-first |
+| C2: destructive commands need a TWO-press strong confirm (armed state, amber ⚠ pill, refreshed hint, restarted watchdog); upstream has no stronger step beyond the ordinary confirm | port addition (no upstream equivalent): a mis-heard `rm -rf` under a single stray keypress is the worst failure mode command mode has |
+| C3: follow-up context is in-memory, per focused app, last-5 results within a `command.context_window_s` (300 s) window, cleared by the spoken phrase "new session"; upstream persists a 30-chat global store in UserDefaults and replays the whole conversation (`ChatHistoryStore.swift:93-110`, `:261-266`, `CommandModeService.swift:790+`) | per the v2 request: voice runs stay cheap to reason about, a daemon restart starts cold, nothing about shell usage is persisted beyond the history rows that already exist |
+| C4: the tool schema travels in our strict-JSON text protocol (`{"tool_calls": [...]}` replies); upstream sends a native OpenAI `tools` array with `tool_choice: "auto"` (`CommandModeService.swift:868`, `LLMClient.swift:329-333`) | keeps the single transport every other mode uses (works with any chat-completions endpoint incl. local Ollama without tool-calling support); the schema SHAPE is ported, the wire format is not |
+| C5: a reply may propose a SET of tool calls, all presented sequentially and each individually confirmed before the next executes; upstream parses multi-call arrays but consumes `toolCalls.first` alone (`CommandModeService.swift:953-954`) and silently drops undecodable calls (`LLMClient.swift:847-865`) — we reject undecodable calls loudly (raw text shown, run cancelled) | one voice run = one confirmed command set (no autonomous chaining), and a half-parsed proposal must never look like success |
+| C6: an empty/non-string `command` argument is a parse error; upstream tolerates it (`getString("command") ?? ""` would run `zsh -c ""`, `CommandModeService.swift:955`) | executing an empty shell is always a protocol failure; failing loudly at parse time is strictly safer |
 | Mouse PTT release detection is XI2 raw-event-driven, not button-state polling | core XQueryPointer's CARD16 mask only carries buttons 1–5 — the canonical thumb buttons (8/9) are invisible to it; XI2 RawButtonRelease is grab-independent and non-consuming (needs XI ≥ 2.1, negotiated as 2.2 directly because python-xlib hardcodes 2.0 and live Xorg then withholds release events — setup refuses to start below 2.1 rather than never fire) |
 | Mouse PTT buttons 1–5 refused outright (config validation) | a primary/wheel button PTT would swallow every click/scroll while armed — breaking the desktop; the doctor/WARN surfaces explain it |
 | Suspend is treated as locked (PrepareForSleep flips the same gate) | a suspended screen with a live dictation is exactly the bug pause_when_locked fixes |
@@ -329,11 +335,15 @@ c      catalog (v2 English / v3 multilingual, int8) with sha256-verified
       doctor resolution report.
 
 ### Later
-- [x] Command mode **v1 shipped**: dedicated `hotkey.command_key`, strict-JSON
-      one-command-at-a-time agent loop over the configured AI endpoint, pill
-      awaiting-confirmation state, Escape cancel + confirm timeout, per-command
-      history entries. (Native tool_calls, chat persistence, multi-tool schema
-      stay later.)
+- [x] Command mode **v2 shipped**: upstream tool schema in the strict-JSON
+      `tool_calls` protocol (per-arg validation, one-command-per-call sets,
+      all confirmed sequentially), the destructive-command list ported
+      verbatim + `command.destructive_patterns` user additions behind a
+      two-press strong confirm, per-app follow-up context (last 5 results,
+      300 s window, spoken "new session" clear), History Commands view with
+      collapsible output + Copy + confirm-gated Re-run, doctor line. (Native
+      `tool_calls` wire format and persistent chat sessions across daemon
+      restarts stay upstream-only — see the C1-C6 divergences.)
 - [ ] GAAV + continuous-dictation formatting (needs caret text via AT-SPI).
 - [ ] Slash-command/mention literal formatting + terminal autocomplete spacing.
 - [x] **Insertion hardening** — DONE: paste verify-then-restore (selection

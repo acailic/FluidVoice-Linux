@@ -101,6 +101,35 @@ def _formatting_lines(cfg: dict) -> list[str]:
     ]
 
 
+def _command_mode_lines(cfg: dict) -> list[str]:
+    """Command mode v2 resolution: AI readiness, tool registry size,
+    the destructive-pattern counts (built-in port + user additions), and
+    the follow-up context window."""
+    from . import command as command_mod
+    ready = command_mod.command_mode_ready(cfg)
+    ai_line = (f"  ai: not configured ({ready})" if ready else
+               f"  ai: ready (model {cfg.get('ai', {}).get('model')})")
+    tools = command_mod.TOOL_REGISTRY
+    tool_names = ", ".join(sorted(tools))
+    built_in = (len(command_mod.DESTRUCTIVE_PREFIXES)
+                + len(command_mod.DESTRUCTIVE_PATTERNS))
+    user = (cfg.get("command", {}).get("destructive_patterns") or [])
+    window = float((cfg.get("command", {}) or {}).get(
+        "context_window_s", 300.0))
+    ctx_line = ("  context window: disabled (command.context_window_s = 0)"
+                if window <= 0 else
+                f"  context window: {window:g} s "
+                f"(last {command_mod.CommandContextStore().max_entries} "
+                "results per app, in-memory only)")
+    return [
+        ai_line,
+        f"  tools: {len(tools)} ({tool_names})",
+        f"  destructive patterns: {built_in} built-in + {len(user)} user "
+        f"(command.destructive_patterns)",
+        ctx_line,
+    ]
+
+
 def _models_cache_lines(cfg: dict) -> list[str]:
     """Models-cache report: one line per cached entry (with the ACTIVE
     marker), a total, and a note that the legacy huggingface/hub location
@@ -385,6 +414,10 @@ def run() -> int:
 
     print("\nchat/terminal formatting:")
     for line in _formatting_lines(cfg):
+        print(line)
+
+    print("\ncommand mode:")
+    for line in _command_mode_lines(cfg):
         print(line)
 
     print("\ninsertion hardening:")

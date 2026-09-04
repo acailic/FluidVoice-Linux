@@ -201,6 +201,59 @@ class TestDoctorInsertionLines:
         assert "insertion hardening:" in out
 
 
+class TestDoctorCommandModeLines:
+    """_command_mode_lines (v2): ai readiness, tool count, destructive
+    pattern counts (28 built-in + n user), context window."""
+
+    def test_not_configured_by_default(self):
+        from fluidvoice import doctor
+        lines = doctor._command_mode_lines(DEFAULTS)
+        assert len(lines) == 4
+        assert any("ai: not configured" in l for l in lines)
+
+    def test_ready_line_with_model(self):
+        import copy
+        from fluidvoice import doctor
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["ai"].update(enabled=True, base_url="http://x:11434/v1",
+                          model="qwen3:8b")
+        lines = doctor._command_mode_lines(cfg)
+        assert any("ai: ready (model qwen3:8b)" in l for l in lines)
+
+    def test_tool_count_from_registry(self):
+        from fluidvoice import doctor
+        lines = doctor._command_mode_lines(DEFAULTS)
+        assert any("tools: 1 (execute_terminal_command)" in l
+                   for l in lines)
+
+    def test_pattern_counts_builtin_plus_user(self):
+        import copy
+        from fluidvoice import doctor
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["command"]["destructive_patterns"] = ["git push", "shutdown"]
+        lines = doctor._command_mode_lines(cfg)
+        assert any("destructive patterns: 28 built-in + 2 user" in l
+                   for l in lines)
+
+    def test_context_window_default_and_disabled(self):
+        import copy
+        from fluidvoice import doctor
+        lines = doctor._command_mode_lines(DEFAULTS)
+        assert any("context window: 300 s" in l
+                   and "last 5 results per app" in l for l in lines)
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["command"]["context_window_s"] = 0.0
+        lines = doctor._command_mode_lines(cfg)
+        assert any("context window: disabled" in l
+                   and "context_window_s = 0" in l for l in lines)
+
+    def test_run_prints_section(self, capsys):
+        from fluidvoice import doctor
+        doctor.run()
+        out = capsys.readouterr().out
+        assert "command mode:" in out
+
+
 class TestDoctorSuggestionsLine:
     """_suggestions_line: pending count + decisions-file path."""
 

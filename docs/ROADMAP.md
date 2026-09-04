@@ -68,8 +68,14 @@ sources. Everything below is a known, classified gap — see
       flight loads and anything outside the cache root).
 
 ## Later
-- [ ] Command mode (voice → terminal agent) with the upstream tool schema and
-      destructive-command confirmation list.
+- [x] Command mode (voice → terminal agent) with the upstream tool schema and
+      destructive-command confirmation list — DONE (v2): tool schema ported
+      into the strict-JSON `tool_calls` protocol with per-arg validation;
+      upstream's 28-rule destructive classification ported verbatim +
+      `command.destructive_patterns` user additions; every command confirmed,
+      destructive ones through a two-press strong confirm; per-app follow-up
+      context (last 5 / 300 s / "new session"); History Commands view with
+      confirm-gated Re-run.
 - [ ] GAAV mode + continuous-dictation formatting (smart caps from the text
       before the caret; needs preceding-text capture via AT-SPI).
 - [x] Slash-command/mention literal formatting (`/ fix`, `@ John Smith` in
