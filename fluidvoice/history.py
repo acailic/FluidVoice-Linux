@@ -190,6 +190,74 @@ def clear(drop_audio: bool = True) -> int:
     return _rewrite(lambda e: False, drop_audio=False)
 
 
+# -- test-row scrub -------------------------------------------------------------
+
+# The exact command strings the suite's command-mode tests wrote into live
+# history before tests/conftest.py isolated the XDG dirs (768 rows measured
+# 2026-09-04 on the daily-driver machine: "true 1"/"true 2"/"exit 3"/
+# "echo hi" x192 each, from tests/test_command.py's default-appender
+# tests). Exact set membership ONLY — never a pattern: a near-miss like
+# "true 1 && rm -rf /" is a real command and must be kept.
+TEST_COMMANDS = frozenset({"true 1", "true 2", "exit 3", "echo hi"})
+
+
+def is_test_entry(entry: dict) -> bool:
+    """Command-mode row whose command string is one of the literal test
+    commands (see TEST_COMMANDS)."""
+    return (entry.get("mode") == "command"
+            and entry.get("command") in TEST_COMMANDS)
+
+
+def count_test_entries(entries: list[dict] | None = None) -> int:
+    """Rows matching the test fingerprint (whole file when entries is None)."""
+    if entries is None:
+        entries = read_all()
+    return sum(1 for e in entries if is_test_entry(e))
+
+
+def test_command_counts(entries: list[dict] | None = None) -> dict[str, int]:
+    """Per-command counts of test-fingerprint rows, for the dry-run report
+    (the operator vetoes each command string before applying)."""
+    if entries is None:
+        entries = read_all()
+    out: dict[str, int] = {}
+    for e in entries:
+        if is_test_entry(e):
+            out[e["command"]] = out.get(e["command"], 0) + 1
+    return out
+
+
+def scrub_test_entries(*, apply: bool = False) -> tuple[int, int, Path | None]:
+    """Remove test-fingerprint rows from history.jsonl.
+
+    Dry-run by default (zero writes). With apply=True and at least one match,
+    writes a backup copy beside the file FIRST (history.jsonl.bak-<ts>),
+    then atomically rewrites it with only the kept rows (order preserved,
+    same JSONL serialization as _rewrite). Returns (removed, total,
+    backup_path); backup_path is None unless a backup was written. A missing
+    file is (0, 0, None). Command rows carry no audio, so audio is never
+    touched; the MAX_ENTRIES cap logic is not involved.
+    """
+    hpath = paths.history_file()
+    if not hpath.exists():
+        return (0, 0, None)
+    entries = read_all()
+    kept_lines: list[str] = []
+    removed = 0
+    for entry in entries:
+        if is_test_entry(entry):
+            removed += 1
+        else:
+            kept_lines.append(json.dumps(entry, ensure_ascii=False))
+    if not apply or removed == 0:
+        return (removed, len(entries), None)
+    backup = hpath.with_name(
+        hpath.name + ".bak-" + time.strftime("%Y%m%d-%H%M%S"))
+    shutil.copy2(hpath, backup)
+    _atomic_write(hpath, kept_lines)
+    return (removed, len(entries), backup)
+
+
 # -- today-usage stats ---------------------------------------------------------
 
 def today_stats(entries: list[dict], now: float | None = None) -> dict:

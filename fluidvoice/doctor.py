@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from pathlib import Path
 
 from . import __version__, backends, paths
@@ -125,6 +126,29 @@ def _suggestions_line(cfg: dict) -> str:
             f"({paths.dictionary_suggestions_file()})")
 
 
+def _history_lines() -> list[str]:
+    """History sanity report: entry count, file size, oldest entry date,
+    and a warning when test-fingerprint rows (the pre-isolation suite
+    pollution) are still present."""
+    from . import history, paths
+    hpath = paths.history_file()
+    lines = [f"history: {hpath}"]
+    if not hpath.exists():
+        return lines + ["  entries: 0 (no history yet), test rows: 0"]
+    entries = history.read_all()
+    size_kb = hpath.stat().st_size / 1024
+    oldest = next((e.get("ts") for e in entries if e.get("ts")), None)
+    when = (time.strftime("%Y-%m-%d %H:%M", time.localtime(oldest))
+            if oldest else "-")
+    test_rows = history.count_test_entries(entries)
+    lines.append(f"  entries: {len(entries)} ({size_kb:.1f} KB), "
+                 f"oldest: {when}, test rows: {test_rows}")
+    if test_rows:
+        lines.append(f"  WARNING: {test_rows} test-fingerprint rows present "
+                     f"\u2014 run `sayit-ermano history --scrub-tests`")
+    return lines
+
+
 def _hotkey_grab_line() -> list[str]:
     """Last-known hotkey grab state straight from the daemon (the same
     control-socket query the other daemon checks use). The listener tracks
@@ -161,7 +185,8 @@ def run() -> int:
         ok = False
 
     print(f"\nconfig: {paths.config_file()} ({'exists' if paths.config_file().exists() else 'not created yet - defaults in use'})")
-    print(f"history: {paths.history_file()}")
+    for line in _history_lines():
+        print(line)
     try:
         cfg = load_config(paths.config_file())
     except Exception:

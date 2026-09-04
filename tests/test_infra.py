@@ -242,6 +242,65 @@ class TestDoctorSuggestionsLine:
         assert "dictionary learning:" in out
 
 
+class TestDoctorHistoryLines:
+    """_history_lines: entry count, size, oldest date, test-row warning."""
+
+    @pytest.fixture(autouse=True)
+    def _paths(self, tmp_path, monkeypatch):
+        from fluidvoice import paths
+        self.hpath = tmp_path / "history.jsonl"
+        monkeypatch.setattr(paths, "history_file", lambda: self.hpath)
+        return self.hpath
+
+    def _seed(self, entries):
+        self.hpath.parent.mkdir(parents=True, exist_ok=True)
+        self.hpath.write_text("".join(json.dumps(e) + "\n" for e in entries),
+                              encoding="utf-8")
+
+    def test_seeded_history_counts_size_oldest_warning(self):
+        import time
+        from fluidvoice import doctor
+        self._seed([
+            {"ts": 1000000000.0, "text": "old"},
+            {"ts": 1000000600.0, "mode": "command", "command": "true 1",
+             "purpose": "p"},
+            {"ts": 1000000700.0, "mode": "command", "command": "exit 3",
+             "purpose": "fail"},
+        ])
+        lines = doctor._history_lines()
+        assert lines[0] == f"history: {self.hpath}"
+        detail = lines[1]
+        assert "entries: 3" in detail
+        assert "KB)" in detail and float(detail.split("(")[1].split(" KB")[0]) > 0
+        expected_oldest = time.strftime("%Y-%m-%d %H:%M",
+                                         time.localtime(1000000000.0))
+        assert f"oldest: {expected_oldest}" in detail
+        assert "test rows: 2" in detail
+        assert any("WARNING: 2 test-fingerprint rows" in l
+                   and "--scrub-tests" in l for l in lines[2:])
+
+    def test_zero_test_rows_no_warning(self):
+        from fluidvoice import doctor
+        self._seed([{"ts": 1000000000.0, "text": "only real"}])
+        lines = doctor._history_lines()
+        assert "entries: 1" in lines[1] and "test rows: 0" in lines[1]
+        assert not any("WARNING" in l for l in lines)
+
+    def test_missing_file(self):
+        from fluidvoice import doctor
+        lines = doctor._history_lines()
+        assert lines[0] == f"history: {self.hpath}"
+        assert "entries: 0 (no history yet), test rows: 0" in lines[1]
+        assert not any("WARNING" in l for l in lines)
+
+    def test_run_prints_history_section(self, capsys):
+        from fluidvoice import doctor
+        self._seed([{"ts": 1000000000.0, "text": "real"}])
+        doctor.run()
+        out = capsys.readouterr().out
+        assert "history:" in out and "test rows: 0" in out
+
+
 class TestControlSocket:
     def test_round_trip(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr(control.paths, "socket_path", lambda: tmp_path / "s.sock")

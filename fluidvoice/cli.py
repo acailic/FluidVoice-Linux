@@ -54,6 +54,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-n", type=int, default=10)
     p.add_argument("--export", type=Path, metavar="PATH.zip",
                    help="write history + retained audio to a zip")
+    p.add_argument("--scrub-tests", action="store_true",
+                   help="remove test-suite fingerprint rows "
+                        "(dry-run by default; shows a per-command breakdown)")
+    p.add_argument("--yes", action="store_true",
+                   help="with --scrub-tests: apply the removal "
+                        "(a history.jsonl.bak-<ts> backup is written first)")
 
     p = sub.add_parser("config", help="show/init the config file")
     p.add_argument("action", nargs="?", default="path", choices=["path", "init", "print"])
@@ -169,6 +175,23 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"error: {e}", file=sys.stderr)
                 return 1
             print(f"exported {n} entries to {args.export}")
+            return 0
+        if args.scrub_tests:
+            counts = history.test_command_counts()
+            for cmd in sorted(counts):
+                print(f"  {cmd}: {counts[cmd]}")
+            removed = sum(counts.values())
+            if args.yes:
+                removed, total, backup = history.scrub_test_entries(apply=True)
+                if backup is not None:
+                    print(f"removed {removed} entries (kept {total - removed}), "
+                          f"backup: {backup}")
+                else:
+                    print(f"nothing to remove ({total} entries, 0 test rows)")
+            else:
+                total = len(history.read_all())
+                print(f"would remove {removed} of {total} entries "
+                      f"\u2014 run with --yes to apply")
             return 0
         for entry in history.tail(args.n):
             ts = entry.get("ts")
