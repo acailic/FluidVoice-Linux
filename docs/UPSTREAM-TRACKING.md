@@ -62,7 +62,7 @@ new that Linux doesn't have" a one-command answer.
 | Cohere Transcribe | ➖ | non-goal — CoreML-only artifacts, no Linux runtime |
 | Fluid Intelligence (bundled local AI) | ➖ | closed-source private runtime; substitute: any OpenAI-compatible endpoint incl. local Ollama ✅ |
 | Cloud AI polish (OpenAI/Groq/custom) | ✅ | byte-identical prompts, audit-verified request params |
-| Live streaming preview overlay | ✅ | Mac-style pill overlay port (solid-black stadium, gloss border, live-audio waveform, streaming text, processing shimmer), ~1.2 s rolling cadence; notch ➖ N/A |
+| Live streaming preview overlay | ✅ | Mac-style pill overlay port (solid-black stadium, gloss border, live-audio waveform, streaming text, processing shimmer); segmented engine since 2026-09-05: constant-cost 2 s windows, all four backends, trailing-silence VAD auto-stop (upstream's "detect silence and finish" without the countdown UI); notch ➖ N/A |
 | Write/Rewrite mode (⌥R) | ✅ | `hotkey.rewrite_key`, verbatim upstream edit prompts |
 | Spoken punctuation ("literal …") | ✅ | full live rule table (108 aliases, spacing semantics) |
 | Filler removal + custom dictionary | ✅ | same defaults and matching semantics |
@@ -136,7 +136,7 @@ new that Linux doesn't have" a one-command answer.
 | Upstream change | Linux | Notes |
 |---|---|---|
 | Parakeet up to 2× faster on Apple silicon | ➖ | CoreML; our perf work comes with v0.4 ONNX |
-| First-word latency ~350 ms → <100 ms | 🚧 | we roll at ~1.2 s; tighter with streaming engines |
+| First-word latency ~350 ms → <100 ms | 🚧 | recorder start probe pinned <0.25 s by regression test (2026-09-05, reviews rider); preview first partial at ~1 s (min_audio + one window) — below that needs true streaming engines |
 | Temporary pasteboard writes hidden from clipboard managers | ✅ | X11 hygiene markers (CopyQ live-verified); GNOME-shell-extension residual in STATUS |
 | Fix: AirPods media controls stopped while enabled | ⏳ | roadmap: MPRIS media pause |
 

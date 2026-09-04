@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import struct
+import threading
 import time
 from pathlib import Path
 
@@ -320,3 +321,184 @@ class TestPreviewTranscriberFactory:
         not_ready = type("B", (), {"name": "whisper.cpp", "binary": None,
                                    "model": None})()
         assert preview_transcriber({}, not_ready, "en") is None
+
+
+class TestFirstWordCapture:
+    """Rider (reviews sweep): upstream v1.6.6 dropped opening words (#751);
+    v1.6.7 pinned trigger-to-audio under 100 ms. Pin Recorder.start()'s
+    probe contract: return as soon as PCM flows (never a fixed sleep), and
+    never trim the head of the stream."""
+
+    def _patch_recorder(self, monkeypatch, write_pcm: bool):
+        from fluidvoice import recorder as rec
+
+        class FastProc:
+            def __init__(self, args):
+                if write_pcm:
+                    Path(args[-1]).write_bytes(pcm(1.0))
+                self.stderr = None
+
+            def poll(self):
+                return None
+
+            def send_signal(self, s):
+                pass
+
+            def wait(self, timeout=None):
+                return 0
+
+        monkeypatch.setattr(rec.shutil, "which", lambda n: "/usr/bin/pw-record")
+        monkeypatch.setattr(rec.subprocess, "Popen", lambda a, **k: FastProc(a))
+        monkeypatch.setattr(
+            rec.threading, "Thread",
+            lambda target=None, args=(), daemon=None, name=None:
+            type("T", (), {"start": lambda s: None})())
+
+    def test_start_returns_promptly_when_pcm_flows(self, tmp_path, monkeypatch):
+        self._patch_recorder(monkeypatch, write_pcm=True)
+        from fluidvoice import recorder as rec
+        r = rec.Recorder()
+        t0 = time.monotonic()
+        r.start(tmp_path / "utt.wav")
+        elapsed = time.monotonic() - t0
+        # probe breaks at the first 2048-byte partial write, far below the
+        # 0.35 s probe ceiling - a refactor back to a fixed sleep fails this
+        assert elapsed < 0.25
+        # the whole stream from process start is preserved (no head trim)
+        assert r.raw_path.stat().st_size >= 32000
+        r.stop()
+
+    def test_start_bounded_wait_when_no_pcm(self, tmp_path, monkeypatch):
+        self._patch_recorder(monkeypatch, write_pcm=False)
+        from fluidvoice import recorder as rec
+        r = rec.Recorder()
+        t0 = time.monotonic()
+        r.start(tmp_path / "silent.wav")  # live-but-silent: no crash, bounded
+        elapsed = time.monotonic() - t0
+        assert rec.PROBE_SECONDS - 0.05 <= elapsed <= rec.PROBE_SECONDS + 0.3
+        r.stop()
+
+
+class TestDoctorPreviewLines:
+    def test_defaults_show_segmented_engine(self):
+        import copy
+        from fluidvoice import doctor
+        from fluidvoice.config import DEFAULTS
+        lines = doctor._preview_lines(copy.deepcopy(DEFAULTS))
+        assert any("segmented" in l and "backend 'auto'" in l for l in lines)
+        assert any("2 s window, 50% hop" in l for l in lines)
+        assert any("vad auto-stop: 2 s trailing silence" in l for l in lines)
+
+    def test_disabled_and_off_variants(self):
+        import copy
+        from fluidvoice import doctor
+        from fluidvoice.config import DEFAULTS
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["recording"]["preview_enabled"] = False
+        assert doctor._preview_lines(cfg) == [
+            "  disabled (recording.preview_enabled = false)"]
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["recording"]["preview_segmented"] = False
+        assert any("legacy whole-buffer" in l
+                   for l in doctor._preview_lines(cfg))
+        cfg["recording"]["preview_vad_silence_s"] = 0.0
+        assert any("vad auto-stop: off" in l for l in doctor._preview_lines(cfg))
+
+
+class TestDaemonWiring:
+    """_start_preview picks the segmented engine; _vad_auto_stop reuses the
+    max-duration stop path under the lock."""
+
+    @staticmethod
+    def make_backend(text="final text"):
+        class Model:
+            def transcribe(self, *a, **k):
+                return [type("S", (), {"text": text})()], None
+
+        def transcribe(self, wav_path, language=None):
+            return {"text": text, "language": "en", "duration": 1.0}
+
+        return type("B", (), {"name": "faster-whisper", "_model": Model(),
+                              "transcribe": transcribe})()
+
+    def make_daemon(self, tmp_path, monkeypatch, recorder):
+        import copy
+        from fluidvoice import daemon as dm
+        from fluidvoice.config import DEFAULTS
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["recording"]["preview_mode"] = "notify"
+        cfg["recording"]["preview_interval"] = 0.05
+        cfg["recording"]["preview_min_audio"] = 0.3
+        cfg["recording"]["preview_vad_silence_s"] = 0.0
+        monkeypatch.setattr(dm.ui, "notify", lambda *a, **k: None)
+        monkeypatch.setattr(dm.ui, "play_sound", lambda *a, **k: None)
+        monkeypatch.setattr(dm.history_mod.paths, "history_file",
+                            lambda: tmp_path / "h.jsonl")
+        monkeypatch.setattr(dm.insertion, "insert_text",
+                            lambda text, cfg, on_notice=None: "typed")
+        monkeypatch.setattr(dm.insertion, "active_window_class",
+                            lambda: "TestApp")
+        backend = self.make_backend()
+        d = dm.Daemon(cfg, recorder=recorder,
+                      backend_factory=lambda c: backend,
+                      use_hotkey=False, use_sounds=False)
+        d.backend = backend
+        return d
+
+    def test_start_preview_uses_segmented_engine(self, tmp_path, monkeypatch):
+        shown = []
+        monkeypatch.setattr(
+            "fluidvoice.preview.NotifyPreview.show",
+            lambda self, text: shown.append(text))
+        monkeypatch.setattr("fluidvoice.preview.NotifyPreview.close",
+                            lambda self: None)
+
+        class Rec:
+            pass
+
+        d = self.make_daemon(tmp_path, monkeypatch, Rec())
+        raw = tmp_path / "utt.raw"
+        raw.write_bytes(pcm(1.0))
+        d._start_preview(raw)
+        eng, disp = d._preview
+        assert isinstance(eng, SegmentedPreviewEngine)
+        assert eng.vad_silence_s == 0.0  # threaded off in this test
+        deadline = time.monotonic() + 3
+        while not shown and time.monotonic() < deadline:
+            raw.write_bytes(pcm(1.0))  # keep "recording"
+            time.sleep(0.02)
+        eng.stop(timeout=2)
+        assert shown  # partial text reached the display
+
+    def test_vad_auto_stop_stops_the_take(self, tmp_path, monkeypatch):
+        import wave as wave_mod
+        from fluidvoice import daemon as dm
+
+        class Rec:
+            def __init__(self):
+                self.stopped = 0
+                self.path = None
+                self.raw_path = None
+
+            def stop(self):
+                self.stopped += 1
+                p = tmp_path / "utt.wav"
+                with wave_mod.open(str(p), "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
+                    wf.writeframes(pcm(1.0))
+                self.path = p
+                return p
+
+            def cancel(self):
+                self.stopped += 1
+
+        rec = Rec()
+        d = self.make_daemon(tmp_path, monkeypatch, rec)
+        d.recording = True
+        d._watchdog = threading.Timer(999.0, d._auto_stop)
+        d._vad_auto_stop()
+        assert rec.stopped == 1
+        assert d.recording is False
+        d._watchdog and d._watchdog.cancel()

@@ -80,3 +80,31 @@ class TestRealPreviewEngine:
             time.sleep(0.4)
         engine.stop(timeout=5)
         assert "americans" in engine.last_text.lower()
+
+    def test_segmented_engine_constant_cost_real_model(
+            self, jfk_wav, tmp_path, shared_backend):
+        """Segmented engine on the real model: same transcript reach as the
+        legacy engine, commit windows decoded exactly once."""
+        import wave
+        from fluidvoice.preview import SegmentedPreviewEngine, preview_transcriber
+        with wave.open(str(jfk_wav)) as wf:
+            pcm = wf.readframes(wf.getnframes())
+        made = preview_transcriber({"model": {"backend": "faster-whisper"}},
+                                   shared_backend, "en")
+        assert made is not None
+        transcriber, bname = made
+        assert bname == "faster-whisper"
+        engine = SegmentedPreviewEngine(
+            tmp_path / "seg.raw", transcriber, lambda t: None,
+            interval=0.8, min_audio=1.0, segment_s=2.0)
+        engine.start()
+        chunk = int(0.4 * 32000)
+        for i in range(0, len(pcm), chunk):
+            with open(engine.raw_path, "ab") as fh:
+                fh.write(pcm[i:i + chunk])
+            time.sleep(0.4)
+        engine.stop(timeout=5)
+        assert "americans" in engine.last_text.lower()
+        # ~11 s JFK clip: commits are 2 s each, decoded once apiece
+        assert engine.stats["commits"] >= 3
+        assert engine.stats["decodes"] <= engine.stats["commits"] * 2 + 4

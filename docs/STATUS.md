@@ -73,11 +73,24 @@ matrix + upstream changelog with its refresh loop).
 - Stop/start SFX (the original GPLv3 upstream sounds), desktop notifications,
   history JSONL (5000-entry cap, efficient tail, optional audio retention
   with GB budget), `paste-last`, optional copy-to-clipboard.
-- **Live streaming preview** (upstream's headline UX): raw-PCM capture is
-  transcribed on a rolling basis while you speak (~1.2 s cadence) and shown
-  in a Mac-style pill overlay (bottom-center stadium: live-audio waveform,
-  streaming text, processing shimmer; override-redirect, no focus stealing)
-  or a replaceable notification; the model is pre-warmed at daemon start.
+- **Live streaming preview** (upstream's headline UX): SEGMENTED engine
+  (2026-09-05, spec a3f7c21e) — fixed 2 s windows at 50% hop, exactly one
+  decode per tick (constant cost regardless of take length — the
+  re-transcribe-whole-buffer failure upstream hit as bug #833 cannot
+  happen), committed text is stable while the fresh tail re-renders with
+  word-overlap dedupe, preview works on ALL four backends
+  (faster-whisper/whisper-torch pass rolling initial_prompt; whisper.cpp
+  and parakeet get preview for the first time), and an energy+zero-crossing
+  VAD auto-stops the take after 2.0 s of trailing silence once real speech
+  was committed (0 disables; all-silence takes keep the first-PCM
+  watchdog path). Shown in a Mac-style pill overlay (bottom-center stadium:
+  live-audio waveform, streaming text, processing shimmer;
+  override-redirect, no focus stealing) or a replaceable notification; the
+  model is pre-warmed at daemon start. Per-take `preview stats:` log line
+  (decodes/commits/mean decode ms/lag) makes the cadence measurable;
+  Recorder.start()'s first-word probe contract is pinned by regression
+  test (upstream #751 class). `recording.preview_segmented=false` reverts
+  to the legacy whole-buffer engine.
 - **Rewrite/Write mode** (`hotkey.rewrite_key`): captures the selection,
   dictates the instruction, runs the verbatim upstream edit prompts
   (context block, follow-up history, temperature 0.7), types the result.

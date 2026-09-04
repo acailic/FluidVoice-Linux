@@ -5,9 +5,15 @@ sources. Everything below is a known, classified gap — see
 [BEHAVIOR-SPEC.md](BEHAVIOR-SPEC.md) for the upstream references.
 
 ## v0.2 — daily-driver polish
-- [x] Live streaming preview — DONE: raw-PCM recording + rolling
-      faster-whisper passes + X11 overlay window (or replaceable
-      notifications); verified end-to-end with pixel-level screenshot proof.
+- [x] Live streaming preview — DONE: raw-PCM recording + X11 overlay
+      window (or replaceable notifications); verified end-to-end with
+      pixel-level screenshot proof. 2026-09-05 upgrade: SEGMENTED engine
+      (spec a3f7c21e) — fixed 2 s windows / 50% hop, one decode per tick
+      (constant cost, upstream bug #833 class impossible), committed
+      segments stable, tail-dedupe, preview on ALL four backends
+      (faster-whisper, whisper-torch, whisper.cpp, parakeet), trailing-
+      silence VAD auto-stop (2.0 s default), per-take preview stats line,
+      first-word-capture probe contract pinned by test (reviews rider).
 - [x] Rewrite/Write mode — DONE: `hotkey.rewrite_key` captures the selection
       (clipboard snapshot + restore), dictates the instruction, runs it
       through the verbatim edit prompts (temperature 0.7, context block,
@@ -28,7 +34,9 @@ sources. Everything below is a known, classified gap — see
 - [x] Escape cancels aborted hold recordings (not stop-and-transcribe).
 - [x] Spoken-send — DONE (final-transcript variant): trailing phrase strips
       and presses enter/shift+enter/ctrl+enter after typing; "literal send
-      it" escape honored. Immediate-stop countdown needs streaming VAD.
+      it" escape honored. Immediate-stop countdown UI: still future — the
+      energy+ZCR trailing-silence VAD foundation landed with the segmented
+      preview engine (2026-09-05); only the countdown UI remains.
 - [x] Paste-last-transcription — DONE: `fluidvoice paste-last` + socket action.
 - [x] Per-app prompt sets — DONE: `ai.per_app_prompts` rules matched against
       the recording-start app (Settings → AI → Per-app prompts, per-rule
@@ -49,8 +57,10 @@ sources. Everything below is a known, classified gap — see
 ## v0.4 — model variety
 - [ ] Parakeet TDT v2/v3 on GPU via NeMo / ONNX Runtime — upstream's default
       model and the highest-value Linux addition.
-- [ ] Parakeet Realtime / Nemotron 3.5 streaming (NeMo/Riva) — unlocks the
-      live-preview feature with real streaming cadences.
+- [ ] Parakeet Realtime / Nemotron 3.5 streaming (NeMo/Riva) — the
+      segmented preview already streams window-wise on every backend
+      (2026-09-05); true streaming engines would tighten first-word latency
+      below the ~1 s preview floor.
 - [x] whisper.cpp GGUF auto-download — DONE: curated `ggerganov/whisper.cpp`
       ggml catalog in Settings → Models with streaming one-click download
       (progress, atomic rename), name-or-path `model.whispercpp_model`, and a
