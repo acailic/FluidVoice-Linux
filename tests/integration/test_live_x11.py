@@ -214,6 +214,55 @@ class TestHoldPassthroughLive:
 
 
 @requires_x11
+class TestSelectionHoldLive:
+    """SelectionHold against the live X server: a background reader is
+    observed by wait_read from a NEW window (the paste-verify signal), and
+    hygiene markers keep the flashed dictation out of CopyQ's history
+    (live-verified during planning; re-verifiable here)."""
+
+    def test_background_reader_observed(self):
+        from fluidvoice.selection import SelectionHold
+        hold = SelectionHold(b"FV-ITEST-DICTATION-5d2c")
+        try:
+            known = hold.quiesce(0.3)  # eager managers reveal themselves
+            # non-blocking on purpose: the hold's event loop must never
+            # block on a subprocess (probe deadlock lesson)
+            proc = subprocess.Popen(["xclip", "-o", "-selection", "clipboard"],
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL)
+            reader = hold.wait_read(1.0, exclude_windows=known)
+            out, _ = proc.communicate(timeout=5)
+            assert reader is not None, "the xclip -o read was not observed"
+            assert reader not in known  # a window quiesce did not see
+            assert out == b"FV-ITEST-DICTATION-5d2c"
+        finally:
+            hold.release()
+
+    def test_hygiene_markers_suppress_copyq_history(self):
+        import shutil
+        if not shutil.which("copyq"):
+            pytest.skip("copyq not installed")
+        before = subprocess.run(["copyq", "read", "0"], capture_output=True,
+                                timeout=5)
+        if before.returncode != 0:
+            pytest.skip("copyq not running")
+        from fluidvoice.insertion import HYGIENE_TARGETS
+        from fluidvoice.selection import SelectionHold
+        hold = SelectionHold(b"FV-ITEST-SECRET-MARKER-8a1f", HYGIENE_TARGETS)
+        try:
+            # CopyQ's monitor re-checks at ~+0.03/+0.09/+0.25/+0.60 s after
+            # an ownership change - quiesce long enough to cover the ladder
+            hold.quiesce(0.7)
+        finally:
+            hold.release()
+        time.sleep(0.2)
+        after = subprocess.run(["copyq", "read", "0"], capture_output=True,
+                               timeout=5)
+        assert b"FV-ITEST-SECRET-MARKER-8a1f" not in after.stdout
+        assert after.stdout == before.stdout  # top of history unchanged
+
+
+@requires_x11
 class TestOverlayLive:
     def test_pill_overlay_renders_text_pixels(self):
         from PIL import Image

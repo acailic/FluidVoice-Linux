@@ -75,7 +75,6 @@ class DictationPipeline:
                  logger: Callable[[str], None] = log):
         self.cfg = cfg
         self.backend = backend
-        self.inserter = inserter
         self.polisher = polisher  # None -> build AIClient lazily when enabled
         self.history_writer = history_writer  # None -> history_mod.append
         self.key_presser = key_presser or self._press_send_key
@@ -84,8 +83,20 @@ class DictationPipeline:
         self._pending_send_key: str | None = None
         self._pending_send_skipped_terminal = False
         self.notify = lambda title, body="": ui.notify(title, body, enabled=cfg["notifications"]["enabled"])
+        if inserter is insertion.insert_text:
+            # default path: surface paste-fallback / clipboard-restore
+            # warnings from insertion through the existing notification path
+            # (no pill/UI change; stub inserters in tests stay untouched)
+            notify = self.notify
 
-    # -- steps ------------------------------------------------------------
+            def _inserter(text: str, c: dict) -> str:
+                return insertion.insert_text(text, c, on_notice=notify)
+
+            self.inserter = _inserter
+        else:
+            self.inserter = inserter
+
+    # -- steps -------------------------------------------------------------
 
     def _should_skip(self, wav: Path, duration: float) -> bool:
         if not self.cfg["recording"].get("skip_silent"):

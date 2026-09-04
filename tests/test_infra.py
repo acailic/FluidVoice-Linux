@@ -166,6 +166,41 @@ class TestDoctorFormattingLines:
         assert any("terminal_apps (0)" in l and "none" in l for l in lines)
 
 
+class TestDoctorInsertionLines:
+    """_insertion_lines: one resolution line per hardening key."""
+
+    def test_defaults_on(self):
+        from fluidvoice import doctor
+        lines = doctor._insertion_lines(DEFAULTS)
+        assert len(lines) == 2
+        assert any("paste verification: on" in l
+                   and "insertion.verify_paste" in l for l in lines)
+        assert any("terminal paste key: ctrl+shift+v" in l
+                   and "insertion.terminal_paste_key" in l for l in lines)
+
+    def test_disabled_shows_off(self):
+        import copy
+        from fluidvoice import doctor
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["insertion"]["verify_paste"] = False
+        lines = doctor._insertion_lines(cfg)
+        assert any("paste verification: off" in l for l in lines)
+
+    def test_custom_key_shown(self):
+        import copy
+        from fluidvoice import doctor
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["insertion"]["terminal_paste_key"] = "ctrl+alt+v"
+        lines = doctor._insertion_lines(cfg)
+        assert any("terminal paste key: ctrl+alt+v" in l for l in lines)
+
+    def test_run_prints_section(self, capsys):
+        from fluidvoice import doctor
+        doctor.run()
+        out = capsys.readouterr().out
+        assert "insertion hardening:" in out
+
+
 class TestControlSocket:
     def test_round_trip(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr(control.paths, "socket_path", lambda: tmp_path / "s.sock")

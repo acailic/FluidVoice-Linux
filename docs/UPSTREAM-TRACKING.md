@@ -137,7 +137,7 @@ new that Linux doesn't have" a one-command answer.
 |---|---|---|
 | Parakeet up to 2× faster on Apple silicon | ➖ | CoreML; our perf work comes with v0.4 ONNX |
 | First-word latency ~350 ms → <100 ms | 🚧 | we roll at ~1.2 s; tighter with streaming engines |
-| Temporary pasteboard writes hidden from clipboard managers | ⏳ | we restore the clipboard; transient marks are on the roadmap |
+| Temporary pasteboard writes hidden from clipboard managers | ✅ | X11 hygiene markers (CopyQ live-verified); GNOME-shell-extension residual in STATUS |
 | Fix: AirPods media controls stopped while enabled | ⏳ | roadmap: MPRIS media pause |
 
 ### v1.6.6 (2026-07-31)
@@ -152,7 +152,7 @@ new that Linux doesn't have" a one-command answer.
 
 | Upstream change | Linux | Notes |
 |---|---|---|
-| Reliable pasting in Ghostty/tmux/terminals | ⏳ | roadmap: insertion hardening (paste verification, quirks) |
+| Reliable pasting in Ghostty/tmux/terminals | ✅ | verify-then-restore + `ctrl+shift+v` in `general.terminal_apps`; ghostty untested locally |
 | Experimental recording path (now opt-in) | ➖ | macOS capture stack |
 
 ### v1.6.4 (2026-07-14)

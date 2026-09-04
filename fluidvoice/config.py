@@ -105,6 +105,12 @@ DEFAULTS: dict[str, Any] = {
         "type_delay_ms": 8,
         "paste_threshold_chars": 1200,  # longer texts use clipboard paste
         "terminal_autocomplete_space": True,  # one trailing space in terminals
+        # Verify the paste landed (selection read) before restoring the
+        # clipboard; false = legacy fixed-delay restore
+        "verify_paste": True,
+        # Keystroke used to paste in terminal apps (general.terminal_apps);
+        # X11 terminals need ctrl+shift+v
+        "terminal_paste_key": "ctrl+shift+v",
     },
     "sounds": {
         "enabled": True,
@@ -251,6 +257,12 @@ paste_threshold_chars = 1200
 # One trailing space after typed insertions in terminal apps (general.
 # terminal_apps) so the shell's autocomplete commits the last token
 terminal_autocomplete_space = true
+# Verify the paste landed (selection read by the target) before restoring
+# the clipboard; false = legacy fixed-delay restore
+verify_paste = true
+# Keystroke used to paste in terminal apps (general.terminal_apps); X11
+# terminals pass ctrl+v through to the app, they need ctrl+shift+v
+terminal_paste_key = "ctrl+shift+v"
 
 [sounds]
 enabled = true
@@ -315,7 +327,8 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
     "ai": ["enabled", "base_url", "model", "api_key", "api_key_env", "temperature",
            "timeout_seconds", "max_retries", "per_app_prompts"],
     "insertion": ["mode", "type_delay_ms", "paste_threshold_chars",
-                  "terminal_autocomplete_space"],
+                  "terminal_autocomplete_space", "verify_paste",
+                  "terminal_paste_key"],
     "sounds": ["enabled", "volume"],
     "notifications": ["enabled"],
     "history": ["save", "save_audio", "audio_budget_gb"],
@@ -400,6 +413,7 @@ SETTING_RANGES: dict[tuple[str, str], Any] = {
     ("ai", "timeout_seconds"): ("float", (1, 3600)),
     ("insertion", "type_delay_ms"): ("int", (0, 1000)),
     ("insertion", "paste_threshold_chars"): ("int", (1, 1_000_000)),
+    ("insertion", "terminal_paste_key"): ("str", 32),
     ("sounds", "volume"): ("float", (0.0, 1.0)),
     ("history", "audio_budget_gb"): ("float", (0.0, 1024.0)),
 }
@@ -429,6 +443,7 @@ SETTING_BOOLS = {("general", "copy_to_clipboard"), ("general", "tray_enabled"),
                  ("notifications", "enabled"),
                  ("history", "save"), ("history", "save_audio"),
                  ("insertion", "terminal_autocomplete_space"),
+                 ("insertion", "verify_paste"),
                  ("model", "eager_warmup")}
 # list-valued pass-through keys the UI owns
 SETTING_LISTS = (("processing", "filler_words"), ("processing", "dictionary"),
@@ -454,7 +469,8 @@ ALLOWED_SETTINGS: dict[str, set] = {
     "ai": {"enabled", "base_url", "model", "api_key_env", "temperature",
            "timeout_seconds", "max_retries", "per_app_prompts"},
     "insertion": {"mode", "type_delay_ms", "paste_threshold_chars",
-                  "terminal_autocomplete_space"},
+                  "terminal_autocomplete_space", "verify_paste",
+                  "terminal_paste_key"},
     "sounds": {"enabled", "volume"},
     "notifications": {"enabled"},
     "history": {"save", "save_audio", "audio_budget_gb"},

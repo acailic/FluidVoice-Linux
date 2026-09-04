@@ -292,6 +292,58 @@ class TestNewFormattingKeys:
         assert loaded["insertion"]["terminal_autocomplete_space"] is False
 
 
+class TestInsertionHardeningKeys:
+    """insertion.verify_paste + insertion.terminal_paste_key."""
+
+    def test_defaults(self, cfg):
+        assert cfg["insertion"]["verify_paste"] is True
+        assert cfg["insertion"]["terminal_paste_key"] == "ctrl+shift+v"
+
+    def test_defaults_documented_in_template(self):
+        for key in ("verify_paste", "terminal_paste_key"):
+            assert key in TEMPLATE
+
+    def test_verify_paste_bool_accepted_and_rejected(self, cfg):
+        changed, rejected = apply_settings(
+            cfg, {"insertion": {"verify_paste": False}})
+        assert rejected == [] and cfg["insertion"]["verify_paste"] is False
+        _, rejected = apply_settings(
+            cfg, {"insertion": {"verify_paste": "false"}})
+        assert rejected == ["insertion.verify_paste"]
+
+    @pytest.mark.parametrize("key", ["ctrl+shift+v", "ctrl+v"])
+    def test_terminal_paste_key_accepted(self, cfg, key):
+        changed, rejected = apply_settings(
+            cfg, {"insertion": {"terminal_paste_key": key}})
+        assert rejected == []
+        assert cfg["insertion"]["terminal_paste_key"] == key
+        if key != DEFAULTS["insertion"]["terminal_paste_key"]:
+            assert "insertion.terminal_paste_key" in changed
+
+    @pytest.mark.parametrize("bad", [
+        42,                   # not a str
+        True,                 # not a str
+        "",                   # empty
+        "x" * 33,             # over the 32-char bound
+        "-ctrl+v",            # leading dash (option injection)
+    ])
+    def test_terminal_paste_key_rejects_bad_values(self, cfg, bad):
+        _, rejected = apply_settings(
+            cfg, {"insertion": {"terminal_paste_key": bad}})
+        assert rejected == ["insertion.terminal_paste_key"]
+
+    def test_save_whitelist_roundtrip(self, tmp_path, monkeypatch):
+        from fluidvoice import paths as p
+        monkeypatch.setattr(p, "config_file", lambda: tmp_path / "c.toml")
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["insertion"].update(verify_paste=False,
+                                 terminal_paste_key="ctrl+v")
+        save_config(cfg)
+        loaded = load_config(tmp_path / "c.toml")
+        assert loaded["insertion"]["verify_paste"] is False
+        assert loaded["insertion"]["terminal_paste_key"] == "ctrl+v"
+
+
 class TestCommandSettings:
     """Command mode keys: hotkey.command_key + the [command] section."""
 

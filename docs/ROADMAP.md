@@ -69,9 +69,14 @@ sources. Everything below is a known, classified gap — see
       (`insertion.terminal_autocomplete_space`) and the spoken-send terminal
       blocklist. Upstream's spoken forms (`slash fix`, `at sign John`) stay
       tracked in UPSTREAM-TRACKING.
-- [ ] Insertion hardening: paste-verification before clipboard restore,
+- [x] Insertion hardening: paste-verification before clipboard restore,
       transient marks so clipboard managers ignore dictation, per-app paste
-      quirks (terminals), AT-SPI insertion fallback.
+      quirks (terminals) — DONE: verify-then-restore paste (selection
+      ownership + read observation; unverified pastes fall back to typed
+      insertion with a notification), clipboard-manager hygiene markers
+      (CopyQ 7.1.0 live-verified; the GNOME-shell-extension residual is
+      documented in STATUS.md), terminal `ctrl+shift+v` paste key, both
+      config keys + doctor lines. AT-SPI insertion fallback stays later.
 - [x] Input-device monitoring / Bluetooth auto-switch — DONE: mic priority
       list (`recording.mic_priority`) + a 3 s pactl source diff poll that
       switches to the first priority match when the configured mic vanishes

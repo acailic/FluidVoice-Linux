@@ -185,6 +185,23 @@ class TestPipeline:
         assert out["strategy"] == "clipboard-fallback"
         assert fallback == ["help me"]
 
+    def test_paste_notices_flow_through_notifications(self, tmp_path, cfg,
+                                                     quiet_ui, monkeypatch):
+        # default-inserter path: DictationPipeline wraps insert_text with
+        # on_notice -> the existing notification path (no UI change)
+        def fake_paste(text, *, key="ctrl+v", verify=True, on_notice=None):
+            if on_notice is not None:
+                on_notice("Paste did not land - typing instead")
+            raise InsertError("paste not verified: target did not read")
+
+        monkeypatch.setattr(dm.insertion, "insert_paste", fake_paste)
+        monkeypatch.setattr(dm.insertion, "copy_to_clipboard", lambda t: None)
+        cfg["insertion"]["mode"] = "paste"
+        _, out = self._run(tmp_path, cfg, StubBackend("hello there"))
+        assert out["strategy"] == "clipboard-fallback"
+        assert any("Paste did not land" in (t + b)
+                   for t, b in quiet_ui["notify"])
+
     def test_history_disabled(self, tmp_path, cfg, quiet_ui):
         cfg["history"]["save"] = False
         writer = []

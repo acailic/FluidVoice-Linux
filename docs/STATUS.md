@@ -1,6 +1,6 @@
 # SayItErmano — Status Ledger
 
-Last updated: 2026-09-04 · v0.4.0 · **558 automated tests** (527 offline + 31 integration)
+Last updated: 2026-09-04 · v0.4.0 · **774 automated tests** (742 offline + 32 integration)
 · verified against upstream `altic-dev/FluidVoice` by a 5-agent audit
 (prompts/AI, punctuation rules, daemon pipeline, models, security).
 
@@ -34,7 +34,39 @@ matrix + upstream changelog with its refresh loop).
   tiny→large-v3-turbo (auto: small on GPU / base on CPU), background
   download + hot-swap; upstream `whisper-*` names accepted.
 - Text insertion: `xdotool type` (clipboard-free) or clipboard paste with
-  restore; auto-paste for long texts; leading-dash guard; clipboard fallback.
+  restore; auto-paste for long texts; leading-dash guard; clipboard fallback;
+  **insertion hardening**: for the duration of a paste FluidVoice owns the
+  CLIPBOARD selection (python-xlib) and serves it with clipboard-manager
+  hygiene markers, the paste keystroke is verified by observing the target
+  read the selection (a 0.25 s quiesce first lets the eager managers reveal
+  their windows; 0.6 s cap), and only then is the previous clipboard
+  restored — read-back checked, one retry, warning notification on mismatch;
+  an unverified paste raises and auto-mode falls back to typed insertion
+  with a notification; X11 terminals paste with `ctrl+shift+v`
+  (`insertion.terminal_paste_key`, matched via the shared
+  `general.terminal_apps` key — `ctrl+v` is passed through to the app in
+  terminals; live matrix: gnome-terminal, kitty, alacritty, bare and under
+  tmux); `insertion.verify_paste = false` restores the legacy fixed-delay
+  behavior; `fluidvoice doctor` reports both keys.
+  Insertion-hardening residuals (live-observed, GNOME 46 X11, CopyQ 7.1.0):
+  - CopyQ suppression verified live: with `application/x-copyq-secret` /
+    `application/x-copyq-hidden` advertised and served, `copyq read 0` is
+    unchanged after a marker-tagged hold (the item is silently discarded);
+    `x-kde-passwordManagerHint = secret` is also served for
+    Klipper/GPaste/KeePassXC semantics, but this CopyQ build does NOT honor
+    it (probe-verified: the monitor never fetches the atom — a
+    build-without-KGuiAddons quirk).
+  - The mutter/gnome-shell selection proxy (used by the enabled
+    clipboard-indicator GNOME extension) reads flashed text eagerly at
+    ownership change regardless of any marker — a shell-extension history
+    capture remains possible; no X11-side fix short of not pasting.
+  - GPaste and Klipper are untested (not running on this machine).
+  - ghostty is not installed locally — `ctrl+shift+v` there is expected but
+    untested; it is covered by the `general.terminal_apps` list.
+  - Verify-timeout edge: an app whose own window already read the clipboard
+    during the quiesce (its id is in the exclusion set) and whose paste
+    lands without a fresh selection read would time out (0.6 s) and re-type
+    — the documented trade-off of the read-based verify signal.
 - Watchdogs: max-duration auto-stop (300 s), **first-PCM timeout** (2 s —
   muted/wrong mic fails fast), silence gate (opt-in, upstream thresholds),
   sub-1s zero padding, stale `/tmp` sweep at startup, auto-stop race guard.
@@ -196,8 +228,15 @@ c      catalog (v2 English / v3 multilingual, int8) with sha256-verified
       stay later.)
 - [ ] GAAV + continuous-dictation formatting (needs caret text via AT-SPI).
 - [ ] Slash-command/mention literal formatting + terminal autocomplete spacing.
-- [ ] Insertion hardening: paste verification, transient clipboard marks,
-      per-app paste quirks, AT-SPI fallback.
+- [x] **Insertion hardening** — DONE: paste verify-then-restore (selection
+      ownership + read observation before the clipboard restore, unverified
+      pastes fall back to typed insertion with a notification),
+      clipboard-manager hygiene markers (CopyQ 7.1.0 live-verified; the
+      GNOME-shell-extension residual and the full live evidence are recorded
+      in the Done section above), terminal `ctrl+shift+v` paste key
+      (`insertion.terminal_paste_key`, shared `general.terminal_apps` key),
+      `insertion.verify_paste` toggle + doctor lines. The AT-SPI insertion
+      fallback stays open (grouped with the AT-SPI work above).
 - [x] Input-device monitoring / Bluetooth auto-switch — DONE: mic priority
       list (`recording.mic_priority`, tray + settings editor) + pactl source
       monitoring (3 s diff poll) with vanished-device auto-switch (bluez

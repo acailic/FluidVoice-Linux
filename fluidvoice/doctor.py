@@ -100,6 +100,19 @@ def _formatting_lines(cfg: dict) -> list[str]:
     ]
 
 
+def _insertion_lines(cfg: dict) -> list[str]:
+    """Insertion hardening resolution: one line per key."""
+    i = cfg.get("insertion", {})
+    return [
+        f"  paste verification: "
+        f"{'on' if i.get('verify_paste', True) else 'off'} "
+        f"(insertion.verify_paste)",
+        f"  terminal paste key: "
+        f"{i.get('terminal_paste_key', 'ctrl+shift+v')} "
+        f"(insertion.terminal_paste_key)",
+    ]
+
+
 def run() -> int:
     print(f"SayItErmano v{__version__} doctor\n")
     ok = True
@@ -159,6 +172,10 @@ def run() -> int:
 
     print("\nchat/terminal formatting:")
     for line in _formatting_lines(cfg):
+        print(line)
+
+    print("\ninsertion hardening:")
+    for line in _insertion_lines(cfg):
         print(line)
 
     print(f"\ncontrol socket: {paths.socket_path()} "

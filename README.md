@@ -51,7 +51,7 @@ a user-space install with no sudo.
 2. **Local transcription** — faster-whisper on CUDA GPU when available, CPU int8 otherwise (whisper.cpp, torch, and NVIDIA Parakeet TDT via ONNX Runtime backends also supported).
 3. **Post-processing chain** — filler-word removal → custom dictionary → **spoken punctuation commands** (`literal comma`, `literal new line`, `example literal dot com`, …) — the full FluidVoice rule table.
 4. **Optional AI polish** — the *verbatim* FluidVoice dictation prompt sent to any OpenAI-compatible endpoint (OpenAI, Groq, Ollama, LM Studio, llama.cpp server). Turns *"um lets meet on tuesday around 3 no wait 4 p.m."* into *"Let's meet on Tuesday at 4 p.m."*
-5. **Text insertion** — `xdotool type` keystrokes (clipboard-free), or clipboard paste with automatic restore for long texts. Plus history, start/stop sounds (the original GPLv3 FluidVoice SFX), and desktop notifications.
+5. **Text insertion** — `xdotool type` keystrokes (clipboard-free), or clipboard paste with automatic restore for long texts. Paste is verified by observing the target read the selection before your clipboard is restored, dictation text flashes are hidden from clipboard managers (CopyQ live-verified), and terminal apps get `ctrl+shift+v`. Plus history, start/stop sounds (the original GPLv3 FluidVoice SFX), and desktop notifications.
 
 ```
 hotkey ─▶ pw-record 16k mono ─▶ faster-whisper (CUDA/int8) ─▶ fillers/dictionary/
@@ -292,6 +292,12 @@ mode = "auto"               # typed | paste | auto (paste for long texts)
 # One trailing space after typed insertions in terminal apps so the shell's
 # autocomplete commits
 terminal_autocomplete_space = true
+# Verify the paste landed (selection read) before restoring the clipboard;
+# false = legacy fixed-delay restore
+verify_paste = true
+# Keystroke used to paste in terminal apps (general.terminal_apps); X11
+# terminals pass ctrl+v through to the app, they need ctrl+shift+v
+terminal_paste_key = "ctrl+shift+v"
 ```
 
 ## Development & testing
