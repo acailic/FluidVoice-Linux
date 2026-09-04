@@ -1,6 +1,6 @@
 # SayItErmano — Status Ledger
 
-Last updated: 2026-09-04 · v0.4.0 · **774 automated tests** (742 offline + 32 integration)
+Last updated: 2026-09-04 · v0.5.0 · **774 automated tests** (742 offline + 32 integration)
 · verified against upstream `altic-dev/FluidVoice` by a 5-agent audit
 (prompts/AI, punctuation rules, daemon pipeline, models, security).
 
