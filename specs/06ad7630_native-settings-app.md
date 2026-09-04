@@ -183,7 +183,7 @@ This GNOME box has GTK 4.14 / libadwaita 1.5 / PyGObject system-wide.
 3. Screenshots of History + Settings windows (GNOME screenshot tool). The spec defers
    README screenshots ("later") — store under `docs/screenshots/` only if trivial;
    not a gate.
-4. Optional but recommended (spawns its own daemons, sets `FLUIDVOICE_NO_APP_SPAWN`
+4. Optional but recommended (spawns its own daemons, sets `SAYITERMANO_NO_APP_SPAWN`
    itself per `tests/integration/conftest.py:53`):
    `.venv/bin/python -m pytest -q tests/integration/test_daemon_socket.py`.
 5. Final full gate + `git diff --stat` sanity: only the Phase 1–3 files changed.

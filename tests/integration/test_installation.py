@@ -11,15 +11,15 @@ from tests.integration.conftest import REPO
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 SKIP_NET = pytest.mark.skipif(
-    os.environ.get("FLUIDVOICE_SKIP_NET") == "1",
-    reason="FLUIDVOICE_SKIP_NET=1 (no network)")
+    os.environ.get("SAYITERMANO_SKIP_NET") == "1",
+    reason="SAYITERMANO_SKIP_NET=1 (no network)")
 
 
 class TestDebPackage:
     def test_build_extract_and_import(self, tmp_path):
         debs = list((REPO / "dist").glob("*.deb"))
         deb = max(debs, key=lambda p: p.stat().st_mtime) if debs else None
-        if deb is None or os.environ.get("FLUIDVOICE_REBUILD_DEB") == "1":
+        if deb is None or os.environ.get("SAYITERMANO_REBUILD_DEB") == "1":
             subprocess.run([str(REPO / "packaging/build-deb.sh")], check=True,
                            timeout=900)
             deb = max((REPO / "dist").glob("*.deb"),

@@ -73,7 +73,7 @@ class TestStripThinking:
 class TestAIClientDefaults:
     def test_config_from_toml_dict(self):
         cfg = {"ai": {"base_url": "http://localhost:11434/v1", "model": "qwen3:8b",
-                      "api_key": "", "api_key_env": "FLUIDVOICE_API_KEY",
+                      "api_key": "", "api_key_env": "SAYITERMANO_API_KEY",
                       "temperature": 0.2, "timeout_seconds": 60, "max_retries": 3}}
         client = AIClient(cfg)
         assert client.configured

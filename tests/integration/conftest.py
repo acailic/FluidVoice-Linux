@@ -44,13 +44,17 @@ def isolated_env(tmp_path, monkeypatch):
     (tmp_path / "data").mkdir()
     cfg = tmp_path / "config.toml"
     cfg.write_text(TEST_CONFIG)
-    monkeypatch.setenv("FLUIDVOICE_CONFIG", str(cfg))
+    monkeypatch.setenv("SAYITERMANO_CONFIG", str(cfg))
     # keep the real XDG_RUNTIME_DIR (PipeWire lives there); isolate the
     # control socket through its own override instead
-    monkeypatch.setenv("FLUIDVOICE_SOCKET", str(tmp_path / "run" / "fluidvoice.sock"))
+    monkeypatch.setenv("SAYITERMANO_SOCKET", str(tmp_path / "run" / "fluidvoice.sock"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    # isolate the config dir too, so the test daemon's singleton lock
+    # (~/.config/sayit-ermano/daemon.lock) never fights the live daemon
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     # test daemons must never launch the GUI (onboarding/tray app spawns)
-    monkeypatch.setenv("FLUIDVOICE_NO_APP_SPAWN", "1")
+    monkeypatch.setenv("SAYITERMANO_NO_APP_SPAWN", "1")
     return cfg
 
 

@@ -83,7 +83,7 @@ DEFAULTS: dict[str, Any] = {
         "base_url": "http://localhost:11434/v1",
         "model": "",
         "api_key": "",  # preferred: leave empty and use api_key_env
-        "api_key_env": "FLUIDVOICE_API_KEY",
+        "api_key_env": "SAYITERMANO_API_KEY",
         "temperature": 0.2,
         "timeout_seconds": 120,
         "max_retries": 3,
@@ -217,7 +217,7 @@ enabled = false
 base_url = "http://localhost:11434/v1"
 model = ""
 api_key = ""             # preferred: leave empty and export the env var below
-api_key_env = "FLUIDVOICE_API_KEY"
+api_key_env = "SAYITERMANO_API_KEY"
 temperature = 0.2
 timeout_seconds = 120
 max_retries = 3

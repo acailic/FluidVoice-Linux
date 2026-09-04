@@ -77,7 +77,7 @@ new that Linux doesn't have" a one-command answer.
 | Auto-updates + beta channel | ⏳ | today: .deb / GitHub releases; AUR/nix on roadmap |
 | Mic priority list, Bluetooth auto-switch | ✅ | pactl 3 s source poll + `recording.mic_priority` patterns (tray menu ordered, settings editor rows); drag-to-reorder later |
 | Speaker labeling (diarization) for file transcription | ⏳ | not started; timestamps/JSON export shipped via `transcribe --json`; diarization pending |
-| API keys in Keychain | ➖ | substitute: `FLUIDVOICE_API_KEY` env var + 0600 config.toml |
+| API keys in Keychain | ➖ | substitute: `SAYITERMANO_API_KEY` env var + 0600 config.toml |
 | Opt-in telemetry | ➖ | intentionally none (privacy divergence, see STATUS.md) |
 
 ## Upstream changelog (newest first)

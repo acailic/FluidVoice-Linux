@@ -73,7 +73,7 @@ def preload_cuda_libs() -> bool:
 
 
 def cuda_available() -> bool:
-    if os.environ.get("FLUIDVOICE_FORCE_CPU") == "1":
+    if os.environ.get("SAYITERMANO_FORCE_CPU") == "1":
         return False
     if preload_cuda_libs():
         return True

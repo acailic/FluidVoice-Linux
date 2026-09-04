@@ -311,7 +311,7 @@ class Daemon:
         log(f"control socket: {paths.socket_path()}")
 
         import os as _os
-        cfg_shown = _os.environ.get("FLUIDVOICE_CONFIG") or paths.config_file()
+        cfg_shown = _os.environ.get("SAYITERMANO_CONFIG") or paths.config_file()
         log("ready - press the hotkey to dictate "
             f"(or run `fluidvoice toggle`; config: {cfg_shown})")
 
@@ -515,7 +515,7 @@ class Daemon:
         """Launch the native GTK app in the same interpreter/env as us."""
         import os
         import subprocess
-        if os.environ.get("FLUIDVOICE_NO_APP_SPAWN"):  # tests/headless
+        if os.environ.get("SAYITERMANO_NO_APP_SPAWN"):  # tests/headless
             log(f"app launch suppressed ({' '.join(args) or 'app'})")
             return
         try:

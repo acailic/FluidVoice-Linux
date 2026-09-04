@@ -30,10 +30,10 @@
 > [docs/BEHAVIOR-SPEC.md](docs/BEHAVIOR-SPEC.md) for what was ported, with
 > file:line evidence from the upstream sources.
 >
-> **Naming:** the project, repo, package and command are **SayItErmano**
-> (`sayit-ermano`). The Python module and env-var overrides
-> (`SAYITERMANO_CONFIG`, `SAYITERMANO_SOCKET`, `SAYITERMANO_API_KEY`, …) keep the
-> upstream `fluidvoice` naming on purpose — internals credit the port's origin.
+> **Naming:** the project, repo, package, command and env-var overrides
+> (`SAYITERMANO_CONFIG`, `SAYITERMANO_SOCKET`, `SAYITERMANO_API_KEY`, …) are
+> **SayItErmano** (`sayit-ermano`). Only the Python module keeps the upstream
+> `fluidvoice` naming on purpose — internals credit the port's origin.
 > Installing `sayit-ermano` replaces the pre-rename `fluidvoice-linux` package
 > and takes over its config, history and models.
 
