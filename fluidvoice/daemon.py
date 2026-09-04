@@ -1086,6 +1086,10 @@ class Daemon:
         if action == "insert-text":
             ok, detail = self.insert_text_action(str(req.get("text", "")))
             return {"ok": ok, "error": detail if not ok else None}
+        if action == "command-rerun":
+            purpose = req.get("purpose")
+            return self._rerun_command(str(req.get("command", "")),
+                                       str(purpose) if purpose else None)
         if action == "status":
             upd = self._update_status()
             return {"ok": True, "recording": self.recording, "busy": self.busy,
@@ -1604,6 +1608,38 @@ class Daemon:
             self.busy = True
         threading.Thread(target=_guarded, name="fluidvoice-command",
                          daemon=True).start()
+
+    def _rerun_command(self, command: str,
+                       purpose: str | None = None) -> dict:
+        """History Commands view 'Re-run' (v2): re-post the exact stored
+        command as a PENDING proposal - the user confirms with the hotkey
+        exactly like a fresh voice proposal (strong confirm included when
+        destructive). NOTHING executes here: this only ever creates a
+        pending proposal; CommandSession.confirm() stays the single
+        execution site. No LLM call is needed to propose."""
+        from . import command as command_mod
+        with self._lock:
+            if self.recording or self.busy or self._command_pending:
+                return {"ok": False, "error": "daemon busy"}
+        ready = command_mod.command_mode_ready(self.cfg)
+        if ready:
+            return {"ok": False, "error": ready}
+        if self._command_context is None:
+            self._command_context = command_mod.CommandContextStore()
+        factory = self._command_session_factory or command_mod.CommandSession
+        session = factory(self.cfg, context_store=self._command_context)
+        try:
+            proposal = session.preset(command, purpose)
+        except command_mod.CommandError as e:
+            return {"ok": False, "error": str(e)}
+        self._command_entries = [{"kind": "user",
+                                  "text": session.instruction or ""}]
+        with self._lock:                 # atomic handoff to the pending state
+            self._command_session = session
+            self._command_pending = True
+            self.busy = False            # waiting for the user, not busy
+        self._present_proposal(session, proposal)
+        return {"ok": True, "pending": True, "command": proposal.command}
 
     def _command_panel(self, entries: list[dict], status: str | None,
                        awaiting: str | None):

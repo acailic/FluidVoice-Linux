@@ -1,8 +1,10 @@
 """History window — the main window (macOS app's transcript list counterpart).
 
-Live status header, search, entry cards with copy / delete / inline audio
-replay, clear-all. Reads history directly from the JSONL (no daemon needed);
-status/toggle need the daemon and degrade to a banner when it is down.
+Live status header, search, Transcripts / Commands pages (v2: command rows
+with collapsible output, Copy and confirm-gated Re-run), entry cards with
+copy / delete / inline audio replay, clear-all. Reads history directly
+from the JSONL (no daemon needed); status/toggle need the daemon and
+degrade to a banner when it is down.
 """
 from __future__ import annotations
 
@@ -228,6 +230,89 @@ def date_header_label(ts: float, now: datetime | None = None) -> str:
     return day.strftime("%a %d %b")
 
 
+class CommandRow(Gtk.ListBoxRow):
+    """One executed command (mode=command history row, v2): monospace
+    `$ command`, purpose, exit/duration chips, collapsible output, Copy
+    and Re-run (the re-run only re-posts a proposal - the daemon confirms
+    via the hotkey, never silently)."""
+
+    def __init__(self, entry, on_copy, on_rerun):
+        super().__init__(activatable=False, selectable=False,
+                         css_classes=["card"])
+        self.entry = entry
+        self.command = str(entry.get("command")
+                           or str(entry.get("text") or "").lstrip("$ "))
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
+                      margin_top=10, margin_bottom=10,
+                      margin_start=14, margin_end=10)
+
+        cmd_lbl = Gtk.Label(label=f"$ {self.command}", wrap=True,
+                            xalign=0.0, hexpand=True, selectable=True,
+                            css_classes=["monospace", "body"])
+        box.append(cmd_lbl)
+
+        purpose = entry.get("purpose")
+        if purpose:
+            box.append(Gtk.Label(label=str(purpose), wrap=True, xalign=0.0,
+                                 css_classes=["caption", "dim-label"]))
+
+        meta = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        ts = entry.get("ts") or 0
+        meta.append(Gtk.Label(
+            label=datetime.fromtimestamp(ts).strftime("%a %d %b, %H:%M"),
+            css_classes=["dim-label"]))
+        success = bool(entry.get("success"))
+        exit_code = entry.get("exit_code")
+        if exit_code is not None:
+            meta.append(Gtk.Label(
+                label=("\u2713 " if success else "\u2717 ")
+                      + str(int(exit_code)),
+                css_classes=["success" if success else "error"]))
+        if entry.get("duration_ms"):
+            meta.append(Gtk.Label(
+                label=f"{float(entry['duration_ms']):.0f} ms",
+                css_classes=["dim-label"]))
+        if entry.get("destructive"):
+            meta.append(Gtk.Label(label="\u26a0 destructive",
+                                  css_classes=["warning"]))
+        meta.append(Gtk.Box(hexpand=True))  # spacer
+
+        output = str(entry.get("output") or "")
+        self.output_revealer = None
+        if output.strip():
+            self.output_btn = Gtk.ToggleButton(label="Output",
+                                               css_classes=["flat"])
+            self.output_btn.connect("toggled", self._on_toggle_output)
+            meta.append(self.output_btn)
+            out_lbl = Gtk.Label(label=output, wrap=True, xalign=0.0,
+                                selectable=True,
+                                css_classes=["monospace", "caption",
+                                             "dim-label"])
+            self.output_revealer = Gtk.Revealer(
+                child=out_lbl, reveal_child=False,
+                transition_type=Gtk.RevealerTransitionType.SLIDE_DOWN)
+        copy_btn = Gtk.Button(icon_name="edit-copy-symbolic",
+                              css_classes=["flat"], tooltip_text="Copy command")
+        copy_btn.connect("clicked", on_copy, self)
+        meta.append(copy_btn)
+        self.copy_btn = copy_btn
+        rerun_btn = Gtk.Button(icon_name="media-playback-start-symbolic",
+                               label="Re-run", css_classes=["flat"],
+                               tooltip_text="Propose re-run (confirm with the "
+                                            "command hotkey)")
+        rerun_btn.connect("clicked", on_rerun, self)
+        meta.append(rerun_btn)
+        self.rerun_btn = rerun_btn
+        box.append(meta)
+        if self.output_revealer is not None:
+            box.append(self.output_revealer)
+        self.set_child(box)
+
+    def _on_toggle_output(self, btn) -> None:
+        if self.output_revealer is not None:
+            self.output_revealer.set_reveal_child(btn.get_active())
+
+
 class HistoryWindow(Adw.ApplicationWindow):
     def __init__(self, application=None, client=None):
         super().__init__(application=application, title="SayItErmano",
@@ -292,14 +377,20 @@ class HistoryWindow(Adw.ApplicationWindow):
             status.append(w)
         vbox.append(status)
 
-        self.search = Gtk.SearchEntry(placeholder_text="Search transcripts, apps…",
+        self.search = Gtk.SearchEntry(placeholder_text="Search transcripts, commands, apps…",
                                       margin_start=14, margin_end=14,
                                       margin_bottom=8)
         self.search.connect("changed", self._on_search_changed)
         vbox.append(self.search)
 
+        # -- Transcripts / Commands pages (v2: command rows get their own
+        #    view with output + Copy + confirm-gated Re-run) ------------
+        self.view_stack = Adw.ViewStack(vexpand=True)
+        self.switcher = Adw.ViewSwitcher(stack=self.view_stack,
+                                        policy=Adw.ViewSwitcherPolicy.WIDE)
+        vbox.append(self.switcher)
+
         scroll = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
-        vbox.append(scroll)
         self.listbox = Gtk.ListBox(css_classes=["boxed-list-separate"])
         self.listbox.set_selection_mode(Gtk.SelectionMode.NONE)
         self.listbox.set_placeholder(Adw.StatusPage(
@@ -308,6 +399,22 @@ class HistoryWindow(Adw.ApplicationWindow):
             icon_name="sayit-ermano",
             vexpand=True))
         scroll.set_child(self.listbox)
+        self.view_stack.add_titled(scroll, "transcripts", "Transcripts")
+
+        cmd_scroll = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        self.cmd_listbox = Gtk.ListBox(css_classes=["boxed-list-separate"])
+        self.cmd_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.cmd_listbox.set_placeholder(Adw.StatusPage(
+            title="No commands yet",
+            description="Voice command runs land here — re-run any of them "
+                        "(always confirmed) or copy the command line.",
+            icon_name="utilities-terminal-symbolic",
+            vexpand=True))
+        cmd_scroll.set_child(self.cmd_listbox)
+        self.view_stack.add_titled(cmd_scroll, "commands", "Commands")
+        self.view_stack.connect("notify::visible-child",
+                                lambda *_: self._update_count())
+        vbox.append(self.view_stack)
 
         self.count_lbl = Gtk.Label(css_classes=["dim-label"],
                                    margin_top=6, margin_bottom=10)
@@ -359,11 +466,37 @@ class HistoryWindow(Adw.ApplicationWindow):
             self.listbox.append(
                 HistoryEntryRow(e, self._on_delete_row, self._on_copy_row,
                                 self._on_insert_row, self._on_edit_row))
-        n = len(self._entries)
-        self.count_lbl.set_text(
-            f"{n} ent{'ry' if n == 1 else 'ries'}"
-            + (" (showing latest 200)" if n >= 200 else ""))
+        self._render_commands()
+        self._update_count()
         self._update_today()
+
+    def _render_commands(self) -> None:
+        """The Commands page: command-mode rows from the SAME loaded set
+        (filtered client-side - history.search has no mode filter and the
+        v2 request forbids schema/query changes)."""
+        row = self.cmd_listbox.get_first_child()
+        while row is not None:
+            nxt = row.get_next_sibling()
+            self.cmd_listbox.remove(row)
+            row = nxt
+        cmds = [e for e in self._entries if e.get("mode") == "command"]
+        for e in cmds:
+            self.cmd_listbox.append(
+                CommandRow(e, self._on_copy_command, self._on_rerun_command))
+
+    def _update_count(self) -> None:
+        on_commands = (self.view_stack.get_visible_child()
+                       is not None and self.view_stack.get_child_by_name(
+                           "commands") is self.view_stack.get_visible_child())
+        if on_commands:
+            n = sum(1 for e in self._entries if e.get("mode") == "command")
+            unit = "command" if n == 1 else "commands"
+        else:
+            n = len(self._entries)
+            unit = "ent" + ("ry" if n == 1 else "ries")
+        self.count_lbl.set_text(
+            f"{n} {unit}"
+            + (" (showing latest 200)" if n >= 200 else ""))
 
     @staticmethod
     def _header_row(label: str) -> Gtk.ListBoxRow:
@@ -392,6 +525,26 @@ class HistoryWindow(Adw.ApplicationWindow):
             cb.set(Gdk.ContentProvider.new_for_bytes(
                 "text/plain;charset=utf-8", GLib.Bytes.new(text.encode())))
         self._toast("Copied")
+
+    def _on_copy_command(self, _btn, row) -> None:
+        text = row.command
+        try:
+            Gdk.Display.get_default().get_clipboard().set_text(text)
+        except (AttributeError, TypeError):
+            cb = Gdk.Display.get_default().get_clipboard()
+            cb.set(Gdk.ContentProvider.new_for_bytes(
+                "text/plain;charset=utf-8", GLib.Bytes.new(text.encode())))
+        self._toast("Command copied")
+
+    def _on_rerun_command(self, _btn, row) -> None:
+        """Re-run ONLY re-posts the stored command as a pending proposal
+        on the daemon - execution still needs the hotkey confirm (never
+        silent, strong-confirm included for destructive commands)."""
+        try:
+            self.c.command_rerun(row.command, row.entry.get("purpose"))
+            self._toast("Re-run proposed — confirm with the command hotkey")
+        except Exception as e:  # noqa: BLE001 - daemon down/busy -> toast
+            self._toast(f"Re-run failed: {e}")
 
     def _on_insert_row(self, _btn, row) -> None:
         text = str(row.entry.get("text") or "")

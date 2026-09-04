@@ -45,6 +45,7 @@ class StubClient(Client):
         self.profile_store: dict[str, str] = {}
         self.profile_calls: list[tuple] = []
         self.deleted_models: list[tuple] = []
+        self.reruns: list[tuple] = []
 
     def status(self):
         return {"ok": True, "recording": False, "busy": False,
@@ -102,6 +103,10 @@ class StubClient(Client):
     def insert_text(self, text):
         self.inserted.append(text)
         return {"ok": True}
+
+    def command_rerun(self, command, purpose=None):
+        self.reruns.append((command, purpose))
+        return {"ok": True, "pending": True, "command": command}
 
     def today_stats(self):
         return {"dictations": 2, "seconds": 6.5, "words": 9}
@@ -314,6 +319,143 @@ class TestHistoryWindow:
         assert pump_until(loop, lambda: not w._exporting)
         assert w._exporting is False  # released even on failure
         assert enabled[-1] == ("hist.export", True)
+        w.close()
+
+
+COMMAND_ENTRIES = [
+    {"ts": 1756801200.0, "mode": "command", "text": "$ ls -la",
+     "command": "ls -la", "purpose": "checking files", "exit_code": 0,
+     "success": True, "output": "total 0\n", "duration_ms": 12.0},
+    {"ts": 1756801300.0, "mode": "command", "text": "$ rm -rf /tmp/x",
+     "command": "rm -rf /tmp/x", "purpose": "cleanup", "exit_code": 1,
+     "success": False, "output": "rm: cannot remove", "duration_ms": 5.0,
+     "destructive": True},
+]
+
+
+class TestCommandsView:
+    """History window Commands page (v2): command rows, collapsible
+    output, Copy, confirm-gated Re-run."""
+
+    def _window(self, loop, entries=None):
+        from fluidvoice.gtkui.main_window import HistoryWindow
+        c = StubClient(entries if entries is not None
+                       else ENTRIES + COMMAND_ENTRIES)
+        w = HistoryWindow(client=c)
+        w.present()
+        pump(loop)
+        return w, c
+
+    def _rows(self, w):
+        rows = []
+        row = w.cmd_listbox.get_first_child()
+        while row is not None:
+            rows.append(row)
+            row = row.get_next_sibling()
+        return rows
+
+    def _show_commands(self, w):
+        w.view_stack.set_visible_child(
+            w.view_stack.get_child_by_name("commands"))
+
+    def test_commands_page_lists_rows_excluding_dictations(self, loop):
+        w, c = self._window(loop)
+        rows = self._rows(w)
+        assert len(rows) == 2                   # dictations excluded
+        first = rows[0]
+        assert first.command == "ls -la"
+        # the transcripts page still renders everything (headers excluded
+        # from the count - they are plain ListBoxRows, not entry cards)
+        from fluidvoice.gtkui.main_window import HistoryEntryRow
+        t_rows = []
+        r = w.listbox.get_first_child()
+        while r is not None:
+            if isinstance(r, HistoryEntryRow):
+                t_rows.append(r)
+            r = r.get_next_sibling()
+        assert len(t_rows) == len(ENTRIES) + len(COMMAND_ENTRIES)
+        w.close()
+
+    def test_count_label_follows_visible_page(self, loop):
+        w, c = self._window(loop)
+        assert w.count_lbl.get_text().startswith(f"{len(ENTRIES) + 2}")
+        self._show_commands(w)
+        assert w.count_lbl.get_text() == "2 commands"
+        w.close()
+
+    def test_search_filters_command_rows(self, loop):
+        w, c = self._window(loop)
+        w._query = "rm -rf"
+        w._load_history()
+        rows = self._rows(w)
+        assert len(rows) == 1 and rows[0].command == "rm -rf /tmp/x"
+        w._query = ""
+        w._load_history()
+        assert len(self._rows(w)) == 2
+        w.close()
+
+    def test_output_toggle_reveals_collapsible_output(self, loop):
+        w, c = self._window(loop)
+        row = self._rows(w)[0]
+        assert row.output_revealer.get_reveal_child() is False
+        row.output_btn.set_active(True)
+        assert row.output_revealer.get_reveal_child() is True
+        lbl = row.output_revealer.get_child()
+        assert "total 0" in lbl.get_text()
+        row.output_btn.set_active(False)
+        assert row.output_revealer.get_reveal_child() is False
+        w.close()
+
+    def test_copy_puts_command_on_clipboard(self, loop, monkeypatch):
+        from fluidvoice.gtkui import main_window as mw
+        copied = []
+
+        class FakeClipboard:
+            def set_text(self, text):
+                copied.append(text)
+
+        class FakeDisplay:
+            @staticmethod
+            def get_default():
+                return FakeDisplay()
+
+            def get_clipboard(self):
+                return FakeClipboard()
+
+        monkeypatch.setattr(mw.Gdk, "Display", FakeDisplay)
+        toasts = []
+        w, c = self._window(loop)
+        w._toast = lambda text: toasts.append(text)
+        row = self._rows(w)[1]
+        row.copy_btn.emit("clicked")
+        assert copied == ["rm -rf /tmp/x"]     # the command, not the label
+        assert any("copied" in t.lower() for t in toasts)
+        w.close()
+
+    def test_rerun_calls_client_and_toasts(self, loop, monkeypatch):
+        toasts = []
+        w, c = self._window(loop)
+        w._toast = lambda text: toasts.append(text)
+        row = self._rows(w)[0]
+        row.rerun_btn.emit("clicked")
+        assert c.reruns == [("ls -la", "checking files")]
+        assert any("confirm" in t.lower() for t in toasts)
+        w.close()
+
+    def test_rerun_failure_toasts_error(self, loop, monkeypatch):
+        from fluidvoice.gtkui.client import ClientError
+        toasts = []
+        w, c = self._window(loop)
+        w._toast = lambda text: toasts.append(text)
+
+        def broken(command, purpose=None):
+            raise ClientError("daemon not running")
+
+        c.command_rerun = broken
+        row = self._rows(w)[0]
+        row.rerun_btn.emit("clicked")
+        assert any("Re-run failed" in t for t in toasts)
+        assert c.reruns == []
         w.close()
 
 

@@ -1270,6 +1270,162 @@ class TestDaemonCommandMode:
         d._process(None, "kitty", mode="command")
         assert got == {"app": "kitty", "instruction": "do it"}
 
+    # -- re-run from the History Commands view (v2) --------------------------
+
+    def _rerun(self, cfg, monkeypatch, command="echo reran me",
+               purpose="checking", runner=None):
+        """Daemon with a RE-RUN proposal pending: no LLM call was made to
+        propose it; the stub client only serves the post-execution turn."""
+        ai_ready(cfg)
+        pills = []
+
+        class CapturingPanel:
+            using_overlay = True
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.updates = []
+                self.started = 0
+                self.closed = 0
+                pills.append(self)
+
+            def update(self, entries, status=None, awaiting=None):
+                self.updates.append((list(entries), status, awaiting))
+
+            def start(self):
+                self.started += 1
+
+            def close(self):
+                self.closed += 1
+
+        monkeypatch.setattr("fluidvoice.overlay.CommandPanel", CapturingPanel)
+        hk = FakeCommandHotkey()
+        client = StubAIClient([done_reply("rerun finished")])
+
+        def factory(c, **kw):
+            kw["client"] = client
+            if runner is not None:
+                kw["runner"] = runner
+            return cm.CommandSession(c, **kw)
+
+        d = self._daemon(cfg)
+        d._command_session_factory = factory
+        d._command_hotkey = hk
+        resp = d.handle_request({"action": "command-rerun",
+                                 "command": command, "purpose": purpose})
+        assert resp.get("ok") is True, resp
+        assert d._command_pending
+        assert pills, "pill never built"
+        return d, pills[-1], hk, client, resp
+
+    def test_rerun_presents_pending_never_executes(self, cfg, quiet_ui,
+                                                    monkeypatch, tmp_path):
+        runs = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            runs.append(cmd)
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output="x")
+
+        d, pill, hk, client, resp = self._rerun(cfg, monkeypatch,
+                                                runner=runner)
+        assert resp["pending"] is True
+        assert runs == []                    # NOTHING executed by the action
+        assert client.calls == []            # and no LLM call to propose it
+        entries, status, awaiting = pill.updates[-1]
+        texts = " ".join(str(e.get("text", "")) for e in entries)
+        assert "echo reran me" in texts
+        assert "re-run: echo reran me" in texts  # instruction in the feed
+        assert awaiting and "Esc" in awaiting
+        assert d.busy is False
+        hist = tmp_path / "test-history.jsonl"
+        assert not hist.exists() or not [ln for ln in
+                                         hist.read_text().splitlines() if ln]
+        d.cancel_pending_command()
+        assert runs == []
+
+    def test_rerun_confirm_executes_and_writes_fresh_history(
+            self, cfg, quiet_ui, monkeypatch, tmp_path):
+        d, pill, hk, client, resp = self._rerun(cfg, monkeypatch)
+        d._on_command_hotkey()               # the confirm press
+        assert self._wait(lambda: not d.busy
+                          and d._command_session is None)
+        import json as _json
+        hist = tmp_path / "test-history.jsonl"
+        entries = [_json.loads(ln) for ln in
+                   hist.read_text().splitlines() if ln.strip()]
+        cmds = [e for e in entries if e.get("mode") == "command"]
+        assert len(cmds) == 1                 # a FRESH row, no dedupe
+        assert cmds[0]["command"] == "echo reran me"
+        assert cmds[0]["purpose"] == "checking"
+        assert "exit 0" in " ".join(t + b for t, b in quiet_ui["notify"])
+        assert client.calls                   # the one post-execution turn ran
+
+    def test_rerun_destructive_needs_two_presses(self, cfg, quiet_ui,
+                                                  monkeypatch, tmp_path):
+        runs = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            runs.append(cmd)
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output="gone")
+
+        d, pill, hk, client, resp = self._rerun(
+            cfg, monkeypatch, command="rm -rf /tmp/fluidvoice-rerun-test",
+            purpose="cleanup", runner=runner)
+        entries, _, awaiting = pill.updates[-1]
+        assert entries[-1].get("destructive") is True
+        assert "AGAIN" in awaiting
+        d._on_command_hotkey()               # first press: arms only
+        assert runs == []
+        d._on_command_hotkey()               # second press: executes
+        assert self._wait(lambda: runs ==
+                          ["rm -rf /tmp/fluidvoice-rerun-test"]
+                          and d._command_session is None)
+        hist = tmp_path / "test-history.jsonl"
+        import json as _json
+        entries = [_json.loads(ln) for ln in
+                   hist.read_text().splitlines() if ln.strip()]
+        assert [e for e in entries if e.get("mode") == "command"][0][
+            "destructive"] is True
+
+    def test_rerun_guards(self, cfg, quiet_ui, monkeypatch):
+        runs = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            runs.append(cmd)
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output="x")
+
+        d, pill, hk, client, resp = self._rerun(cfg, monkeypatch,
+                                                runner=runner)
+        # pending already -> busy
+        r = d.handle_request({"action": "command-rerun",
+                              "command": "echo nope"})
+        assert r["ok"] is False and "busy" in r["error"]
+        d.cancel_pending_command()
+        d.busy = True
+        r = d.handle_request({"action": "command-rerun",
+                              "command": "echo nope"})
+        assert r["ok"] is False and "busy" in r["error"]
+        d.busy = False
+        d.recording = True
+        r = d.handle_request({"action": "command-rerun",
+                              "command": "echo nope"})
+        assert r["ok"] is False and "busy" in r["error"]
+        d.recording = False
+        # empty command -> loud error
+        r = d.handle_request({"action": "command-rerun", "command": "  "})
+        assert r["ok"] is False and "command" in r["error"]
+        assert runs == []                     # nothing ever executed
+
+    def test_rerun_refuses_unready_ai(self, cfg, quiet_ui):
+        d = self._daemon(cfg)                 # ai not configured
+        r = d.handle_request({"action": "command-rerun",
+                              "command": "echo x"})
+        assert r["ok"] is False and r["error"]
+        assert not d._command_pending
+
     def test_restart_and_shutdown_cover_command_hotkey(self, cfg, quiet_ui,
                                                        monkeypatch):
         d = self._daemon(cfg)

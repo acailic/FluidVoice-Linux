@@ -58,6 +58,15 @@ class Client:
         repair path). Raises ClientError when the daemon is down/busy."""
         return self._request("insert-text", text=text)
 
+    def command_rerun(self, command: str,
+                      purpose: str | None = None) -> dict:
+        """Re-post a stored command as a PENDING proposal on the daemon -
+        the daemon NEVER executes it without the hotkey confirm (the same
+        two-press strong-confirm flow as a destructive voice command).
+        Raises ClientError when the daemon is down/busy/unready."""
+        return self._request("command-rerun", command=command,
+                             purpose=purpose)
+
     def select_model(self, name: str) -> dict:
         return self._request("select-model", name=name)
 

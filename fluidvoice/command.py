@@ -530,6 +530,25 @@ class CommandSession:
         self.cancelled = True
         self.finished = True
 
+    def preset(self, command: str,
+               purpose: str | None = None) -> PendingCommand:
+        """History-window re-run path (v2): present the exact stored
+        command as the FIRST pending proposal with NO LLM call - the user
+        then confirms with the hotkey exactly like a fresh voice proposal
+        (strong confirm included when destructive). Classification is
+        recomputed from the CURRENT config so pattern edits apply. After a
+        confirmed execution the loop continues normally (result fed back,
+        one verify turn)."""
+        command = (command or "").strip()
+        if not command:
+            raise CommandError("re-run needs a command")
+        self.instruction = f"re-run: {command}"
+        self.pending = PendingCommand(
+            command=command, purpose=purpose,
+            destructive=is_destructive_command(
+                command, self._destructive_patterns()))
+        return self.pending
+
     # -- internals --------------------------------------------------------------
 
     def _advance(self) -> PendingCommand | None:
