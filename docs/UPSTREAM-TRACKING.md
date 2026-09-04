@@ -24,14 +24,14 @@ status lives in [STATUS.md](STATUS.md); this doc faces *upstream*.
 
 | | |
 |---|---|
-| Upstream commit | `b60a302` (2026-09-01) — `b60a302197a2018a388a5d4416c78039dfe85647` |
+| Upstream commit | `b395a7a` (2026-09-02) — `b395a7af0242b6869867abdd61e245a5a80ec218` |
 | Latest upstream release | `v1.6.9` (2026-08-18) |
 | Port audited against it | 2026-09-02, 5-agent audit + the v0.1.x feature work through `e3bfa37` (295 tests) |
 | Machine-readable pin | [upstream-baseline.txt](upstream-baseline.txt) (read by `scripts/upstream-diff.sh`) |
 
 The baseline says: everything upstream through `b60a302` was already considered
 by the 2026-09-02 audit and feature work; the statuses below reflect that.
-Anything upstream lands *after* `b60a302` is "new and not yet available on
+Anything upstream lands *after* `b395a7a` is "new and not yet available on
 Linux" until triaged here.
 
 ## Tracking loop
@@ -81,6 +81,17 @@ new that Linux doesn't have" a one-command answer.
 | Opt-in telemetry | ➖ | intentionally none (privacy divergence, see STATUS.md) |
 
 ## Upstream changelog (newest first)
+
+### Unreleased upstream (after v1.6.9 → `b395a7a`, 09-01 → 09-02)
+
+8 commits (incl. merges), triaged 2026-09-04:
+
+| Upstream change | Linux | Notes |
+|---|---|---|
+| Mouse-button hotkeys: event-tap isolation, interrupted mouse holds, press lifecycle (3 fixes, PR #939) | ⏳ | our hotkeys are keyboard-only (XGrabKey); mouse-button push-to-talk (XGrabButton + button-state polling) is a parity candidate on ROADMAP Later |
+| Ignored microphones stay removed after reconnect (fixes #933) | ✅ | nothing to port: our `recording.mic_priority` is a static pattern list — there is no per-device suppression set that could resurrect on reconnect; removals persist by design |
+| Locked-screen shortcut suppression + dock visibility | ➖ / ⏳ | dock is macOS-only; suppressing hotkeys while the screen is locked is a small candidate (X11 lock-state check) |
+| Debug-preferences test isolation | ➖ | upstream test-only |
 
 ### Unreleased upstream (after v1.6.9 → `b60a302`, 2026-08-19 → 09-01)
 

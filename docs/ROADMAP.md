@@ -77,6 +77,9 @@ sources. Everything below is a known, classified gap — see
       audio dir refused, missing skipped), History-window Export… menu item,
       today line in the window header + `fluidvoice status` (local midnight).
 - [ ] Auto-updater (or packaged releases); onboarding.
+- [ ] Mouse-button push-to-talk (XGrabButton + button-state polling) —
+      upstream parity candidate from the 09-02 event-tap work; plus
+      suppressing hotkeys while the screen is locked.
 - [x] Settings UI — done as a native GTK 4 + libadwaita app
       (`fluidvoice app`; History/Settings/onboarding windows over the
       control socket; the former web page was retired with it).
