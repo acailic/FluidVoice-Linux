@@ -14,3 +14,5 @@ Where: fluidvoice/preview.py, fluidvoice/recorder.py (window hand-off if the buf
 Done means: a phased plan under specs/ where each phase leaves `.venv/bin/python -m pytest -q tests --ignore=tests/integration` green; on a synthetic long take the fake-backend decode-call count grows linearly, the final transcript equals the full-decode result, trailing-silence takes auto-stop at ~the configured threshold while all-silence takes keep the existing first-PCM/timeout semantics; live smoke on the daily-driver machine logs the instrumentation line with bounded mean decode ms; the upstream tracking table row for immediate-stop notes the new foundation.
 
 Out of scope: NeMo/Riva/streaming-engine integrations, diarization, the immediate-stop countdown UI, changing the final-transcription backends or their quality knobs, multilingual VAD models, any overlay redesign.
+
+Deliverable constraint: the planning phase produces a plan document under specs/ only - planning never edits implementation, config, docs, or test files (the builder phase owns all code changes).
