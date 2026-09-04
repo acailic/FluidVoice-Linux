@@ -17,6 +17,10 @@ language = "en"
 
 [hotkey]
 key = "F9"
+# Never Escape: the user's live daemon grabs Escape while IT records, and
+# two clients cannot both hold it - the test daemon's arm would fail with
+# BadAccess whenever a real dictation overlaps the test run.
+cancel_key = "F12"
 
 [model]
 eager_warmup = false

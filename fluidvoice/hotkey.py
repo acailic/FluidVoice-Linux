@@ -133,6 +133,7 @@ class HotkeyListener:
         self._escape_keycode: int | None = None
         self._want_cancel = False   # recording active -> grab the cancel key
         self._cancel_grabbed = False
+        self._cancel_grab_warned = False
         self._summary: list[str] = []
 
     # -- setup ---------------------------------------------------------------
@@ -258,8 +259,17 @@ class HotkeyListener:
                 root.ungrab_key(self._cancel_keycode, X.AnyModifier)
             self._display.sync()
             self._cancel_grabbed = self._want_cancel
+            self._cancel_grab_warned = False
         except Exception:
-            pass  # best-effort; cancel via CLI still works
+            # Another client holds a conflicting grab on the cancel key (a
+            # second recording daemon on a shared desktop, a WM shortcut).
+            # Retried every loop, so a transient holder self-heals; warn
+            # once per recording so a dead cancel key is log-diagnosable.
+            if self._want_cancel and not self._cancel_grab_warned:
+                self._cancel_grab_warned = True
+                print(f"[sayit-ermano] WARN cancel key '{self.cancel_key}' "
+                      "grab failed - held by another client?", flush=True)
+            # best-effort; cancel via CLI still works
 
     def _hotkey_still_down(self, d, keycode: int) -> bool:
         """True = the hotkey is still physically held, by query_keymap().

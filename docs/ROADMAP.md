@@ -30,8 +30,10 @@ sources. Everything below is a known, classified gap — see
       and presses enter/shift+enter/ctrl+enter after typing; "literal send
       it" escape honored. Immediate-stop countdown needs streaming VAD.
 - [x] Paste-last-transcription — DONE: `fluidvoice paste-last` + socket action.
-- [ ] Per-app prompt sets and user-editable prompt profiles (upstream has
-      per-slot gating; we have one global toggle).
+- [x] Per-app prompt sets — DONE: `ai.per_app_prompts` rules matched against
+      the recording-start app (Settings → AI → Per-app prompts, per-rule
+      editor; the frontmost-app hint was already captured).
+- [ ] User-editable prompt profiles (named presets of the base prompt).
 - [x] Always-copy-to-clipboard option; sub-1s zero-padding — DONE.
 - [x] GAAV mode (lowercase-first / strip trailing period) — DONE.
 
