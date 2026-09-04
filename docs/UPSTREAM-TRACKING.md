@@ -55,8 +55,8 @@ new that Linux doesn't have" a one-command answer.
 | macOS capability | Linux port | Notes / substitute |
 |---|---|---|
 | Global push hotkey (Right ⌥) | ✅ | Right Ctrl (any keysym) via XGrabKey; on Wayland bind a DE shortcut to `fluidvoice toggle` |
-| Whisper models (tiny→large) | ✅ | faster-whisper (CUDA/int8), whisper.cpp, torch backends |
-| Parakeet TDT v2/v3 (upstream default) | 🚧 v0.4 | via NeMo/ONNX; highest-value model addition on NVIDIA |
+| Whisper models (tiny→large) | ✅ | faster-whisper (CUDA/int8), whisper.cpp, torch backends; Parakeet TDT via ONNX Runtime (explicit `backend = "parakeet"`) |
+| Parakeet TDT v2/v3 (upstream default) | ✅ | offline v2/v3 via the community ONNX exports (sherpa-onnx) + our own numpy log-mel + greedy TDT decode over ONNX Runtime — no NeMo dependency; explicit `backend = "parakeet"` selection ("auto" still prefers the whisper family — deliberate divergence, see STATUS.md) |
 | Parakeet Flash / Realtime, Nemotron Speech 3.5 (streaming) | 🚧 later | streaming engines also unlock tighter live preview |
 | Apple Speech (zero-download) | ➖ | macOS system API; substitute: whisper today, Parakeet in v0.4 |
 | Cohere Transcribe | ➖ | non-goal — CoreML-only artifacts, no Linux runtime |

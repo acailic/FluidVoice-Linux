@@ -111,6 +111,12 @@ matrix + upstream changelog with its refresh loop).
   (`model.whispercpp_model` accepts a catalog name **or** a path, with
   clear missing/unknown errors); `fluidvoice doctor` reports the binary,
   the resolved model and what's downloaded.
+- **Parakeet (ONNX) manager** (Settings → Models): the two curated
+  Parakeet TDT exports (v2/v3) with the same download/Use flow (checksum-
+  verified atomic model dir); selecting it sets
+  `model.backend = "parakeet"` + `model.name` (an engine key — hot-swaps
+  the loaded model like `select-model`); doctor reports onnxruntime,
+  providers and per-model download state.
 - Replaces the retired web UI (spec: docs/superpowers/specs/
   2026-09-02-native-settings-app-design.md) - no TCP listener remains;
   the localhost CSRF/DNS-rebinding surface is gone by construction.
@@ -163,8 +169,18 @@ matrix + upstream changelog with its refresh loop).
       evdev hotkey paths.
 
 ### Models (v0.4)
-- [ ] **Parakeet TDT v2/v3 via NeMo/ONNX** — upstream's default model and the
-      highest-value addition on NVIDIA.
+- [x] **Parakeet TDT v2/v3 via ONNX** — DONE: curated sherpa-onnx tarball
+c      catalog (v2 English / v3 multilingual, int8) with sha256-verified
+      multi-file download (tarball + per-file checksums, atomic model dir,
+      streamed extraction — never extractall), pure-numpy log-mel
+      featurizer + greedy TDT decode over ONNX Runtime (CUDA execution
+      provider picked up automatically when the installed wheel has it);
+      Settings → Models "Parakeet (ONNX)" group with download progress +
+      Use, doctor resolution report, `parakeet` pip extra.
+      *Divergence (deliberate): `backend = "auto"` still prefers the
+      whisper family — upstream runs Parakeet as its default; Parakeet is
+      explicit-selection-only here.* Default model is v2 (upstream defaults
+      to v3).
 - [ ] Parakeet Realtime / Nemotron 3.5 streaming (NeMo/Riva) — unlocks real
       streaming preview.
 - [x] whisper.cpp GGUF auto-download + model manager — DONE: curated GGUF

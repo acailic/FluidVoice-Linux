@@ -48,7 +48,7 @@ a user-space install with no sudo.
 ## How it works
 
 1. **Global hotkey** (default: Right Ctrl, toggle mode) starts recording — 16 kHz mono via PipeWire.
-2. **Local transcription** — faster-whisper on CUDA GPU when available, CPU int8 otherwise (whisper.cpp and torch backends also supported).
+2. **Local transcription** — faster-whisper on CUDA GPU when available, CPU int8 otherwise (whisper.cpp, torch, and NVIDIA Parakeet TDT via ONNX Runtime backends also supported).
 3. **Post-processing chain** — filler-word removal → custom dictionary → **spoken punctuation commands** (`literal comma`, `literal new line`, `example literal dot com`, …) — the full FluidVoice rule table.
 4. **Optional AI polish** — the *verbatim* FluidVoice dictation prompt sent to any OpenAI-compatible endpoint (OpenAI, Groq, Ollama, LM Studio, llama.cpp server). Turns *"um lets meet on tuesday around 3 no wait 4 p.m."* into *"Let's meet on Tuesday at 4 p.m."*
 5. **Text insertion** — `xdotool type` keystrokes (clipboard-free), or clipboard paste with automatic restore for long texts. Plus history, start/stop sounds (the original GPLv3 FluidVoice SFX), and desktop notifications.
@@ -230,7 +230,7 @@ converts via ffmpeg since `whisper-cli` reliably reads WAV only.
 | Feature | macOS (upstream) | Linux port (SayItErmano) |
 |---|---|---|
 | Push hotkey → dictate → text in any app | ✅ (Right ⌥) | ✅ (Right Ctrl / any key) |
-| 100% local transcription | ✅ (Parakeet/Nemotron/Whisper/Apple) | ✅ (faster-whisper/whisper.cpp; Parakeet on roadmap) |
+| 100% local transcription | ✅ (Parakeet/Nemotron/Whisper/Apple) | ✅ (faster-whisper/whisper.cpp/Parakeet TDT via ONNX; `backend = "parakeet"`) |
 | Toggle & hold (push-to-talk) modes | ✅ | ✅ toggle; hold for non-modifier keys (other keys pass through while held) |
 | Filler-word removal + custom dictionary | ✅ | ✅ (same defaults) |
 | Spoken punctuation ("literal comma") | ✅ full rule table | ✅ ported (dot/slash/at-sign contexts included) |
@@ -268,6 +268,8 @@ mode = "toggle"             # or "hold" (push-to-talk; other keys pass through w
 name = "small"              # tiny/base/small/medium/large-v3/large-v3-turbo
 # backend = "whisper.cpp"    # use the external whisper-cli binary instead
 whispercpp_model = "ggml-base.bin"  # catalog name or path — download via Settings → Models
+# backend = "parakeet"       # NVIDIA Parakeet TDT via ONNX Runtime (pip install '.[parakeet]')
+# name = "parakeet-tdt-0.6b-v2"     # or parakeet-tdt-0.6b-v3 (multilingual)
 device = "auto"             # auto | cuda | cpu
 
 [recording]

@@ -7,8 +7,13 @@ build/
 .pytest_cache/
 *.wav
 *.flac
+# deliberate bundled test assets (the rules above exclude captures)
+!tests/integration/fixtures/*.wav
 
 # sssf runtime
 adws/adw_data/sessions/
 adws/adw_data/sssf.db*
 .env
+
+# uv run artifact from the factory drivers
+uv.lock

@@ -146,6 +146,30 @@ class TestApplySettings:
         _, rejected = apply_settings(cfg, {"model": {"name": "gpt-4o"}})
         assert rejected == ["model.name"]
 
+    def test_backend_enum_accepts_parakeet_not_alias(self, cfg):
+        changed, rejected = apply_settings(
+            cfg, {"model": {"backend": "parakeet"}})
+        assert rejected == [] and cfg["model"]["backend"] == "parakeet"
+        _, rejected = apply_settings(
+            cfg, {"model": {"backend": "parakeet-onnx"}})
+        assert rejected == ["model.backend"]
+
+    def test_model_name_accepts_parakeet_catalog(self, cfg):
+        from fluidvoice import model_catalog
+        for name in model_catalog.PARAKEET_CATALOG:
+            changed, rejected = apply_settings(
+                cfg, {"model": {"name": name}})
+            assert rejected == [] and cfg["model"]["name"] == name
+        _, rejected = apply_settings(
+            cfg, {"model": {"name": "gpt-4o-audio"}})
+        assert rejected == ["model.name"]
+
+    def test_model_name_change_is_an_engine_key(self):
+        # the parakeet Use-flow sends backend+name; once the backend is
+        # parakeet only `name` changes and must still reload the engine
+        from fluidvoice.config import ENGINE_KEYS
+        assert "model.name" in ENGINE_KEYS
+
     def test_restart_required_is_only_model_warmup_now(self):
         # the [server] section retired with the web UI
         assert RESTART_REQUIRED == {"model.eager_warmup"}

@@ -47,6 +47,41 @@ def _whispercpp_lines(cfg: dict) -> list[str]:
     return lines
 
 
+def _parakeet_lines(cfg: dict) -> list[str]:
+    """Parakeet (ONNX) report: runtime, providers, per-model download state."""
+    from . import model_catalog
+    try:
+        import onnxruntime as ort
+        provs = [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider")
+                 if p in ort.get_available_providers()]
+        where = "CUDA+CPU" if "CUDAExecutionProvider" in provs else "CPU"
+        lines = [f"  onnxruntime: {ort.__version__} ({where})"]
+    except Exception:
+        return ["  onnxruntime: not installed (pip install onnxruntime)"]
+    for name, info in model_catalog.PARAKEET_CATALOG.items():
+        d = model_catalog.parakeet_model_dir(name)
+        if model_catalog.parakeet_downloaded(name):
+            lines.append(f"  {name}: downloaded ({d})")
+        else:
+            missing = ", ".join(f for f in info["files"]
+                                 if not (d / f).is_file()) or "incomplete"
+            lines.append(f"  {name}: not downloaded — missing: {missing} "
+                         "(get it in Settings -> Models)")
+    if (cfg.get("model", {}).get("backend") or "") == "parakeet":
+        raw = str(cfg.get("model", {}).get("name", "")).strip() or "auto"
+        if raw in ("auto", ""):
+            raw = model_catalog.PARAKEET_DEFAULT_MODEL
+        if raw in model_catalog.PARAKEET_CATALOG:
+            mark = ("downloaded" if model_catalog.parakeet_downloaded(raw)
+                    else "not downloaded")
+            lines.append(f"  active model: {raw} ({mark})")
+        else:
+            lines.append(f"  active model: unknown name '{raw}' "
+                         f"(catalog: "
+                         f"{', '.join(sorted(model_catalog.PARAKEET_CATALOG))})")
+    return lines
+
+
 def run() -> int:
     print(f"SayItErmano v{__version__} doctor\n")
     ok = True
@@ -98,6 +133,10 @@ def run() -> int:
         cfg = {}
     print("\nwhisper.cpp:")
     for line in _whispercpp_lines(cfg):
+        print(line)
+
+    print("\nparakeet:")
+    for line in _parakeet_lines(cfg):
         print(line)
 
     print(f"\ncontrol socket: {paths.socket_path()} "

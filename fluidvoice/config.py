@@ -59,8 +59,8 @@ DEFAULTS: dict[str, Any] = {
         "pause_media": True,  # pause MPRIS players while dictating (resume after)
     },
     "model": {
-        "backend": "auto",  # auto | faster-whisper | whisper-torch | whisper.cpp
-        "name": "auto",  # auto -> small (CUDA) / base (CPU); or tiny/base/small/medium/large-v3/large-v3-turbo
+        "backend": "auto",  # auto | faster-whisper | whisper-torch | whisper.cpp | parakeet
+        "name": "auto",  # auto -> small (CUDA) / base (CPU); tiny...large-v3-turbo; parakeet catalog names for backend="parakeet"
         "device": "auto",  # auto | cuda | cpu
         "compute": "auto",  # auto | float16 | int8
         "whispercpp_model": "",  # catalog name (ggml-base.bin...) or path to a ggml/gguf model for whisper.cpp
@@ -185,10 +185,11 @@ skip_silent = false
 first_pcm_timeout = 2.0
 
 [model]
-# auto | faster-whisper | whisper-torch | whisper.cpp
+# auto | faster-whisper | whisper-torch | whisper.cpp | parakeet
 backend = "auto"
 # auto -> "small" when CUDA is available, "base" otherwise.
 # Or one of: tiny, base, small, medium, large-v3, large-v3-turbo
+# with backend="parakeet": parakeet-tdt-0.6b-v2 | parakeet-tdt-0.6b-v3
 name = "auto"
 device = "auto"   # auto | cuda | cpu
 compute = "auto"  # auto | float16 | int8
@@ -382,7 +383,8 @@ SETTING_ENUMS: dict[tuple[str, str], set] = {
     ("recording", "preview_mode"): {"auto", "notify", "overlay"},
     ("recording", "preview_overlay_size"): {"pill", "small", "medium", "large"},
     ("hotkey", "mode"): {"toggle", "hold"},
-    ("model", "backend"): {"auto", "faster-whisper", "whisper-torch", "whisper.cpp"},
+    ("model", "backend"): {"auto", "faster-whisper", "whisper-torch",
+                           "whisper.cpp", "parakeet"},
     ("model", "device"): {"auto", "cuda", "cpu"},
     ("model", "compute"): {"auto", "float16", "int8"},
     ("insertion", "mode"): {"auto", "typed", "paste"},
@@ -432,8 +434,8 @@ ALLOWED_SETTINGS: dict[str, set] = {
                 "confirm_timeout_s"},
 }
 RESTART_REQUIRED = {"model.eager_warmup"}
-ENGINE_KEYS = {"model.backend", "model.device", "model.compute",
-               "model.whispercpp_model"}
+ENGINE_KEYS = {"model.backend", "model.name", "model.device",
+               "model.compute", "model.whispercpp_model"}
 
 
 def coerce_setting(section: str, key: str, value: Any) -> tuple[bool, Any]:
@@ -531,7 +533,7 @@ def apply_settings(cfg: dict, body: dict) -> tuple[list[str], list[str]]:
     """Whitelisted, validated merge of {section: {key: value}} into cfg
     (mutates cfg; no save). Returns (changed, rejected) as 'section.key'
     strings. Unknown keys and bad types are rejected, never half-applied."""
-    from . import backends
+    from . import backends, model_catalog
 
     changed: list[str] = []
     rejected: list[str] = []
@@ -542,7 +544,8 @@ def apply_settings(cfg: dict, body: dict) -> tuple[list[str], list[str]]:
                 if (section, key) == ("model", "name"):
                     value = backends.ALIASES.get(str(value).strip().lower(),
                                                  str(value).strip().lower())
-                    ok = value in backends.FW_MODEL_REPOS or value == "auto"
+                    ok = (value in backends.FW_MODEL_REPOS or value == "auto"
+                          or value in model_catalog.PARAKEET_CATALOG)
                 elif (section, key) == ("ai", "max_retries"):
                     try:
                         ok = isinstance(value, (int, float)) \

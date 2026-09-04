@@ -1,4 +1,5 @@
 import json
+import sys
 import threading
 from pathlib import Path
 
@@ -73,6 +74,60 @@ class TestDoctorWhispercpp:
         lines = self.lines(model_value="ggml-bogus.bin")
         assert any("unknown name" in l and "ggml-base.bin" in l
                    for l in lines)
+
+
+class TestDoctorParakeet:
+    """_parakeet_lines resolution report (onnxruntime stubbed via sys.modules)."""
+
+    @pytest.fixture(autouse=True)
+    def _cache(self, tmp_path, monkeypatch):
+        self.monkeypatch = monkeypatch
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+    def lines(self, backend="", name="", downloaded=lambda n: False):
+        from fluidvoice import doctor, model_catalog
+        self.monkeypatch.setattr(model_catalog, "parakeet_downloaded",
+                                 downloaded)
+        cfg = {"model": {"backend": backend, "name": name}}
+        return doctor._parakeet_lines(cfg)
+
+    def test_not_installed(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "onnxruntime", None)
+        lines = self.lines()
+        assert len(lines) == 1
+        assert "not installed" in lines[0]
+        assert "pip install onnxruntime" in lines[0]
+
+    def test_installed_models_not_downloaded(self):
+        from fluidvoice import model_catalog
+        lines = self.lines()
+        assert any("onnxruntime" in l for l in lines)
+        for name in model_catalog.PARAKEET_CATALOG:
+            assert any(name in l and "not downloaded" in l and
+                       "joiner.int8.onnx" in l for l in lines), name
+
+    def test_configured_and_downloaded(self):
+        lines = self.lines(backend="parakeet", name="parakeet-tdt-0.6b-v3",
+                           downloaded=lambda n: n == "parakeet-tdt-0.6b-v3")
+        assert any("parakeet-tdt-0.6b-v3: downloaded" in l for l in lines)
+        assert any("active model: parakeet-tdt-0.6b-v3 (downloaded)"
+                   for l in lines)
+
+    def test_configured_missing_file(self, tmp_path):
+        d = tmp_path / "sayit-ermano" / "models" / "parakeet" \
+            / "parakeet-tdt-0.6b-v2"
+        d.mkdir(parents=True)
+        for f in ("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"):
+            (d / f).write_bytes(b"x")
+        lines = self.lines(backend="parakeet", name="parakeet-tdt-0.6b-v2")
+        assert any("missing: joiner.int8.onnx" in l for l in lines)
+        assert any("active model: parakeet-tdt-0.6b-v2 (not downloaded)"
+                   for l in lines)
+
+    def test_configured_unknown_name_lists_catalog(self):
+        lines = self.lines(backend="parakeet", name="parakeet-t5")
+        assert any("unknown name 'parakeet-t5'" in l
+                   and "parakeet-tdt-0.6b-v2" in l for l in lines)
 
 
 class TestControlSocket:

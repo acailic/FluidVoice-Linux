@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from fluidvoice import backends
@@ -183,3 +185,71 @@ class TestUpstreamNameAliases:
         assert backends.resolve_model_name("whisper-small") == "small"
         assert backends.resolve_model_name("whisper-large-turbo") == "large-v3-turbo"
         assert backends.resolve_model_name("WHISPER-BASE") == "base"
+
+
+class TestParakeetSelection:
+    """Explicit parakeet wiring: load_backend, resolve_model_name, status."""
+
+    @pytest.fixture()
+    def pk_fakes(self, monkeypatch):
+        from fluidvoice.backends import parakeet_onnx as pk
+
+        made: list[str] = []
+
+        class FakePK:
+            name = "parakeet"
+
+            def __init__(self, c):
+                made.append("parakeet")
+
+        monkeypatch.setattr(pk, "ParakeetOnnxBackend", FakePK)
+        return made
+
+    @pytest.fixture()
+    def fw_fake(self, monkeypatch):
+        from fluidvoice.backends import faster_whisper_backend as fw
+
+        class FakeFW:
+            name = "faster-whisper"
+
+            def __init__(self, c):
+                pass
+
+        monkeypatch.setattr(fw, "FasterWhisperBackend", FakeFW)
+
+    def test_explicit_and_alias_construct_it(self, monkeypatch, pk_fakes):
+        b = backends.load_backend(cfg(backend="parakeet"))
+        assert b.name == "parakeet" and pk_fakes == ["parakeet"]
+        b = backends.load_backend(cfg(backend="parakeet-onnx"))
+        assert b.name == "parakeet"
+        assert pk_fakes == ["parakeet", "parakeet"]
+
+    def test_auto_never_picks_parakeet_even_with_ort(self, monkeypatch, fw_fake):
+        monkeypatch.setattr(backends, "_import_ok", lambda m: True)
+        monkeypatch.setattr(backends, "preload_cuda_libs", lambda: False)
+        monkeypatch.setattr(backends, "cuda_available", lambda: False)
+        b = backends.load_backend(cfg())
+        assert b.name == "faster-whisper"  # branch 3, whisper family
+
+    def test_parakeet_model_names_pass_through(self):
+        from fluidvoice import model_catalog
+        for name in model_catalog.PARAKEET_CATALOG:
+            assert backends.resolve_model_name(name) == name
+
+    def test_backend_status_not_installed(self, monkeypatch):
+        monkeypatch.setattr(backends, "_import_ok", lambda m: False)
+        assert backends.backend_status()["parakeet"] == \
+            "not installed (pip install onnxruntime)"
+
+    def test_backend_status_available(self, monkeypatch):
+        from types import SimpleNamespace
+        from fluidvoice import model_catalog
+        monkeypatch.setattr(backends, "_import_ok", lambda m: m != "torch")
+        stub = SimpleNamespace(
+            __version__="1.29.0",
+            get_available_providers=lambda: ["CPUExecutionProvider"])
+        monkeypatch.setitem(sys.modules, "onnxruntime", stub)
+        monkeypatch.setattr(model_catalog, "parakeet_downloaded",
+                            lambda n: n == "parakeet-tdt-0.6b-v2")
+        s = backends.backend_status()["parakeet"]
+        assert s == "available (CPU · v2 yes, v3 no)"

@@ -94,6 +94,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._model_rows: list[Adw.ActionRow] = []
         self._gguf_rows: list[Adw.ActionRow] = []
         self._gguf_dl: dict[str, dict] = {}  # name -> {bytes, total, done, error}
+        self._parakeet_rows: list[Adw.ActionRow] = []
+        self._parakeet_dl: dict[str, dict] = {}
         self._mod_toggles: dict[str, Gtk.ToggleButton] = {}
 
         self._build_general()
@@ -387,6 +389,11 @@ class SettingsWindow(Adw.PreferencesWindow):
             description="Direct ggml models for the whisper.cpp backend")
         page.add(self.gguf_group)
 
+        self.parakeet_group = Adw.PreferencesGroup(
+            title="Parakeet (ONNX)",
+            description="NVIDIA Parakeet TDT via ONNX Runtime — explicit backend")
+        page.add(self.parakeet_group)
+
         warm = Adw.PreferencesGroup(title="State")
         self.warmup_row = Adw.ActionRow(title="Model", subtitle="—")
         self.warmup_spinner = Gtk.Spinner()
@@ -399,7 +406,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         engine.add(self._combo(
             "model", "backend", "Backend",
             [("auto", "auto"), ("faster-whisper", "faster-whisper"),
-             ("whisper-torch", "whisper-torch"), ("whisper.cpp", "whisper.cpp")]))
+             ("whisper-torch", "whisper-torch"), ("whisper.cpp", "whisper.cpp"),
+             ("parakeet", "parakeet")]))
         engine.add(self._combo(
             "model", "device", "Device",
             [("auto", "auto"), ("cuda", "cuda"), ("cpu", "cpu")]))
@@ -438,6 +446,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             self.models_group.add(row)
             self._model_rows.append(row)
         self._refresh_gguf_rows()
+        self._refresh_parakeet_rows()
         st = self.c.status() or {}
         warm = st.get("warmup") or {}
         if warm.get("running"):
@@ -578,6 +587,106 @@ class SettingsWindow(Adw.PreferencesWindow):
                 (resp.get("rejected") or []) + (resp.get("errors") or [])))
             return
         self.toast(f"Switching to whisper.cpp ({name})…")
+        self._load()  # resync cfg + rows
+        GLib.timeout_add_seconds(1, self._poll_model)  # existing warmup poll
+
+    # -- Parakeet ONNX models (download + use) ------------------------------------
+
+    def _active_parakeet(self) -> str | None:
+        m = self.cfg.get("model", {})
+        if str(m.get("backend", "")) != "parakeet":
+            return None
+        name = str(m.get("name", "")).strip()
+        return name if name in model_catalog.PARAKEET_CATALOG else None
+
+    def _parakeet_dl_subtitle(self, name: str) -> str:
+        st = self._parakeet_dl.get(name) or {}
+        b, t = st.get("bytes", 0), st.get("total")
+
+        def mb(n):
+            return f"{n / 1_000_000:.0f} MB"
+
+        return f"downloading… {mb(b)} / {mb(t)}" if t else f"downloading… {mb(b)}"
+
+    def _refresh_parakeet_rows(self) -> None:
+        for row in self._parakeet_rows:
+            self.parakeet_group.remove(row)
+        self._parakeet_rows = []
+        active = self._active_parakeet()
+        for name, info in model_catalog.PARAKEET_CATALOG.items():
+            row = Adw.ActionRow(
+                title=name,
+                subtitle=f"{info['size']} · {info['langs']} · {info['note']}")
+            if name == active:
+                row.add_suffix(Gtk.Label(label="Active",
+                                         css_classes=["success", "caption"]))
+            elif (name in self._parakeet_dl
+                    and not self._parakeet_dl[name].get("done")
+                    and not self._parakeet_dl[name].get("error")):
+                row.set_subtitle(self._parakeet_dl_subtitle(name))
+                row.add_suffix(Gtk.Spinner(spinning=True))
+            elif model_catalog.parakeet_downloaded(name):
+                btn = Gtk.Button(label="Use", css_classes=["suggested-action"])
+                btn.set_valign(Gtk.Align.CENTER)
+                btn.connect("clicked", self._use_parakeet, name)
+                row.add_suffix(btn)
+            else:
+                btn = Gtk.Button(label="Download & use",
+                                 css_classes=["suggested-action"])
+                btn.set_valign(Gtk.Align.CENTER)
+                btn.connect("clicked", self._download_parakeet, name)
+                row.add_suffix(btn)
+            self.parakeet_group.add(row)
+            self._parakeet_rows.append(row)
+
+    def _download_parakeet(self, _btn, name: str) -> None:
+        if name in self._parakeet_dl and not (self._parakeet_dl[name].get("done")
+                                              or self._parakeet_dl[name].get("error")):
+            return  # already running
+        self._parakeet_dl[name] = {"bytes": 0, "total": None, "done": False,
+                                   "error": None}
+        self._refresh_models()
+
+        def work():
+            st = self._parakeet_dl[name]
+            try:
+                model_download.download_parakeet(
+                    name, progress=lambda b, t: st.update(bytes=b, total=t))
+                st["done"] = True
+            except Exception as e:  # noqa: BLE001 - surfaced as a toast
+                st["error"] = str(e)[:300]
+
+        threading.Thread(target=work, daemon=True).start()
+        GLib.timeout_add(400, self._poll_parakeet_dl, name)
+
+    def _poll_parakeet_dl(self, name: str) -> bool:
+        st = self._parakeet_dl.get(name)
+        if st is None or not (st.get("done") or st.get("error")):
+            # still running: rebuild rows for a live subtitle
+            self._refresh_models()
+            return True
+        self._refresh_models()
+        if st.get("error"):
+            self.toast(f"download failed: {st['error']}")
+        else:
+            self.toast(f"{name} downloaded — click Use to switch")
+        return False  # stop the timer
+
+    def _use_parakeet(self, _btn, name: str) -> None:
+        if not model_catalog.parakeet_downloaded(name):
+            self.toast(f"{name} is not downloaded yet")
+            return
+        try:
+            resp = self.c.set_config(
+                {"model": {"backend": "parakeet", "name": name}})
+        except Exception as e:
+            self.toast(str(e))
+            return
+        if resp.get("rejected") or resp.get("errors"):
+            self.toast("Rejected: " + ", ".join(
+                (resp.get("rejected") or []) + (resp.get("errors") or [])))
+            return
+        self.toast(f"Switching to parakeet ({name})…")
         self._load()  # resync cfg + rows
         GLib.timeout_add_seconds(1, self._poll_model)  # existing warmup poll
 

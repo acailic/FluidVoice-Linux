@@ -4,6 +4,8 @@ Priority under "auto":
   1. faster-whisper  (CUDA if the NVIDIA runtime libs can be resolved, else CPU int8)
   2. whisper-torch   (openai-whisper; used when torch+CUDA is already installed)
   3. whisper.cpp     (external binary + ggml/gguf model — catalog name or path)
+  4. parakeet        (ONNX Runtime; explicit selection only in v1 — NOT in
+                      "auto"; divergence from upstream, see docs/STATUS.md)
 """
 from __future__ import annotations
 
@@ -122,6 +124,23 @@ def backend_status() -> dict[str, str]:
     else:
         status["faster-whisper"] = "not installed (pip install faster-whisper)"
     status["whisper.cpp"] = _whispercpp_binary() or "binary not found on PATH"
+    if _import_ok("onnxruntime"):
+        try:
+            import onnxruntime as ort
+            from .. import model_catalog
+            provs = [p for p in ("CUDAExecutionProvider",
+                                 "CPUExecutionProvider")
+                     if p in ort.get_available_providers()]
+            where = "CUDA+CPU" if "CUDAExecutionProvider" in provs else "CPU"
+            v2 = "yes" if model_catalog.parakeet_downloaded(
+                "parakeet-tdt-0.6b-v2") else "no"
+            v3 = "yes" if model_catalog.parakeet_downloaded(
+                "parakeet-tdt-0.6b-v3") else "no"
+            status["parakeet"] = f"available ({where} · v2 {v2}, v3 {v3})"
+        except Exception:
+            status["parakeet"] = "available (details unknown)"
+    else:
+        status["parakeet"] = "not installed (pip install onnxruntime)"
     return status
 
 
@@ -139,6 +158,9 @@ def resolve_model_name(name: str) -> str:
     name = ALIASES.get(name.strip().lower(), name.strip().lower())
     if name in ("", "auto"):
         return "small" if cuda_available() else "base"
+    from .. import model_catalog  # imported lazily: model_catalog imports us
+    if name in model_catalog.PARAKEET_CATALOG:
+        return name
     if name not in FW_MODEL_REPOS:
         raise ValueError(f"unknown model '{name}' (choose from {sorted(FW_MODEL_REPOS)})")
     return name
@@ -172,4 +194,7 @@ def load_backend(cfg: dict) -> Backend:
         return TorchWhisperBackend(cfg)
     if wanted in ("whisper.cpp", "whispercpp"):
         return WhisperCppBackend(cfg)
+    if wanted in ("parakeet", "parakeet-onnx"):
+        from .parakeet_onnx import ParakeetOnnxBackend
+        return ParakeetOnnxBackend(cfg)
     raise ValueError(f"unknown backend '{wanted}'")

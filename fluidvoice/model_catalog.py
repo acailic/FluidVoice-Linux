@@ -47,6 +47,47 @@ GGUF_CATALOG: dict[str, dict[str, str]] = {
 GGUF_DIR_NAME = "whisper.cpp"
 
 
+# NVIDIA Parakeet TDT via the sherpa-onnx community exports (k2-fsa GitHub
+# release, asr-models tag) — one tarball per model; `files` is the
+# post-extract integrity + presence manifest (per-file sha256).
+PARAKEET_TARBALL_BASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
+PARAKEET_CATALOG: dict[str, dict] = {
+    "parakeet-tdt-0.6b-v2": {
+        "size": "~630 MB", "langs": "en",
+        "note": "NVIDIA Parakeet TDT 0.6B v2 — English, punctuation + true case",
+        "url": PARAKEET_TARBALL_BASE
+            + "/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2",
+        "tarball_sha256": "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad",
+        "files": {
+            "encoder.int8.onnx": "a32b12d17bbbc309d0686fbbcc2987b5e9b8333a7da83fa6b089f0a2acd651ab",
+            "decoder.int8.onnx": "b6bb64963457237b900e496ee9994b59294526439fbcc1fecf705b31a15c6b4e",
+            "joiner.int8.onnx": "7946164367946e7f9f29a122407c3252b680dbae9a51343eb2488d057c3c43d2",
+            "tokens.txt": "ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d",
+        },
+        "features": {"sample_rate": 16000, "n_mels": 128, "n_fft": 512,
+                     "win": 400, "hop": 160, "fmin": 0.0, "fmax": 8000.0},
+    },
+    "parakeet-tdt-0.6b-v3": {
+        "size": "~640 MB", "langs": "25 EU + ru/uk",
+        "note": "NVIDIA Parakeet TDT 0.6B v3 — multilingual (25 European languages)",
+        "url": PARAKEET_TARBALL_BASE
+            + "/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+        "tarball_sha256": "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
+        "files": {
+            "encoder.int8.onnx": "acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247",
+            "decoder.int8.onnx": "179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e",
+            "joiner.int8.onnx": "3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3",
+            "tokens.txt": "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+        },
+        "features": {"sample_rate": 16000, "n_mels": 128, "n_fft": 512,
+                     "win": 400, "hop": 160, "fmin": 0.0, "fmax": 8000.0},
+    },
+}
+PARAKEET_DIR_NAME = "parakeet"
+# explicit-backend default; upstream defaults to v3 — divergence noted in STATUS.md
+PARAKEET_DEFAULT_MODEL = "parakeet-tdt-0.6b-v2"
+
+
 def gguf_dir() -> Path:
     return paths.models_dir() / GGUF_DIR_NAME
 
@@ -58,6 +99,22 @@ def gguf_path(name: str) -> Path:
 def gguf_downloaded(name: str) -> bool:
     """True when the catalog model's file exists in the managed cache."""
     return name in GGUF_CATALOG and gguf_path(name).is_file()
+
+
+def parakeet_dir() -> Path:
+    return paths.models_dir() / PARAKEET_DIR_NAME
+
+
+def parakeet_model_dir(name: str) -> Path:
+    return parakeet_dir() / name
+
+
+def parakeet_downloaded(name: str) -> bool:
+    """True when every catalog-listed file exists in parakeet/<name>/."""
+    if name not in PARAKEET_CATALOG:
+        return False
+    return all((parakeet_model_dir(name) / f).is_file()
+               for f in PARAKEET_CATALOG[name]["files"])
 
 
 def model_downloaded(name: str) -> bool:

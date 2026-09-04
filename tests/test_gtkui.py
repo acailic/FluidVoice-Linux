@@ -536,6 +536,127 @@ class TestSettingsWindow:
         assert c.saved == []
         w.close()
 
+    # -- Parakeet (ONNX) group ---------------------------------------------------
+
+    def test_parakeet_group_rows_built(self, loop):
+        from fluidvoice import model_catalog
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        w = SettingsWindow(client=StubClient())
+        w.present()
+        pump(loop)
+        assert len(w._parakeet_rows) == len(model_catalog.PARAKEET_CATALOG)
+        assert {r.get_title() for r in w._parakeet_rows} == \
+            set(model_catalog.PARAKEET_CATALOG)
+        w.close()
+
+    def test_active_parakeet_marker(self, loop):
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        c = StubClient()
+
+        def pk_cfg():
+            cfg = copy.deepcopy(DEFAULTS)
+            cfg["model"] = {**cfg["model"], "backend": "parakeet",
+                            "name": "parakeet-tdt-0.6b-v2"}
+            return cfg, True
+
+        c.get_config = pk_cfg
+        w = SettingsWindow(client=c)
+        w.present()
+        pump(loop)
+        assert w._active_parakeet() == "parakeet-tdt-0.6b-v2"
+
+        def walk(widget):
+            yield widget
+            child = widget.get_first_child()
+            while child:
+                yield from walk(child)
+                child = child.get_next_sibling()
+
+        row = next(r for r in w._parakeet_rows
+                   if r.get_title() == "parakeet-tdt-0.6b-v2")
+        labels = [x.get_text() for x in walk(row) if isinstance(x, Gtk.Label)]
+        assert "Active" in labels
+        w.close()
+
+    def test_parakeet_download_flow(self, loop, monkeypatch):
+        from fluidvoice.gtkui import settings_window as sw
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        downloaded = {"now": False}
+        monkeypatch.setattr(sw.model_catalog, "parakeet_downloaded",
+                            lambda n: downloaded["now"])
+        calls: list[tuple[str, list]] = []
+
+        def fake_download(name, progress=None):
+            calls.append((name, []))
+            if progress:
+                progress(50, 100)
+                progress(100, 100)
+            return sw.model_catalog.parakeet_model_dir(name)
+
+        monkeypatch.setattr(sw.model_download, "download_parakeet",
+                            fake_download)
+        w = SettingsWindow(client=StubClient())
+        w.present()
+        pump(loop)
+        w._download_parakeet(None, "parakeet-tdt-0.6b-v2")
+        assert pump_until(
+            loop, lambda: w._parakeet_dl["parakeet-tdt-0.6b-v2"].get("done"))
+        st = w._parakeet_dl["parakeet-tdt-0.6b-v2"]
+        assert calls and calls[0][0] == "parakeet-tdt-0.6b-v2"
+        assert st["total"] == 100 and st["error"] is None
+        downloaded["now"] = True
+        w._refresh_models()
+
+        def walk(widget):
+            yield widget
+            child = widget.get_first_child()
+            while child:
+                yield from walk(child)
+                child = child.get_next_sibling()
+
+        row = next(r for r in w._parakeet_rows
+                   if r.get_title() == "parakeet-tdt-0.6b-v2")
+        buttons = [x.get_label() for x in walk(row) if isinstance(x, Gtk.Button)]
+        assert buttons == ["Use"]
+        w.close()
+
+    def test_parakeet_download_failure_toasts(self, loop, monkeypatch):
+        from fluidvoice.gtkui import settings_window as sw
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        monkeypatch.setattr(sw.model_catalog, "parakeet_downloaded",
+                            lambda n: False)
+
+        def broken(name, progress=None):
+            raise OSError("net down")
+
+        monkeypatch.setattr(sw.model_download, "download_parakeet", broken)
+        w = SettingsWindow(client=StubClient())
+        w.present()
+        pump(loop)
+        toasts: list[str] = []
+        monkeypatch.setattr(w, "toast", lambda text, timeout=5: toasts.append(text))
+        w._download_parakeet(None, "parakeet-tdt-0.6b-v2")
+        assert pump_until(
+            loop, lambda: w._parakeet_dl["parakeet-tdt-0.6b-v2"].get("error"))
+        assert w._parakeet_dl["parakeet-tdt-0.6b-v2"]["error"] == "net down"
+        assert pump_until(loop, lambda: any("net down" in t for t in toasts))
+        w.close()
+
+    def test_use_parakeet_posts_config(self, loop, monkeypatch):
+        from fluidvoice.gtkui import settings_window as sw
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        monkeypatch.setattr(sw.model_catalog, "parakeet_downloaded",
+                            lambda n: True)
+        c = StubClient()
+        w = SettingsWindow(client=c)
+        w.present()
+        pump(loop)
+        w._use_parakeet(None, "parakeet-tdt-0.6b-v2")
+        assert c.saved[-1]["model"] == {
+            "backend": "parakeet", "name": "parakeet-tdt-0.6b-v2"}
+        pump(loop, 1300)  # let the scheduled warmup poll run once and stop
+        w.close()
+
 
 class TestOnboardingWindow:
     def test_populates_and_tryout(self, loop):
