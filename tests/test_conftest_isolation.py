@@ -58,11 +58,11 @@ class TestSessionIsolation:
                                      output="ok", duration_ms=0)
 
         before = _fingerprint(REAL_HISTORY_FILE)
+        from tests.test_command import done_reply, reply
         s = cm.CommandSession(
             cfg,
             client=StubAIClient(
-                ['{"command": "true 1", "purpose": "p", "done": false}',
-                 '{"done": true, "summary": "ok"}']),
+                [reply(("true 1", "p")), done_reply("ok")]),
             runner=runner)
         assert s.start("x") is not None
         s.confirm()

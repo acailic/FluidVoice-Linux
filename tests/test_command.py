@@ -34,6 +34,29 @@ def ai_ready(cfg):
     return cfg
 
 
+def reply(*specs, done=False, summary=None):
+    """Build a strict-JSON tool_calls reply. Each spec is a tuple
+    (command, purpose=None, workingDirectory=None)."""
+    calls = []
+    for spec in specs:
+        args = {"command": spec[0]}
+        if len(spec) > 1 and spec[1] is not None:
+            args["purpose"] = spec[1]
+        if len(spec) > 2 and spec[2] is not None:
+            args["workingDirectory"] = spec[2]
+        calls.append({"id": f"call_{len(calls) + 1}",
+                      "name": "execute_terminal_command",
+                      "arguments": args})
+    obj = {"tool_calls": calls, "done": done}
+    if summary is not None:
+        obj["summary"] = summary
+    return json.dumps(obj)
+
+
+def done_reply(summary="ok"):
+    return reply(done=True, summary=summary)
+
+
 class TestFences:
     def test_json_fence_stripped(self):
         assert cm.strip_code_fences(
@@ -55,17 +78,103 @@ class TestFences:
 
 
 class TestParseReply:
-    def test_proposal(self):
-        r = cm.parse_reply('{"command": "ls -la", "purpose": "list", "done": false}')
+    def test_single_call_parses_with_validated_args(self):
+        r = cm.parse_reply(reply(("ls -la", "list")))
         assert r.kind == "proposal"
-        assert r.proposal.command == "ls -la"
-        assert r.proposal.purpose == "list"
+        assert len(r.calls) == 1
+        call = r.calls[0]
+        assert call.name == "execute_terminal_command"
+        assert call.command == "ls -la"
+        assert call.purpose == "list"
+        assert call.working_directory is None
+        assert call.id == "call_1"
+
+    def test_multi_call_reply_parses(self):
+        r = cm.parse_reply(reply(
+            ("ls /var/log", "checking", "/tmp"),
+            ("du -sh /var/log", "executing")))
+        assert r.kind == "proposal"
+        assert [c.command for c in r.calls] == \
+            ["ls /var/log", "du -sh /var/log"]
+        assert r.calls[0].working_directory == "/tmp"
+        assert r.calls[0].purpose == "checking"
+        assert r.calls[1].working_directory is None
+        assert r.calls[1].id == "call_2"
+
+    def test_working_directory_honored_and_empty_normalized(self):
+        r = cm.parse_reply(reply(("pwd", "p", "  ")))
+        assert r.calls[0].working_directory is None
+
+    def test_id_generated_when_absent(self):
+        raw = json.dumps({"tool_calls": [
+            {"name": "execute_terminal_command",
+             "arguments": {"command": "date"}},
+            {"id": "custom", "name": "execute_terminal_command",
+             "arguments": {"command": "uptime"}}]})
+        r = cm.parse_reply(raw)
+        assert r.calls[0].id == "call_1"   # synthesized (upstream :863)
+        assert r.calls[1].id == "custom"
+
+    def test_unknown_tool_name_raises_naming_the_tool(self):
+        raw = json.dumps({"tool_calls": [
+            {"name": "delete_files", "arguments": {"command": "rm x"}}]})
+        with pytest.raises(cm.CommandError) as ei:
+            cm.parse_reply(raw)
+        assert "delete_files" in str(ei.value)
+        assert "rm x" in str(ei.value)  # raw text embedded
+
+    def test_missing_command_raises(self):
+        raw = json.dumps({"tool_calls": [
+            {"name": "execute_terminal_command", "arguments": {}}]})
+        with pytest.raises(cm.CommandError, match="non-empty"):
+            cm.parse_reply(raw)
+
+    def test_empty_command_raises(self):
+        raw = json.dumps({"tool_calls": [
+            {"name": "execute_terminal_command",
+             "arguments": {"command": "   "}}]})
+        with pytest.raises(cm.CommandError, match="non-empty"):
+            cm.parse_reply(raw)
+
+    def test_non_string_command_raises(self):
+        raw = json.dumps({"tool_calls": [
+            {"name": "execute_terminal_command",
+             "arguments": {"command": 42}}]})
+        with pytest.raises(cm.CommandError, match="non-empty"):
+            cm.parse_reply(raw)
+
+    def test_non_object_arguments_raises(self):
+        raw = json.dumps({"tool_calls": [
+            {"name": "execute_terminal_command", "arguments": "ls"}]})
+        with pytest.raises(cm.CommandError, match="arguments"):
+            cm.parse_reply(raw)
+
+    def test_non_string_working_directory_raises(self):
+        raw = json.dumps({"tool_calls": [
+            {"name": "execute_terminal_command",
+             "arguments": {"command": "ls", "workingDirectory": 7}}]})
+        with pytest.raises(cm.CommandError, match="workingDirectory"):
+            cm.parse_reply(raw)
+
+    def test_non_string_purpose_raises(self):
+        raw = json.dumps({"tool_calls": [
+            {"name": "execute_terminal_command",
+             "arguments": {"command": "ls", "purpose": 3}}]})
+        with pytest.raises(cm.CommandError, match="purpose"):
+            cm.parse_reply(raw)
+
+    def test_purpose_optional(self):
+        r = cm.parse_reply(reply(("date",)))
+        assert r.calls[0].purpose is None
+
+    def test_empty_tool_calls_not_done_raises(self):
+        with pytest.raises(cm.CommandError, match="could not parse"):
+            cm.parse_reply('{"tool_calls": [], "done": false}')
 
     def test_done_with_summary(self):
-        r = cm.parse_reply('{"command": "", "purpose": "", "done": true, '
-                           '"summary": "all good"}')
+        r = cm.parse_reply(done_reply("all good"))
         assert r.kind == "done" and r.summary == "all good"
-        assert r.proposal is None
+        assert r.calls is None
 
     def test_done_without_summary(self):
         r = cm.parse_reply('{"done": true}')
@@ -73,9 +182,9 @@ class TestParseReply:
 
     def test_prose_wrapped_json_tolerated(self):
         r = cm.parse_reply(
-            'Sure! Here you go:\n{"command": "pwd", "purpose": "where", '
-            '"done": false}\nHope that helps.')
-        assert r.kind == "proposal" and r.proposal.command == "pwd"
+            'Sure! Here you go:\n' + reply(("pwd", "where"))
+            + '\nHope that helps.')
+        assert r.kind == "proposal" and r.calls[0].command == "pwd"
 
     def test_garbage_raises_with_raw_text(self):
         with pytest.raises(cm.CommandError) as ei:
@@ -83,13 +192,17 @@ class TestParseReply:
         assert "I will just run ls for you" in str(ei.value)
 
     def test_fenced_done_reply(self):
-        r = cm.parse_reply('```json\n{"done": true, "summary": "done ok"}\n```')
+        r = cm.parse_reply('```json\n' + done_reply("done ok") + '\n```')
         assert r.kind == "done" and r.summary == "done ok"
 
+    def test_fenced_multi_call_reply(self):
+        r = cm.parse_reply('```json\n'
+                           + reply(("ls", "a"), ("pwd", "b")) + '\n```')
+        assert len(r.calls) == 2
+
     def test_think_tags_stripped(self):
-        r = cm.parse_reply('<think>reasoning here</think>'
-                           '{"command": "date", "done": false}')
-        assert r.kind == "proposal" and r.proposal.command == "date"
+        r = cm.parse_reply('<think>reasoning here</think>' + reply(("date",)))
+        assert r.kind == "proposal" and r.calls[0].command == "date"
 
 
 class TestReadiness:
@@ -120,9 +233,7 @@ class TestSessionLoop:
         history = []
         client, s = self._session(
             cfg,
-            ['{"command": "echo hello", "purpose": "say hi", "done": false}',
-             '{"command": "", "purpose": "", "done": true, '
-             '"summary": "said hello"}'],
+            [reply(("echo hello", "say hi")), done_reply("said hello")],
             history_appender=history.append)
         prop = s.start("say hello")
         assert prop is not None and prop.command == "echo hello"
@@ -139,16 +250,94 @@ class TestSessionLoop:
         assert "hello" in entry["output"]
         assert entry["text"] == "$ echo hello"
 
-    def test_cancel_executes_nothing(self, cfg):
+    def test_multi_call_set_one_llm_round_trip(self, cfg):
+        """2 calls in one reply: start presents call 1; the first confirm
+        executes it and presents call 2 with NO second LLM call; the second
+        confirm executes it, then exactly ONE advance runs with a batched
+        results message carrying both commands."""
         ai_ready(cfg)
-        history = []
+        runs = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            runs.append(cmd)
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output=f"out:{cmd}")
+
         client, s = self._session(
-            cfg, ['{"command": "rm -rf /", "purpose": "nope", "done": false}'],
-            history_appender=history.append)
-        assert s.start("danger") is not None
-        s.cancel()
+            cfg,
+            [reply(("echo one", "a"), ("echo two", "b")),
+             done_reply("both ran")],
+            runner=runner)
+        prop = s.start("do both")
+        assert prop.command == "echo one"
+        assert len(client.calls) == 1          # one LLM call so far
+        prop2 = s.confirm()
+        assert prop2 is not None and prop2.command == "echo two"
+        assert len(client.calls) == 1          # no round-trip inside the set
+        assert runs == ["echo one"]
+        assert s.confirm() is None             # set done -> advance -> done
+        assert runs == ["echo one", "echo two"]
+        assert len(client.calls) == 2          # exactly one advance
+        assert s.summary == "both ran"
+        feedback = client.calls[-1][-1]["content"]
+        assert feedback.startswith("Command results (JSON):")
+        assert '"command": "echo one"' in feedback
+        assert '"command": "echo two"' in feedback
+        assert '"purpose": "a"' in feedback     # upstream EnhancedCommandResult
+
+    def test_per_call_working_directory_reaches_runner(self, cfg, tmp_path):
+        ai_ready(cfg)
+        seen = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            seen.append((cmd, cwd))
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output="")
+
+        client, s = self._session(
+            cfg,
+            [reply(("pwd", "where", str(tmp_path))), done_reply("ok")],
+            runner=runner)
+        s.start("where am i")
+        s.confirm()
+        assert seen[0][1] == tmp_path
+
+    def test_nonexistent_working_directory_falls_back(self, cfg, tmp_path):
+        ai_ready(cfg)
+        cfg["command"]["working_dir"] = str(tmp_path)
+        seen = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            seen.append(cwd)
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output="")
+
+        client, s = self._session(
+            cfg,
+            [reply(("pwd", "where", str(tmp_path / "nope"))),
+             done_reply("ok")],
+            runner=runner)
+        s.start("where")
+        s.confirm()
+        assert seen[0] == tmp_path             # configured dir, not a crash
+
+    def test_cancel_mid_set_executes_nothing_further(self, cfg):
+        ai_ready(cfg)
+        runs = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            runs.append(cmd)
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output="ok")
+
+        client, s = self._session(
+            cfg, [reply(("true 1", "a"), ("true 2", "b"), ("true 3", "c"))],
+            runner=runner)
+        s.start("x")
+        s.confirm()                            # executes call 1, presents 2
+        s.cancel()                             # drops calls 2 AND 3
+        assert runs == ["true 1"]
         assert s.cancelled and s.finished
-        assert s.executed == [] and history == []
         with pytest.raises(cm.CommandError, match="session is over"):
             s.confirm()
 
@@ -164,9 +353,7 @@ class TestSessionLoop:
 
         client, s = self._session(
             cfg,
-            ['{"command": "true 1", "done": false}',
-             '{"command": "true 2", "done": false}',
-             '{"command": "true 3", "done": false}'],
+            [reply(("true 1",)), reply(("true 2",)), reply(("true 3",))],
             runner=runner)
         assert s.start("x") is not None
         assert s.confirm() is not None
@@ -176,12 +363,47 @@ class TestSessionLoop:
         assert len(client.calls) == 2
         assert runs == ["true 1", "true 2"]
 
+    def test_two_commands_one_set_within_max_turns(self, cfg):
+        """max_turns counts LLM calls, not commands: a 2-call set plus one
+        follow-up turn fits inside max_turns=2."""
+        ai_ready(cfg)
+        cfg["command"]["max_turns"] = 2
+        runs = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            runs.append(cmd)
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output="ok")
+
+        client, s = self._session(
+            cfg,
+            [reply(("a1", "a"), ("a2", "b")), done_reply("ok")],
+            runner=runner)
+        s.start("x")
+        assert s.confirm() is not None
+        assert s.confirm() is None
+        assert s.summary == "ok" and not s.exhausted
+        assert runs == ["a1", "a2"]
+        assert len(client.calls) == 2
+
+    def test_cancel_executes_nothing(self, cfg):
+        ai_ready(cfg)
+        history = []
+        client, s = self._session(
+            cfg, [reply(("rm -rf /", "nope"))],
+            history_appender=history.append)
+        assert s.start("danger") is not None
+        s.cancel()
+        assert s.cancelled and s.finished
+        assert s.executed == [] and history == []
+        with pytest.raises(cm.CommandError, match="session is over"):
+            s.confirm()
+
     def test_failure_feeds_back(self, cfg):
         ai_ready(cfg)
         client, s = self._session(
             cfg,
-            ['{"command": "exit 3", "purpose": "fail", "done": false}',
-             '{"done": true, "summary": "failed as expected"}'])
+            [reply(("exit 3", "fail")), done_reply("failed as expected")])
         s.start("make it fail")
         s.confirm()
         assert s.executed[0].success is False
@@ -199,6 +421,16 @@ class TestSessionLoop:
         assert s.executed == []
         assert s.finished
 
+    def test_unknown_tool_fails_loudly(self, cfg):
+        ai_ready(cfg)
+        raw = json.dumps({"tool_calls": [
+            {"name": "open_app", "arguments": {"command": "firefox"}}]})
+        client, s = self._session(cfg, [raw])
+        with pytest.raises(cm.CommandError) as ei:
+            s.start("open firefox")
+        assert "open_app" in str(ei.value)
+        assert s.executed == [] and s.finished
+
     def test_transport_error_wrapped(self, cfg):
         ai_ready(cfg)
 
@@ -214,19 +446,19 @@ class TestSessionLoop:
         ai_ready(cfg)
         client, s = self._session(
             cfg,
-            ['{"command": "echo hi", "purpose": "p", "done": false}',
-             '{"done": true, "summary": "ok"}'])
+            [reply(("echo hi", "p")), done_reply("ok")])
         s.start("say hi")
         s.confirm()
         msgs = client.calls[-1]
         assert msgs[0]["role"] == "system"
         assert "terminal agent" in msgs[0]["content"]
         assert "JSON" in msgs[0]["content"]
+        assert "tool_calls" in msgs[0]["content"]
         assert [m["role"] for m in msgs] == \
             ["system", "user", "assistant", "user"]
         assert msgs[1]["content"] == "say hi"
-        assert msgs[2]["content"].startswith('{"command": "echo hi"')
-        assert msgs[3]["content"].startswith("Command result (JSON):")
+        assert msgs[2]["content"].startswith('{"tool_calls"')
+        assert msgs[3]["content"].startswith("Command results (JSON):")
 
     def test_history_saved_via_history_module_when_default(self, cfg,
                                                            tmp_path, monkeypatch):
@@ -235,8 +467,7 @@ class TestSessionLoop:
         written = []
         monkeypatch.setattr(cm.history_mod, "append", written.append)
         client, s = self._session(
-            cfg, ['{"command": "echo yes", "done": false}',
-                  '{"done": true, "summary": "ok"}'])
+            cfg, [reply(("echo yes",)), done_reply("ok")])
         s.start("x")
         s.confirm()
         assert len(written) == 1 and written[0]["mode"] == "command"
@@ -245,8 +476,7 @@ class TestSessionLoop:
         ai_ready(cfg)
         cfg["history"]["save"] = False
         client, s = self._session(
-            cfg, ['{"command": "echo no", "done": false}',
-                  '{"done": true, "summary": "ok"}'])
+            cfg, [reply(("echo no",)), done_reply("ok")])
         s.start("x")
         s.confirm()
         assert s.executed  # command ran, history just not persisted
@@ -467,8 +697,7 @@ class TestDaemonCommandMode:
 
         monkeypatch.setattr("fluidvoice.overlay.CommandPanel", CapturingPanel)
         hk = FakeCommandHotkey()
-        client = StubAIClient(replies or [
-            '{"command": "echo hello", "purpose": "greet", "done": false}'])
+        client = StubAIClient(replies or [reply(("echo hello", "greet"))])
         sessions = []
 
         def factory(c):
@@ -506,9 +735,9 @@ class TestDaemonCommandMode:
 
     def test_confirm_executes_and_logs_history(self, cfg, quiet_ui,
                                                monkeypatch, tmp_path):
-        d, pill, hk, client, sessions = self._pending(cfg, monkeypatch, replies=[
-            '{"command": "echo hello", "purpose": "greet", "done": false}',
-            '{"command": "", "purpose": "", "done": true, "summary": "all done"}'])
+        d, pill, hk, client, sessions = self._pending(
+            cfg, monkeypatch,
+            replies=[reply(("echo hello", "greet")), done_reply("all done")])
         d._on_command_hotkey()   # the confirm press
         assert self._wait(lambda: not d.busy and d._command_session is None)
         hist = tmp_path / "test-history.jsonl"

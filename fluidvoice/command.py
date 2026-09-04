@@ -1,13 +1,17 @@
 """Command mode - voice-driven terminal agent (Linux port of upstream
-CommandModeService, deliberately diverging: strict-JSON single-tool protocol
-instead of native tool_calls, every command confirm-gated).
+CommandModeService, deliberately diverging: strict-JSON tool_calls
+protocol instead of native tool_calls, every command confirm-gated).
 
-The user dictates an instruction; the LLM proposes ONE shell command at a
-time via a strict JSON reply; the daemon shows it in the pill overlay in an
-awaiting-confirmation state; the command hotkey confirms and executes,
-Escape cancels. Output is fed back as a user message and the loop continues,
-bounded by command.max_turns. Nothing ever runs without the confirm press -
-CommandSession.confirm() is the only execution site in the codebase.
+The user dictates an instruction; the LLM proposes shell commands via a
+strict JSON reply carrying a tool_calls array (upstream's tool schema,
+TerminalService.swift:20-61); the daemon shows each proposal in the pill
+overlay in an awaiting-confirmation state; the command hotkey confirms and
+executes, Escape cancels. A reply may carry a set of calls - one voice run
+= one command set, every member individually confirmed, no LLM round-trip
+inside the set. Results are fed back as one batched user message and the
+loop continues, bounded by command.max_turns. Nothing ever runs without
+the confirm press - CommandSession.confirm() is the only execution site in
+the codebase.
 """
 from __future__ import annotations
 
@@ -30,29 +34,70 @@ def log(msg: str) -> None:
 
 SYSTEM_PROMPT = """\
 You are a careful Linux terminal agent. The user speaks an instruction; you
-accomplish it by proposing ONE shell command at a time. Every proposal is
-shown to the user and only runs after they confirm it.
+accomplish it by proposing shell commands. Every proposal is shown to the
+user and only runs after they confirm it.
 
 Respond with EXACTLY ONE JSON object and nothing else - no markdown fences,
 no prose before or after:
 
-  {"command": "<one shell command>", "purpose": "<short reason>", "done": false}
+  {"tool_calls": [
+      {"id": "call_1", "name": "execute_terminal_command",
+       "arguments": {"command": "<one shell command>",
+                     "workingDirectory": "", "purpose": "<short reason>"}}
+   ], "done": false}
 
-When the task is complete (or nothing needs to run), respond with:
+You may include several tool_calls in one reply when the task is genuinely a
+small fixed set of steps; propose ONE command per call. When the task is
+complete (or nothing needs to run), respond with:
 
-  {"command": "", "purpose": "", "done": true, "summary": "<what happened, 1-3 sentences>"}
+  {"tool_calls": [], "done": true, "summary": "<what happened, 1-3 sentences>"}
 
 Rules:
-- One command per reply. Chain with && or ; only when it is genuinely one step.
+- One shell command per tool call. Chain with && or ; only when it is
+  genuinely one step.
 - Check before acting: list or test -e before deleting or overwriting; read
   before editing; check --version before installing.
 - Verify after acting, then finish with done=true and a short summary.
 - Non-interactive commands only: never propose password prompts, editors,
   top, or anything that waits for input.
 - Quote paths with spaces; prefer absolute paths.
-- Commands run in the user's shell in the working directory; after each one
-  you receive its stdout+stderr, exit code and duration as JSON.
+- The only tool is execute_terminal_command (name it exactly); it runs the
+  command in workingDirectory (empty string = the user's working directory)
+  and after each set of calls you receive each command's stdout+stderr, exit
+  code and duration as JSON.
 """
+
+# Upstream tool schema (TerminalService.swift:20-61, sent as the native
+# OpenAI `tools` array via CommandModeService.swift:868): exactly one
+# function, `command` required, `workingDirectory` optional ("" -> home
+# upstream, the configured working dir here), `purpose` required in the
+# schema but nil-tolerated in upstream's code (CommandModeService.swift:958).
+# The registry shape admits more tools later.
+TOOL_REGISTRY: dict[str, dict] = {
+    "execute_terminal_command": {
+        "description":
+            "Execute a terminal/shell command on the user's Linux "
+            "computer. Use this for file operations (ls, cat, mkdir), git, "
+            "package managers, python, or any CLI tool. Follow the agentic "
+            "workflow: 1) check prerequisites first (file exists, command "
+            "available) 2) execute the main action 3) verify the result. "
+            "Returns stdout+stderr, exit code and duration.",
+        "parameters": {
+            "command": {
+                "type": "string", "required": True,
+                "description": "The shell command to execute (e.g. 'ls "
+                               "-la', 'git status')"},
+            "workingDirectory": {
+                "type": "string", "required": False,
+                "description": "Optional working directory path. Empty = "
+                               "the configured working directory."},
+            "purpose": {
+                "type": "string", "required": False,
+                "description": "Brief reason for this command: 'checking', "
+                               "'executing' or 'verifying'."},
+        },
+    },
+}
 
 
 class CommandError(RuntimeError):
@@ -63,6 +108,7 @@ class CommandError(RuntimeError):
 class PendingCommand:
     command: str
     purpose: str | None = None
+    working_directory: str | None = None  # per-call override ("" -> default)
 
 
 @dataclass
@@ -77,9 +123,20 @@ class CommandOutcome:
 
 
 @dataclass
+class ToolCall:
+    """One parsed tool call (upstream message.tool_calls[i],
+    CommandModeService.swift:953-970)."""
+    id: str
+    name: str
+    command: str
+    working_directory: str | None = None
+    purpose: str | None = None
+
+
+@dataclass
 class ParsedReply:
     kind: str  # "proposal" | "done"
-    proposal: PendingCommand | None = None
+    calls: list[ToolCall] | None = None  # the proposed set (kind=proposal)
     summary: str | None = None
 
 
@@ -115,8 +172,10 @@ def strip_code_fences(text: str) -> str:
 
 def parse_reply(content: str) -> ParsedReply:
     """Model output is never trusted: <think> stripped, fences stripped,
-    JSON parsed (one tolerant brace-slice retry). Raises CommandError with
-    the raw text embedded when nothing parses."""
+    JSON parsed (one tolerant brace-slice retry). Every tool call is
+    validated against TOOL_REGISTRY; anything undecodable fails loudly with
+    the raw text embedded (upstream silently drops undecodable calls,
+    LLMClient.swift:847-865 - we diverge: fail loudly)."""
     cleaned = strip_code_fences(strip_thinking(content))
     data = None
     try:
@@ -134,13 +193,56 @@ def parse_reply(content: str) -> ParsedReply:
     if data.get("done"):
         summary = data.get("summary")
         return ParsedReply("done", summary=str(summary) if summary else "Done.")
-    command = data.get("command")
-    if isinstance(command, str) and command.strip():
-        purpose = data.get("purpose")
-        return ParsedReply("proposal",
-                           PendingCommand(command.strip(),
-                                          str(purpose) if purpose else None))
+    calls_data = data.get("tool_calls")
+    if isinstance(calls_data, list):
+        calls = [_parse_tool_call(i, c, cleaned)
+                 for i, c in enumerate(calls_data)]
+        if calls:
+            return ParsedReply("proposal", calls=calls)
     raise CommandError(f"could not parse the model's proposal: {cleaned}")
+
+
+def _parse_tool_call(index: int, data, raw: str) -> ToolCall:
+    """Per-tool arg validation mirroring upstream
+    (CommandModeService.swift:953-961), tightened deliberately: empty or
+    non-string `command` is a parse error (upstream tolerates `?? ""` and
+    would run an empty shell)."""
+    if not isinstance(data, dict):
+        raise CommandError(
+            f"tool call must be an object in the model's proposal: {raw}")
+    name = data.get("name")
+    if not isinstance(name, str) or name not in TOOL_REGISTRY:
+        # upstream honors execute_terminal_command only (silently falls
+        # through to text); we fail loudly naming the tool
+        raise CommandError(
+            f"unknown tool {name!r} in the model's proposal: {raw}")
+    args = data.get("arguments")
+    if not isinstance(args, dict):
+        raise CommandError(
+            f"tool {name} arguments must be an object in the model's "
+            f"proposal: {raw}")
+    command = args.get("command")
+    if not isinstance(command, str) or not command.strip():
+        raise CommandError(
+            f"tool {name} needs a non-empty string 'command' in the model's "
+            f"proposal: {raw}")
+    working_dir_raw = args.get("workingDirectory")
+    if working_dir_raw is not None and not isinstance(working_dir_raw, str):
+        raise CommandError(
+            f"tool {name} workingDirectory must be a string in the model's "
+            f"proposal: {raw}")
+    purpose_raw = args.get("purpose")
+    if purpose_raw is not None and not isinstance(purpose_raw, str):
+        raise CommandError(
+            f"tool {name} purpose must be a string in the model's "
+            f"proposal: {raw}")
+    call_id = data.get("id")
+    call_id = call_id.strip() if isinstance(call_id, str) and call_id.strip() \
+        else f"call_{index + 1}"  # upstream synthesizes "call_<uuid8>"
+    return ToolCall(
+        id=call_id, name=name, command=command.strip(),
+        working_directory=(working_dir_raw or "").strip() or None,
+        purpose=(purpose_raw or "").strip() or None)
 
 
 def working_dir(cfg: dict) -> Path:
@@ -202,7 +304,14 @@ def _clip_output(text: str, head: int = 3000, tail: int = 1000) -> str:
 class CommandSession:
     """One command-mode run: instruction -> proposals -> confirmations -> done.
     Fully injectable (client / runner / history appender) for tests. A shell
-    command executes ONLY from confirm() - no auto-execution anywhere."""
+    command executes ONLY from confirm() - no auto-execution anywhere.
+
+    A reply may carry a SET of tool calls (one voice run = one command set);
+    the members are presented one at a time, each individually confirmed,
+    with NO LLM round-trip inside the set. When the set completes, ONE
+    batched results message feeds the loop (upstream consumes
+    toolCalls.first only, CommandModeService.swift:953 - we present the
+    whole set sequentially, per the v2 request)."""
 
     def __init__(self, cfg: dict, *, client=None, runner=None,
                  history_appender=None, log_fn=None):
@@ -220,7 +329,9 @@ class CommandSession:
         self.cancelled = False
         self.summary: str | None = None
         self.executed: list[CommandOutcome] = []
-        self.turns = 0  # LLM calls made
+        self.turns = 0  # LLM calls made (not commands)
+        self._queued: list[ToolCall] = []  # remaining calls of the set
+        self._set_results: list[dict] = []  # outcomes of the current set
 
     # -- public API -----------------------------------------------------------
 
@@ -235,14 +346,16 @@ class CommandSession:
 
     def confirm(self) -> PendingCommand | None:
         """Execute the pending proposal (the ONLY execution site) and feed
-        the result back for the next turn."""
+        the result back for the next turn. Inside a multi-call set the next
+        member is presented with NO LLM round-trip; when the set completes,
+        one batched results message feeds the loop."""
         if self.finished:
             raise CommandError("session is over")
         if self.pending is None:
             raise CommandError("no pending command")
         proposal = self.pending
         outcome = self.runner(proposal.command,
-                              cwd=working_dir(self.cfg),
+                              cwd=self._cwd_for(proposal),
                               timeout=float(self.cfg["command"].get(
                                   "timeout_seconds", 60.0)))
         if not isinstance(outcome, CommandOutcome):
@@ -252,20 +365,23 @@ class CommandSession:
         self.executed.append(outcome)
         self.pending = None
         self._write_history(proposal, outcome)
-        result = {"command": outcome.command,
-                  "exit_code": outcome.exit_code,
-                  "success": outcome.success,
-                  "output": _clip_output(outcome.output),
-                  "error": outcome.error,
-                  "duration_ms": outcome.duration_ms}
+        self._set_results.append({
+            "command": outcome.command, "purpose": proposal.purpose,
+            "exit_code": outcome.exit_code, "success": outcome.success,
+            "output": _clip_output(outcome.output),
+            "error": outcome.error, "duration_ms": outcome.duration_ms})
+        if self._queued:                # next member of the same voice run
+            return self._present_queued()
         self.messages.append({"role": "user",
-                              "content": "Command result (JSON): "
-                                         + json.dumps(result)})
+                              "content": "Command results (JSON): "
+                                         + json.dumps(self._set_results)})
         return self._advance()
 
     def cancel(self) -> None:
-        """Nothing executes; no history."""
+        """Nothing executes; no history. The whole remaining set is dropped
+        - nothing queued survives unconfirmed."""
         self.pending = None
+        self._queued = []
         self.cancelled = True
         self.finished = True
 
@@ -294,8 +410,31 @@ class CommandSession:
             self.summary = reply.summary
             self.finished = True
             return None
-        self.pending = reply.proposal
+        self._queued = list(reply.calls or [])
+        self._set_results = []
+        return self._present_queued()
+
+    def _present_queued(self) -> PendingCommand:
+        """Pop the next call of the set into the pending proposal (no LLM
+        round-trip - the set was approved call-by-call at parse time)."""
+        call = self._queued.pop(0)
+        self.pending = PendingCommand(
+            command=call.command, purpose=call.purpose,
+            working_directory=call.working_directory)
         return self.pending
+
+    def _cwd_for(self, proposal: PendingCommand) -> Path:
+        """Per-call workingDirectory (TerminalService.swift:88-93: empty/
+        absent -> default); a non-directory falls back to the configured
+        working dir with a log, never crashes."""
+        wd = (proposal.working_directory or "").strip()
+        if wd:
+            p = Path(wd).expanduser()
+            if p.is_dir():
+                return p
+            self.log(f"WARN tool workingDirectory is not a directory, "
+                     f"using the configured working dir: {p}")
+        return working_dir(self.cfg)
 
     def _write_history(self, proposal: PendingCommand,
                        outcome: CommandOutcome) -> None:
