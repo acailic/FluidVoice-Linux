@@ -205,6 +205,92 @@ class TestParseReply:
         assert r.kind == "proposal" and r.calls[0].command == "date"
 
 
+class TestDestructiveClassification:
+    """Upstream isDestructiveCommand ported verbatim
+    (CommandModeService.swift:562-598): every one of the 19 prefixes,
+    9 compound patterns and the anywhere 'rm -' rule."""
+
+    @pytest.mark.parametrize("cmd", [
+        "rm file.txt", "rm	file.txt", "rmdir dir", "rm -rf /tmp/x",
+        "mv a b", "mv\ta b", "sudo apt install x", "kill 123",
+        "pkill firefox", "killall python", "chmod +x s", "chown u:g f",
+        "chgrp g f", "dd if=/dev/zero of=f", "mkfs.ext4 /dev/sda",
+        "format c", "> outfile", "truncate -s 0 f", "shred secret",
+    ])
+    def test_every_prefix_matches(self, cmd):
+        assert cm.is_destructive_command(cmd) is True
+
+    @pytest.mark.parametrize("cmd", [
+        "cat f | rm x", "cat f | sudo tee x", "echo hi | dd of=x",
+        "true ; rm x", "true ; sudo id", "true && rm x", "true && sudo id",
+        "find . | xargs rm", "find . | xargs -I {} cp {} /tmp",
+    ])
+    def test_every_compound_pattern_matches(self, cmd):
+        assert cm.is_destructive_command(cmd) is True
+
+    @pytest.mark.parametrize("cmd", [
+        "echo hi && rm -rf /",          # rm - anywhere rule
+        "MKFS.EXT4 /dev/sda",           # case-insensitive
+        "SUDO reboot",
+        "ls | grep sudo | xargs RM -",
+    ])
+    def test_anywhere_and_case_rules(self, cmd):
+        assert cm.is_destructive_command(cmd) is True
+
+    @pytest.mark.parametrize("cmd", [
+        "ls -la", "echo rm junk", "grep sudo file", "vim notes.txt",
+        "cat /etc/passwd", "df -h", "echo '>' file", "greprmf file",
+        # note: "echo rm -rf" IS destructive by design - the anywhere
+        # "rm -" rule matches it upstream too (:594-597)
+    ])
+    def test_negatives(self, cmd):
+        assert cm.is_destructive_command(cmd) is False
+
+    def test_user_patterns_ci_substring(self):
+        assert cm.is_destructive_command(
+            "git push origin main", ["git push"]) is True
+        assert cm.is_destructive_command(
+            "GIT PUSH --force", ["git push"]) is True
+        assert cm.is_destructive_command("ls", ["git push"]) is False
+        assert cm.is_destructive_command("ls", []) is False
+        assert cm.is_destructive_command("ls", None) is False
+
+    def test_builtin_counts(self):
+        # doctor reports 28 built-in rules (19 prefixes + 9 patterns);
+        # the anywhere 'rm -' rule rides on top of them
+        assert len(cm.DESTRUCTIVE_PREFIXES) == 19
+        assert len(cm.DESTRUCTIVE_PATTERNS) == 9
+
+    def test_parsed_call_carries_destructive_flag(self):
+        r = cm.parse_reply(reply(("rm -rf /tmp/junk", "clean")))
+        assert r.calls[0].destructive is True
+        r2 = cm.parse_reply(reply(("ls", "list")))
+        assert r2.calls[0].destructive is False
+
+    def test_session_patterns_from_config(self, cfg):
+        ai_ready(cfg)
+        cfg["command"]["destructive_patterns"] = ["git push"]
+        client = StubAIClient(
+            [reply(("git push origin main", "push")), done_reply("ok")])
+        s = cm.CommandSession(cfg, client=client)
+        prop = s.start("push it")
+        assert prop.destructive is True
+        assert prop.command == "git push origin main"
+
+    def test_history_row_carries_destructive_and_cwd(self, cfg, tmp_path):
+        ai_ready(cfg)
+        history = []
+        client = StubAIClient(
+            [reply(("rm -rf /tmp/junk", "clean", str(tmp_path))),
+             done_reply("ok")],)
+        s = cm.CommandSession(cfg, client=client,
+                              history_appender=history.append)
+        s.start("clean")
+        s.confirm()
+        assert history[0]["destructive"] is True
+        assert history[0]["cwd"] == str(tmp_path)
+
+
 class TestReadiness:
     def test_disabled_ai(self, cfg):
         issue = cm.command_mode_ready(cfg)
@@ -820,6 +906,129 @@ class TestDaemonCommandMode:
         d._on_command_hotkey()
         assert d.recording is False
         assert confirm_calls == [1]
+
+    # -- destructive strong-confirm state machine ------------------------------
+
+    def _pending_destructive(self, cfg, monkeypatch, runner=None):
+        """Same wiring as _pending but the canned proposal is destructive."""
+        return self._pending(
+            cfg, monkeypatch,
+            replies=[reply(("rm -rf /tmp/hold", "clean up")),
+                     done_reply("cleaned")],
+            runner=runner)
+
+    def test_destructive_first_press_does_not_execute(self, cfg, quiet_ui,
+                                                      monkeypatch):
+        runs = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            runs.append(cmd)
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output="never")
+
+        d, pill, hk, client, sessions = self._pending_destructive(
+            cfg, monkeypatch, runner=runner)
+        # proposal presentation: amber/⚠ hint + DESTRUCTIVE notification
+        entries, status, awaiting = pill.updates[-1]
+        assert entries[-1].get("destructive") is True
+        assert awaiting and "AGAIN" in awaiting
+        assert any("DESTRUCTIVE" in (t + b) for t, b in quiet_ui["notify"])
+        d._on_command_hotkey()   # FIRST press: arms, executes nothing
+        assert runs == []
+        assert d._command_pending is True
+        assert d._command_destructive_armed is True
+        _, _, awaiting2 = pill.updates[-1]
+        assert awaiting2 and "AGAIN to CONFIRM" in awaiting2
+        assert any("AGAIN to CONFIRM" in (t + b)
+                   for t, b in quiet_ui["notify"])
+        # second press: the only path to execution
+        d._on_command_hotkey()
+        assert self._wait(lambda: runs == ["rm -rf /tmp/hold"]), runs
+        assert self._wait(lambda: not d.busy and d._command_session is None)
+        d.cancel_pending_command() if d._command_pending else None
+
+    def test_destructive_escape_between_presses_executes_nothing(
+            self, cfg, quiet_ui, monkeypatch, tmp_path):
+        runs = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            runs.append(cmd)
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output="never")
+
+        d, pill, hk, client, sessions = self._pending_destructive(
+            cfg, monkeypatch, runner=runner)
+        d._on_command_hotkey()   # first press arms
+        assert d._command_destructive_armed is True
+        d.cancel_pending_command()   # Escape between the presses
+        assert runs == []
+        assert d._command_pending is False
+        assert d._command_destructive_armed is False
+        assert sessions[0].cancelled and sessions[0].finished
+        hist = tmp_path / "test-history.jsonl"
+        assert not hist.exists()
+        assert any("Command cancelled" in (t + b)
+                   for t, b in quiet_ui["notify"])
+
+    def test_destructive_confirm_timeout_during_armed(self, cfg, quiet_ui,
+                                                       monkeypatch):
+        runs = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            runs.append(cmd)
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output="never")
+
+        d, pill, hk, client, sessions = self._pending_destructive(
+            cfg, monkeypatch, runner=runner)
+        d._on_command_hotkey()   # armed
+        d._on_confirm_timeout()  # deterministic: the restarted timer fires
+        assert runs == []
+        assert d._command_pending is False
+        assert d._command_destructive_armed is False
+        assert sessions[0].cancelled
+        assert any("confirmation timed out" in (t + b)
+                   for t, b in quiet_ui["notify"])
+
+    def test_non_destructive_executes_on_first_press(self, cfg, quiet_ui,
+                                                     monkeypatch):
+        runs = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            runs.append(cmd)
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output="ok")
+
+        d, pill, hk, client, sessions = self._pending(
+            cfg, monkeypatch, runner=runner)   # canned: echo hello
+        entries, _, awaiting = pill.updates[-1]
+        assert entries[-1].get("destructive") is None  # no flag at all
+        assert "AGAIN" not in (awaiting or "")
+        d._on_command_hotkey()
+        assert self._wait(lambda: runs == ["echo hello"])
+        assert self._wait(lambda: not d.busy and d._command_session is None)
+
+    def test_destructive_history_row_flagged(self, cfg, quiet_ui,
+                                             monkeypatch, tmp_path):
+        runs = []
+
+        def runner(cmd, cwd=None, timeout=None):
+            runs.append(cmd)
+            return cm.CommandOutcome(command=cmd, success=True, exit_code=0,
+                                     output="cleaned")
+
+        d, pill, hk, client, sessions = self._pending_destructive(
+            cfg, monkeypatch, runner=runner)
+        d._on_command_hotkey()
+        d._on_command_hotkey()   # armed -> executed
+        assert self._wait(lambda: not d.busy and d._command_session is None)
+        import json as _json
+        entries = [_json.loads(ln) for ln in
+                   (tmp_path / "test-history.jsonl").read_text().splitlines()
+                   if ln.strip()]
+        cmds = [e for e in entries if e.get("mode") == "command"]
+        assert len(cmds) == 1
+        assert cmds[0]["destructive"] is True
 
     def test_restart_and_shutdown_cover_command_hotkey(self, cfg, quiet_ui,
                                                        monkeypatch):

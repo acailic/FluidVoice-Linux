@@ -152,6 +152,7 @@ DEFAULTS: dict[str, Any] = {
         "working_dir": "",       # "" -> $HOME
         "timeout_seconds": 60.0,  # per-command subprocess timeout
         "confirm_timeout_s": 120.0,  # auto-cancel a pending confirmation
+        "destructive_patterns": [],  # user additions to the built-in list
     },
 }
 
@@ -324,6 +325,15 @@ notify = true
 save = true
 save_audio = false
 audio_budget_gb = 4.0
+
+[command]
+# Command mode additions to the built-in destructive-command list (rm, mv,
+# sudo, kill, chmod, chown, dd, mkfs, truncate, shred, pipes into rm/sudo,
+# ...). A command MATCHING any of these substrings case-insensitively needs
+# the strong confirmation: the command hotkey twice (distinct amber warning)
+# instead of once. Examples:
+# destructive_patterns = ["git push", "shutdown"]
+destructive_patterns = []
 """
 
 
@@ -384,7 +394,7 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
     "updates": ["check", "notify"],
     "history": ["save", "save_audio", "audio_budget_gb"],
     "command": ["max_turns", "working_dir", "timeout_seconds",
-                "confirm_timeout_s"],
+                "confirm_timeout_s", "destructive_patterns"],
 }
 
 
@@ -547,7 +557,7 @@ ALLOWED_SETTINGS: dict[str, set] = {
     "updates": {"check", "notify"},
     "history": {"save", "save_audio", "audio_budget_gb"},
     "command": {"max_turns", "working_dir", "timeout_seconds",
-                "confirm_timeout_s"},
+                "confirm_timeout_s", "destructive_patterns"},
 }
 RESTART_REQUIRED = {"model.eager_warmup"}
 ENGINE_KEYS = {"model.backend", "model.name", "model.device",
@@ -595,6 +605,8 @@ def coerce_setting(section: str, key: str, value: Any) -> tuple[bool, Any]:
         return _coerce_model_languages(value)
     if (section, key) == ("general", "terminal_apps"):
         return _coerce_terminal_apps(value)
+    if (section, key) == ("command", "destructive_patterns"):
+        return _coerce_destructive_patterns(value)
     if (section, key) in SETTING_LISTS:
         if not isinstance(value, list):
             return (False, value)
@@ -694,6 +706,32 @@ def _coerce_terminal_apps(value: Any) -> tuple[bool, Any]:
         if not pattern:
             continue
         if len(pattern) > 64:
+            return (False, value)
+        if pattern.lower() in seen:
+            continue
+        seen.add(pattern.lower())
+        cleaned.append(pattern)
+    if len(cleaned) > 32:
+        return (False, value)
+    return (True, cleaned)
+
+
+def _coerce_destructive_patterns(value: Any) -> tuple[bool, Any]:
+    """command.destructive_patterns: user additions to the built-in
+    destructive-command list, matched case-insensitively anywhere in the
+    command (same convention as general.terminal_apps). Entries are
+    stripped and empties dropped; >128-char entries or >32 patterns reject
+    the whole list; duplicates (case-insensitive) keep the first."""
+    if not isinstance(value, list) \
+            or any(not isinstance(p, str) for p in value):
+        return (False, value)
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in value:
+        pattern = raw.strip()
+        if not pattern:
+            continue
+        if len(pattern) > 128:
             return (False, value)
         if pattern.lower() in seen:
             continue

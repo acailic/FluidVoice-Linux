@@ -227,6 +227,60 @@ class TestMicPriority:
         assert loaded["recording"]["mic_priority"] == ["bluez", "usb-cam"]
 
 
+class TestDestructivePatterns:
+    """command.destructive_patterns: user additions to the built-in list."""
+
+    def test_defaults_and_template_documented(self):
+        assert DEFAULTS["command"]["destructive_patterns"] == []
+        assert "destructive_patterns" in TEMPLATE  # cheap doc-guard
+
+    def test_clean_strips_empties_and_keeps_order(self):
+        ok, cleaned = coerce_setting(
+            "command", "destructive_patterns", [" git push ", "", "shutdown"])
+        assert ok is True and cleaned == ["git push", "shutdown"]
+
+    def test_dedupes_case_insensitively_first_wins(self):
+        ok, cleaned = coerce_setting(
+            "command", "destructive_patterns", ["Git Push", "git push"])
+        assert ok is True and cleaned == ["Git Push"]
+
+    @pytest.mark.parametrize("bad", [
+        "git push",                     # not a list
+        [42],                            # non-str entry
+        ["x" * 129],                    # single entry over 128 chars
+        [f"p{i}" for i in range(33)],   # 33 entries (max 32)
+    ])
+    def test_rejects_bad_values(self, bad):
+        ok, out = coerce_setting("command", "destructive_patterns", bad)
+        assert ok is False and out == bad
+
+    def test_empty_list_is_valid(self):
+        ok, cleaned = coerce_setting("command", "destructive_patterns", [])
+        assert ok is True and cleaned == []
+
+    def test_apply_settings_applies_and_reports(self, cfg):
+        changed, rejected = apply_settings(
+            cfg, {"command": {"destructive_patterns": ["git push"]}})
+        assert rejected == [] and "command.destructive_patterns" in changed
+        assert cfg["command"]["destructive_patterns"] == ["git push"]
+
+    def test_apply_settings_rejects_garbage(self, cfg):
+        changed, rejected = apply_settings(
+            cfg, {"command": {"destructive_patterns": "git push"}})
+        assert rejected == ["command.destructive_patterns"]
+        assert cfg["command"]["destructive_patterns"] == []
+
+    def test_save_whitelist_roundtrip(self, tmp_path, monkeypatch):
+        from fluidvoice import paths as p
+        monkeypatch.setattr(p, "config_file", lambda: tmp_path / "c.toml")
+        cfg = copy.deepcopy(DEFAULTS)
+        cfg["command"]["destructive_patterns"] = ["git push", "shutdown"]
+        save_config(cfg)
+        loaded = load_config(tmp_path / "c.toml")
+        assert loaded["command"]["destructive_patterns"] == \
+            ["git push", "shutdown"]
+
+
 class TestNewFormattingKeys:
     """Chat/terminal formatting keys: terminal_apps + the two booleans."""
 
@@ -351,7 +405,8 @@ class TestCommandSettings:
         assert cfg["hotkey"]["command_key"] == ""
         assert cfg["command"] == {"max_turns": 4, "working_dir": "",
                                   "timeout_seconds": 60.0,
-                                  "confirm_timeout_s": 120.0}
+                                  "confirm_timeout_s": 120.0,
+                                  "destructive_patterns": []}
 
     def test_apply_accepts_command_keys(self, cfg):
         changed, rejected = apply_settings(cfg, {
@@ -398,7 +453,9 @@ class TestCommandSettings:
         assert "[command]" in text
         assert "command_key = \"F9\"" in text
         assert "max_turns = 6" in text
+        assert "destructive_patterns = []" in text
         loaded = load_config(tmp_path / "c.toml")
         assert loaded["command"] == {"max_turns": 6, "working_dir": "/tmp",
                                      "timeout_seconds": 30.0,
-                                     "confirm_timeout_s": 60.0}
+                                     "confirm_timeout_s": 60.0,
+                                     "destructive_patterns": []}

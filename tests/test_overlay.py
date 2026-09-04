@@ -310,6 +310,26 @@ class TestCommandPanel:
                    (img.getpixel((x, y))))
         assert reds > 5          # "$" marks + dot + hint in command red
 
+    def test_destructive_proposal_draws_amber_warning(self):
+        """Strong-confirm UX: the destructive proposal row renders in amber
+        (DONE_LOW) with a ⚠ prefix instead of the command red."""
+        r = self._renderer()
+        r.set_entries([{"kind": "user", "text": "clean tmp"},
+                       {"kind": "proposal", "text": "rm -rf /tmp/junk",
+                        "sub": "delete", "destructive": True},
+                       {"kind": "ok", "text": "$ ls · exit 0"}])
+        r.set_awaiting("⚠ destructive — press command key AGAIN to run · Esc")
+        img, _ = r.render(None, state="confirm")
+        # amber DONE_LOW (255, 186, 66): high R, mid G, low B
+        ambers = sum(1 for x in range(0, img.width, 3)
+                     for y in range(0, img.height, 3)
+                     if (lambda p: p[3] > 200 and p[0] > 200
+                         and 150 < p[1] < 220 and p[2] < 120)
+                     (img.getpixel((x, y))))
+        assert ambers > 5          # ⚠ $ marker, command text, sub, hint
+        # and no command-red "$" from the destructive row survives: every
+        # proposal row in this frame is the destructive one
+
     def test_headless_panel_update_close(self, monkeypatch):
         import fluidvoice.overlay as ov
 

@@ -705,16 +705,18 @@ class CommandPanelRenderer:
         line_h = PANEL_LINE_H * S
         for e in self.entries:
             kind = e.get("kind")
+            danger = bool(e.get("destructive"))  # amber strong-confirm row
+            dcol = (*DONE_LOW, 255) if danger else (*accent, 255)
             if kind == "user":
                 d.text((PANEL_PAD * S, y), "»", font=self._font_bold,
                        fill=(*PANEL_FG, 235))
                 x = (PANEL_PAD + 14) * S
                 col = (*PANEL_FG, 235)
             elif kind == "proposal":
-                d.text((PANEL_PAD * S, y), "$", font=self._font_bold,
-                       fill=(*accent, 255))
+                d.text((PANEL_PAD * S, y), "⚠ $" if danger else "$",
+                       font=self._font_bold, fill=dcol)
                 x = (PANEL_PAD + 14) * S
-                col = (*accent, 255)
+                col = dcol
             elif kind == "ok":
                 d.text((PANEL_PAD * S, y), "✓", font=self._font_bold,
                        fill=(*PANEL_OK, 235))
@@ -734,7 +736,8 @@ class CommandPanelRenderer:
             if e.get("sub"):
                 for ln in self._wrap(d, e["sub"], max_w - 14 * S, 2):
                     d.text(((PANEL_PAD + 14) * S, y), ln, font=self._font,
-                           fill=(*PANEL_DIM, 200))
+                           fill=(*DONE_LOW, 230) if danger
+                           else (*PANEL_DIM, 200))
                     y += line_h
             y += PANEL_ENTRY_GAP * S
 

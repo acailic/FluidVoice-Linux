@@ -109,6 +109,7 @@ class PendingCommand:
     command: str
     purpose: str | None = None
     working_directory: str | None = None  # per-call override ("" -> default)
+    destructive: bool = False            # strong (two-press) confirm needed
 
 
 @dataclass
@@ -131,6 +132,7 @@ class ToolCall:
     command: str
     working_directory: str | None = None
     purpose: str | None = None
+    destructive: bool = False  # computed at parse time (see below)
 
 
 @dataclass
@@ -170,7 +172,57 @@ def strip_code_fences(text: str) -> str:
     return out
 
 
-def parse_reply(content: str) -> ParsedReply:
+# Upstream destructive-command classification, ported VERBATIM
+# (CommandModeService.swift:562-598, isDestructiveCommand): literal,
+# case-insensitive prefix / substring matching - no regex, no shell parse.
+# 19 prefixes + 9 contains-patterns + the anywhere "rm -" rule.
+DESTRUCTIVE_PREFIXES = [
+    "rm ", "rm\t", "rmdir ", "rm -",       # delete (:567)
+    "mv ", "mv\t",                          # move/rename (:568)
+    "sudo ",                                # elevated privileges (:569)
+    "kill ", "pkill ", "killall ",          # terminate processes (:570)
+    "chmod ", "chown ", "chgrp ",           # permissions/ownership (:571)
+    "dd ",                                  # disk operations (:572)
+    "mkfs", "format",                       # filesystem formatting (:573)
+    "> ",                                   # overwrite file (:574)
+    "truncate ",                            # truncate file (:575)
+    "shred ",                               # secure delete (:576)
+]
+DESTRUCTIVE_PATTERNS = [                 # piped/compound anywhere (:585-591)
+    "| rm ", "| sudo ", "| dd ",
+    "; rm ", "; sudo ",
+    "&& rm ", "&& sudo ",
+    "xargs rm", "xargs -I",
+]
+
+
+def is_destructive_command(command: str,
+                           extra_patterns: list[str] | None = None) -> bool:
+    """Upstream isDestructiveCommand (CommandModeService.swift:562-598)
+    ported verbatim - lowercased, then prefix match on 19 built-ins,
+    substring match on 9 compound patterns, plus the anywhere `rm -` rule
+    (:594-597). One deliberate tightening: the pattern literals are
+    lowercased too, so upstream's dead "xargs -I" entry (it can never fire
+    upstream: the command is lowercased but the literal is not) is live
+    here - a strict superset, never fewer matches. `extra_patterns` is the
+    user-extensible config list (command.destructive_patterns), matched as
+    case-insensitive substrings - the same convention as
+    general.terminal_apps."""
+    cmd = command.lower()
+    if any(cmd.startswith(p) for p in DESTRUCTIVE_PREFIXES):
+        return True
+    if any(p.lower() in cmd for p in DESTRUCTIVE_PATTERNS):
+        return True
+    if "rm -" in cmd:                     # rm with flags, anywhere
+        return True
+    for pat in (extra_patterns or []):
+        if pat and pat.lower() in cmd:
+            return True
+    return False
+
+
+def parse_reply(content: str,
+                extra_patterns: list[str] | None = None) -> ParsedReply:
     """Model output is never trusted: <think> stripped, fences stripped,
     JSON parsed (one tolerant brace-slice retry). Every tool call is
     validated against TOOL_REGISTRY; anything undecodable fails loudly with
@@ -195,14 +247,15 @@ def parse_reply(content: str) -> ParsedReply:
         return ParsedReply("done", summary=str(summary) if summary else "Done.")
     calls_data = data.get("tool_calls")
     if isinstance(calls_data, list):
-        calls = [_parse_tool_call(i, c, cleaned)
+        calls = [_parse_tool_call(i, c, cleaned, extra_patterns)
                  for i, c in enumerate(calls_data)]
         if calls:
             return ParsedReply("proposal", calls=calls)
     raise CommandError(f"could not parse the model's proposal: {cleaned}")
 
 
-def _parse_tool_call(index: int, data, raw: str) -> ToolCall:
+def _parse_tool_call(index: int, data, raw: str,
+                     extra_patterns: list[str] | None = None) -> ToolCall:
     """Per-tool arg validation mirroring upstream
     (CommandModeService.swift:953-961), tightened deliberately: empty or
     non-string `command` is a parse error (upstream tolerates `?? ""` and
@@ -242,7 +295,8 @@ def _parse_tool_call(index: int, data, raw: str) -> ToolCall:
     return ToolCall(
         id=call_id, name=name, command=command.strip(),
         working_directory=(working_dir_raw or "").strip() or None,
-        purpose=(purpose_raw or "").strip() or None)
+        purpose=(purpose_raw or "").strip() or None,
+        destructive=is_destructive_command(command, extra_patterns))
 
 
 def working_dir(cfg: dict) -> Path:
@@ -333,6 +387,12 @@ class CommandSession:
         self._queued: list[ToolCall] = []  # remaining calls of the set
         self._set_results: list[dict] = []  # outcomes of the current set
 
+    def _destructive_patterns(self) -> list[str]:
+        """User-extensible list from config; read at parse time so edits
+        apply to the next voice run (re-runs recompute at present time)."""
+        raw = self.cfg.get("command", {}).get("destructive_patterns") or []
+        return [p for p in raw if isinstance(p, str)]
+
     # -- public API -----------------------------------------------------------
 
     def start(self, instruction: str) -> PendingCommand | None:
@@ -402,7 +462,7 @@ class CommandSession:
             raise CommandError(str(e)) from e
         self.messages.append({"role": "assistant", "content": content})
         try:
-            reply = parse_reply(content)
+            reply = parse_reply(content, self._destructive_patterns())
         except CommandError:
             self.finished = True  # errored: raw text is in the exception
             raise
@@ -420,7 +480,8 @@ class CommandSession:
         call = self._queued.pop(0)
         self.pending = PendingCommand(
             command=call.command, purpose=call.purpose,
-            working_directory=call.working_directory)
+            working_directory=call.working_directory,
+            destructive=call.destructive)
         return self.pending
 
     def _cwd_for(self, proposal: PendingCommand) -> Path:
@@ -449,6 +510,8 @@ class CommandSession:
                  "success": outcome.success,
                  "output": outcome.output[:2000],
                  "duration_ms": outcome.duration_ms,
+                 "destructive": proposal.destructive,   # additive v2 field
+                 "cwd": proposal.working_directory or None,
                  "backend": "shell"}
         if self.history_appender is not None:
             self.history_appender(entry)

@@ -316,6 +316,7 @@ class Daemon:
         self._command_mode = False
         self._command_session = None
         self._command_pending = False
+        self._command_destructive_armed = False  # 1st press of strong confirm
         self._command_display = None
         self._command_entries: list[dict] = []  # panel conversation feed
         self._command_timer: threading.Timer | None = None
@@ -1617,13 +1618,20 @@ class Daemon:
 
     def _present_proposal(self, session, proposal) -> None:
         """Awaiting-confirmation UX: conversation panel, armed Escape grab,
-        notification, confirm watchdog. Call with no lock held."""
+        notification, confirm watchdog. Call with no lock held. A
+        destructive proposal arms the STRONG confirmation (two presses,
+        amber pill warning) - the first press only arms."""
+        self._command_destructive_armed = False
         try:
-            self._command_entries = (self._command_entries + [
-                {"kind": "proposal", "text": proposal.command,
-                 "sub": proposal.purpose}])[-8:]
+            entry = {"kind": "proposal", "text": proposal.command,
+                     "sub": proposal.purpose}
+            awaiting = "run: command key · Esc"
+            if proposal.destructive:
+                entry["destructive"] = True
+                awaiting = "⚠ destructive — press command key AGAIN to run · Esc"
+            self._command_entries = (self._command_entries + [entry])[-8:]
             self._command_panel(self._command_entries, status=None,
-                                awaiting="run: command key · Esc")
+                                awaiting=awaiting)
         except Exception as e:  # noqa: BLE001 - never block confirmation
             log(f"WARN command pill unavailable: {e}")
         if self._command_hotkey:
@@ -1635,6 +1643,8 @@ class Daemon:
         body = (f"{purpose}\n" if purpose else "") \
             + f"$ {proposal.command}\n" \
             + "Press the command hotkey to run · Esc to cancel"
+        if proposal.destructive:
+            body = "⚠ DESTRUCTIVE\n" + body
         ui.notify("SayItErmano — run this command?", body,
                   enabled=self.cfg["notifications"]["enabled"])
         self._command_timer = threading.Timer(
@@ -1644,13 +1654,28 @@ class Daemon:
         self._command_timer.start()
 
     def _confirm_pending_command(self) -> None:
-        """Hotkey-confirmed: execute (the only path into CommandSession.confirm),
-        then either present the next proposal or finish."""
+        """Hotkey-confirmed: execute (the only path into
+        CommandSession.confirm), then either present the next proposal or
+        finish. Destructive proposals need the STRONG confirmation: the
+        first press only arms (fresh hint + restarted watchdog); the second
+        takes this normal path. Non-destructive: single press, as always."""
+        arm = False
         with self._lock:
             if not self._command_pending or self.busy or self.recording:
                 return
-            self._command_pending = False
-            self.busy = True                 # atomic with the flag clear
+            session = self._command_session
+            proposal = session.pending if session is not None else None
+            if proposal is not None and proposal.destructive \
+                    and not self._command_destructive_armed:
+                self._command_destructive_armed = True
+                arm = True
+            else:
+                self._command_destructive_armed = False
+                self._command_pending = False
+                self.busy = True                 # atomic with the flag clear
+        if arm:
+            self._arm_destructive_confirm(proposal)
+            return
         session = self._command_session      # never None while pending
         # the conversation panel survives the pending-UX teardown
         panel, self._command_display = self._command_display, None
@@ -1711,6 +1736,29 @@ class Daemon:
         threading.Thread(target=_guarded, name="fluidvoice-command",
                          daemon=True).start()
 
+    def _arm_destructive_confirm(self, proposal) -> None:
+        """First press on a destructive proposal: NOTHING executes. Refresh
+        the pill to the again-to-CONFIRM hint, re-notify and restart the
+        confirm watchdog (the old timer is cancelled - never stacked)."""
+        if self._command_timer:
+            self._command_timer.cancel()
+            self._command_timer = None
+        self._command_panel(
+            self._command_entries, status=None,
+            awaiting="⚠ press command key AGAIN to CONFIRM · Esc cancels")
+        purpose = proposal.purpose or ""
+        body = (f"{purpose}\n" if purpose else "") \
+            + f"$ {proposal.command}\n" \
+            + "⚠ destructive: press the command hotkey AGAIN to CONFIRM " \
+              "· Esc to cancel"
+        ui.notify("SayItErmano — ⚠ destructive", body,
+                  enabled=self.cfg["notifications"]["enabled"])
+        self._command_timer = threading.Timer(
+            float(self.cfg["command"].get("confirm_timeout_s", 120.0)),
+            self._on_confirm_timeout)
+        self._command_timer.daemon = True
+        self._command_timer.start()
+
     def cancel_pending_command(self) -> None:
         """Escape on a pending proposal (or a test): nothing executes."""
         with self._lock:
@@ -1731,6 +1779,7 @@ class Daemon:
                       enabled=self.cfg["notifications"]["enabled"])
 
     def _teardown_pending_ux(self) -> None:
+        self._command_destructive_armed = False
         if self._command_timer:
             self._command_timer.cancel()
             self._command_timer = None
@@ -1759,6 +1808,7 @@ class Daemon:
     def _end_command_session(self, close_panel: bool = True) -> None:
         with self._lock:
             self._command_pending = False
+            self._command_destructive_armed = False
             self.busy = False
         self._command_session = None
         if close_panel:
