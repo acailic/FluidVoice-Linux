@@ -1,57 +1,51 @@
-# SayItErmano
+<p align="center">
+  <img src="fluidvoice/assets/icon.png" width="128" alt="SayItErmano app icon">
+</p>
 
-**SayItErmano is custom personal version of FluidVoice for Linux** — a community Linux port of
-[FluidVoice](https://github.com/altic-dev/FluidVoice), the free, open-source,
-on-device voice dictation app. Press a hotkey, speak, press it again:
-your speech becomes polished text typed into whatever app has focus. 100% local
-speech-to-text; optional AI polish via any OpenAI-compatible endpoint (including
-a local Ollama).
+<h1 align="center">SayItErmano</h1>
 
-> This is an **unofficial** port of FluidVoice's *behavior* to Linux. It is not
-> built by the FluidVoice authors. The macOS app is Swift/Xcode; Linux gets a
-> Python implementation of the same ideas and, where licensed to do so (GPLv3),
-> the same prompts, rules and sounds. See [docs/BEHAVIOR-SPEC.md](docs/BEHAVIOR-SPEC.md)
-> for what was ported from the upstream source.
+<p align="center">
+  <strong>FluidVoice for Linux</strong> — press a key, speak, and polished text lands in any app.<br>
+  100% local speech-to-text · optional AI polish · native GTK 4 app
+</p>
 
+<p align="center">
+  <a href="https://github.com/acailic/SayItErmano/releases"><img src="https://img.shields.io/github/v/release/acailic/SayItErmano?color=blue&label=release" alt="latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/acailic/SayItErmano?color=blue" alt="license GPL-3.0"></a>
+  <img src="https://img.shields.io/badge/tests-558%20passing-brightgreen" alt="558 automated tests">
+  <img src="https://img.shields.io/badge/platform-Linux%20%C2%B7%20X11%20%C2%B7%20GTK%204-blue" alt="Linux · X11 · GTK 4">
+  <img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python 3.11+">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/demo.gif" width="740" alt="animated demo: press Right Ctrl, the pill shows a live waveform and streaming transcription, then the polished sentence is typed into the chat app">
+</p>
+
+> [!NOTE]
+> This is an **unofficial, community port** of [FluidVoice](https://github.com/altic-dev/FluidVoice)
+> — the free, open-source, on-device dictation app for macOS — to Linux. It is
+> not built by the FluidVoice authors: the macOS app is Swift/Xcode, this is a
+> Python implementation of the same behavior and, where licensed to do so
+> (GPLv3), the same prompts, rules and sounds. See
+> [docs/BEHAVIOR-SPEC.md](docs/BEHAVIOR-SPEC.md) for what was ported, with
+> file:line evidence from the upstream sources.
+>
 > **Naming:** the project, repo, package and command are **SayItErmano**
-> (`sayit-ermano`). The Python module, env-var overrides (`FLUIDVOICE_CONFIG`,
-> `FLUIDVOICE_SOCKET`, `FLUIDVOICE_API_KEY`, ...) and code comments keep the
-> upstream `fluidvoice` naming on purpose — this is a port of FluidVoice, and
-> internals credit it. Installing `sayit-ermano` replaces the pre-rename
-> `fluidvoice-linux` package and takes over its config/history/models.
+> (`sayit-ermano`). The Python module and env-var overrides
+> (`SAYITERMANO_CONFIG`, `SAYITERMANO_SOCKET`, `SAYITERMANO_API_KEY`, …) keep the
+> upstream `fluidvoice` naming on purpose — internals credit the port's origin.
+> Installing `sayit-ermano` replaces the pre-rename `fluidvoice-linux` package
+> and takes over its config, history and models.
 
-[![Status](https://img.shields.io/badge/status-v0.4-blue)]() [![License](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
+## What's new
 
-## Screenshots
+**[v0.4.0](https://github.com/acailic/SayItErmano/releases/tag/v0.4.0)** — the
+SayItErmano identity: repo, .deb package, command, launcher and tray entry all
+carry the new name, plus an **original app icon** (gold tile, speech bubble +
+waveform — no FluidVoice artwork anywhere). One-shot installer now defaults to
+a user-space install with no sudo.
 
-The dictation pill — live waveform, streaming transcription, bottom-center
-of your screen (shown mid-dictation and while the final pass runs):
-
-<p>
-<img src="docs/screenshots/overlay-pill.png" width="420" alt="dictation pill overlay with live waveform and streaming text">
-&nbsp;
-<img src="docs/screenshots/overlay-processing.png" width="420" alt="pill in processing state">
-</p>
-
-The native GTK app — the History window (live status, search, replay,
-ZIP export) and the Settings pages:
-
-<p>
-<img src="docs/screenshots/history-window.png" width="380" alt="History window: status header, search, entry list with replay">
-</p>
-
-<p>
-<img src="docs/screenshots/settings-general.png" width="300" alt="Settings: General">
-<img src="docs/screenshots/settings-models.png" width="300" alt="Settings: Models with one-click switch and GGUF downloads">
-<img src="docs/screenshots/settings-ai.png" width="300" alt="Settings: AI polish">
-</p>
-<p>
-<img src="docs/screenshots/settings-dictation.png" width="300" alt="Settings: Dictation with hotkey capture and mic picker">
-<img src="docs/screenshots/settings-history.png" width="300" alt="Settings: History retention">
-<img src="docs/screenshots/settings-about.png" width="300" alt="Settings: About">
-</p>
-
-## What it does
+## How it works
 
 1. **Global hotkey** (default: Right Ctrl, toggle mode) starts recording — 16 kHz mono via PipeWire.
 2. **Local transcription** — faster-whisper on CUDA GPU when available, CPU int8 otherwise (whisper.cpp and torch backends also supported).
@@ -69,13 +63,13 @@ hotkey ─▶ pw-record 16k mono ─▶ faster-whisper (CUDA/int8) ─▶ filler
 
 ## Installation
 
-### Option A — one-shot installer
+### Quick start — one-shot installer
 
 One download + one command, then SayItErmano appears in your app launcher,
 autostarts at login, and needs no terminal. The default install is
-**user-space and needs no sudo at all** (`~/.local/...` + a systemd user
-unit that shadows any system unit); it only asks for sudo if a required
-system package (GTK/pygobject, xdotool, ...) is missing:
+**user-space and needs no sudo at all** (`~/.local/…` + a systemd user unit
+that shadows any system unit); it only asks for sudo if a required system
+package (GTK/pygobject, xdotool, …) is missing:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/acailic/SayItErmano/linux/scripts/install-one-shot.sh | bash
@@ -87,27 +81,28 @@ Prefer the classic system-wide .deb (root-owned, `/opt` runtime)?
 curl -fsSL https://raw.githubusercontent.com/acailic/SayItErmano/linux/scripts/install-one-shot.sh | bash -s -- --system
 ```
 
-Or manually (download + install):
+### Manual download
 
 ```bash
-curl -LO https://github.com/acailic/SayItErmano/releases/download/v0.4.0/sayit-ermano_0.4.0-1_amd64.deb
-sudo apt install ./sayit-ermano_0.4.0-1_amd64.deb
+curl -LO https://github.com/acailic/SayItErmano/releases/download/v0.4.0/sayit-ermano_0.4.0-2_amd64.deb
+sudo apt install ./sayit-ermano_0.4.0-2_amd64.deb
 ```
 
-Grab a specific version from the [releases page](https://github.com/acailic/SayItErmano/releases).
-Building it yourself instead: `git clone … -b linux && ./packaging/build-deb.sh`.
+Grab a specific version from the [releases page](https://github.com/acailic/SayItErmano/releases),
+or build it yourself: `git clone … -b linux && ./packaging/build-deb.sh`.
 
-What you get after install (log out/in once):
+**What you get after install** (log out/in once):
+
 - **App launcher entry "SayItErmano"** (opens the native app) with its own icon
 - **Daemon autostarts at login** (XDG autostart; a systemd user unit is also
   provided: `systemctl --user enable --now sayit-ermano`)
-- `fluidvoice` available everywhere in PATH (`sayit-ermano doctor`, `toggle`,
-  `settings`, `history`, ...)
-- Removes cleanly with `sudo apt remove sayit-ermano`
-  (upgrading from the pre-rename `fluidvoice-linux` package replaces it
-  automatically; your config, history and downloaded models are kept)
+- `sayit-ermano` available everywhere in PATH (`doctor`, `toggle`,
+  `settings`, `history`, …)
+- Removes cleanly with `sudo apt remove sayit-ermano` — upgrading from the
+  pre-rename `fluidvoice-linux` package replaces it automatically; your
+  config, history and downloaded models are kept
 
-### Option B — from source (development)
+### From source (development)
 
 ```bash
 git clone https://github.com/acailic/SayItErmano.git -b linux
@@ -124,35 +119,44 @@ Useful commands:
 
 ```bash
 sayit-ermano app               # native GTK app: History, Settings, onboarding
-sayit-ermano settings          # same app, Settings window (alias)
 sayit-ermano doctor            # environment check
 sayit-ermano toggle            # CLI trigger (bind to a DE shortcut on Wayland)
 sayit-ermano cancel            # abort a recording
-sayit-ermano status --json
-sayit-ermano transcribe x.opus --json  # one-shot transcription (many formats)
+sayit-ermano transcribe x.opus --json   # one-shot file transcription
 sayit-ermano history -n 10
-fluidvoice config init       # write ~/.config/sayit-ermano/config.toml
+sayit-ermano config init       # write ~/.config/sayit-ermano/config.toml
 ```
 
-### File transcription
+### Requirements
 
-`sayit-ermano transcribe` accepts **wav, flac, mp3, opus, oga, ogg, m4a, aac,
-wma, aiff, webm** (verified to decode via PyAV). Unknown extensions are still
-attempted: anything PyAV can't open is converted with **ffmpeg** to 16 kHz
-mono WAV first (`sudo apt install ffmpeg` if it's missing). The whisper.cpp
-backend always converts via ffmpeg since `whisper-cli` reliably reads WAV only.
+- **X11 session** (full experience: global hotkey + typing into apps). On
+  **Wayland**, the daemon still works if you bind a desktop-environment
+  shortcut to `sayit-ermano toggle`, but text insertion needs `ydotool`/`wtype`
+  (not implemented yet — see roadmap).
+- Python 3.11+ (tested 3.12), `pipewire` (`pw-record`), `xdotool`, `xclip`,
+  `libnotify-bin`, `pulseaudio-utils` (sounds).
+- A whisper model is downloaded on first use (~75 MB tiny … ~3.1 GB large-v3;
+  default `small` ≈ 484 MB, or `base` on CPU). For the whisper.cpp backend,
+  the curated GGUF models are one-click downloads in Settings → Models.
+- GPU is optional: faster-whisper uses CUDA automatically when cuBLAS 12 +
+  cuDNN 9 are resolvable; otherwise it falls back to CPU int8.
 
-- `--json` prints `{text, language, duration_s, segments}` where `segments`
-  are raw `{start, end, text}` per-segment entries with timestamps
-  (not post-processed; `[]` on the whisper.cpp backend — segment parsing
-  isn't wired up there in v1).
-- `--out PATH` writes the result to a file instead of stdout (JSON with
-  `--json`); missing parent directories are created.
-- Inputs over 25 MB warn: transcription is **not chunked** in v1 and may be
-  slow/memory-heavy — shrink first with
-  `ffmpeg -i in.opus -ar 16000 -ac 1 out.wav`.
+## The native app
 
-### Native app
+<p>
+<img src="docs/screenshots/history-window.png" width="380" alt="History window: status header, search, entry list with replay">
+</p>
+
+<p>
+<img src="docs/screenshots/settings-general.png" width="292" alt="Settings: General">
+<img src="docs/screenshots/settings-models.png" width="292" alt="Settings: Models with one-click switch and GGUF downloads">
+<img src="docs/screenshots/settings-ai.png" width="292" alt="Settings: AI polish">
+</p>
+<p>
+<img src="docs/screenshots/settings-dictation.png" width="292" alt="Settings: Dictation with hotkey capture and mic picker">
+<img src="docs/screenshots/settings-history.png" width="292" alt="Settings: History retention">
+<img src="docs/screenshots/settings-about.png" width="292" alt="Settings: About">
+</p>
 
 `sayit-ermano app` opens a native GTK 4 / libadwaita app (single instance;
 follows your system theme) that mirrors the macOS app's windows:
@@ -167,12 +171,11 @@ follows your system theme) that mirrors the macOS app's windows:
 - **Onboarding** — opens once on first launch with a real 3-second tryout.
 
 With the daemon stopped, History still works and Settings saves to the
-config file directly (applies on next daemon start).
-
-Everything it saves goes to the same `config.toml` (with a strict whitelist;
-API keys are never exposed through the UI — use the env var). Settings talk
-to the daemon over the user-owned unix control socket — no network listener
-exists. The config file is written with 0600 permissions.
+config file directly (applies on next daemon start). Everything it saves goes
+to the same `config.toml` (with a strict whitelist; API keys are never exposed
+through the UI — use the env var). Settings talk to the daemon over the
+user-owned unix control socket — no network listener exists. The config file
+is written with 0600 permissions.
 
 ### Enable AI polish (optional)
 
@@ -184,7 +187,7 @@ model    = "qwen3:8b"                    # pick a general-purpose chat model
 ```
 
 With Ollama: `ollama pull qwen3:8b`. No key needed for local endpoints; for cloud
-providers set `api_key_env = "FLUIDVOICE_API_KEY"` and export the variable
+providers set `api_key_env = "SAYITERMANO_API_KEY"` and export the variable
 (keys are never written to disk by the tooling).
 
 ### Command mode (voice → terminal agent)
@@ -200,6 +203,27 @@ before anything executes; output is fed back to the model and the loop
 continues (bounded by `[command] max_turns`). The `[command]` section also
 tunes `working_dir`, `timeout_seconds` and `confirm_timeout_s`; executed
 commands are recorded in History.
+
+<details>
+<summary><strong>File transcription</strong> (<code>sayit-ermano transcribe</code>)</summary>
+
+Accepts **wav, flac, mp3, opus, oga, ogg, m4a, aac, wma, aiff, webm** (verified
+to decode via PyAV). Unknown extensions are still attempted: anything PyAV
+can't open is converted with **ffmpeg** to 16 kHz mono WAV first
+(`sudo apt install ffmpeg` if it's missing). The whisper.cpp backend always
+converts via ffmpeg since `whisper-cli` reliably reads WAV only.
+
+- `--json` prints `{text, language, duration_s, segments}` where `segments`
+  are raw `{start, end, text}` per-segment entries with timestamps
+  (not post-processed; `[]` on the whisper.cpp backend — segment parsing
+  isn't wired up there in v1).
+- `--out PATH` writes the result to a file instead of stdout (JSON with
+  `--json`); missing parent directories are created.
+- Inputs over 25 MB warn: transcription is **not chunked** in v1 and may be
+  slow/memory-heavy — shrink first with
+  `ffmpeg -i in.opus -ar 16000 -ac 1 out.wav`.
+
+</details>
 
 ## Features vs. upstream FluidVoice
 
@@ -229,21 +253,6 @@ dictation tools (Handy, Vocalinux, nerd-dictation, …),
 [docs/UPSTREAM-TRACKING.md](docs/UPSTREAM-TRACKING.md) for the
 macOS-vs-Linux capability matrix and the upstream changelog we track
 (refresh it with `scripts/upstream-diff.sh`).
-
-## Requirements
-
-- **X11 session** (full experience: global hotkey + typing into apps).
-  On **Wayland**, the daemon still works if you bind a desktop-environment
-  shortcut to `sayit-ermano toggle`, but text insertion needs `ydotool`/`wtype`
-  (not implemented yet — see roadmap).
-- Python 3.10+ (tested 3.12), `pipewire` (`pw-record`), `xdotool`, `xclip`,
-  `libnotify-bin`, `pulseaudio-utils` (sounds).
-- A whisper model is downloaded on first use (~75 MB tiny … ~3.1 GB large-v3;
-  default `small` ≈ 484 MB, or `base` on CPU). For the whisper.cpp backend,
-  the curated GGUF models are one-click downloads in Settings → Models.
-- GPU is optional: faster-whisper uses CUDA automatically when cuBLAS 12 +
-  cuDNN 9 are resolvable (the installer reuses the NVIDIA pip packages that
-  ship with a CUDA torch install); otherwise it falls back to CPU int8.
 
 ## Configuration
 
@@ -280,22 +289,22 @@ the upstream macOS repo for reference only and is **never** updated with port
 work; to see what moved upstream, run `scripts/upstream-diff.sh`.
 
 ```bash
-.venv/bin/python -m pytest -m "not slow and not integration"  # unit: offline, fast
-.venv/bin/python -m pytest -m "integration and not desktop"   # real subsystems, deterministic
-.venv/bin/python -m pytest -m desktop                          # live session (grabs, pixels)
-.venv/bin/python -m pytest -m "not desktop"                    # deterministic everything
+.venv/bin/python -m pytest tests -m "not slow and not integration"  # unit: offline, fast
+.venv/bin/python -m pytest tests -m "integration and not desktop"   # real subsystems, deterministic
+.venv/bin/python -m pytest tests -m desktop                          # live session (grabs, pixels)
+.venv/bin/python -m pytest tests -m "not desktop"                    # deterministic everything
 ```
 
-The test pyramid:
+The test pyramid — **558 automated tests** at v0.4.0:
 
 | Layer | What it exercises | Count |
 |---|---|---|
-| Unit | processing engines, AI client (mocked transport), daemon state machine (stubs), insertion command construction, config validation (apply_settings), GTK app offscreen smoke tests | ~268 |
+| Unit | processing engines, AI client (mocked transport), daemon state machine (stubs), insertion command construction, config validation (apply_settings), overlay/pill painting, GTK app offscreen smoke tests | 527 |
 | E2E (slow) | real whisper model transcribing the JFK sample | 2 |
-| Integration | real `pw-record` capture + raw→WAV, GPU transcription, streaming preview with the loaded model, a real daemon **subprocess** (socket control incl. get/set-config + select-model, toggle/cancel, clean shutdown), live X11 hotkey grab + overlay pixel proof, real CLI invocations (doctor/transcribe/history/config), live AI polish + rewrite against local Ollama (skipped when absent), .deb extract + relocated-venv import, one-shot installer DRY_RUN download | 27 |
+| Integration | real `pw-record` capture + raw→WAV, GPU transcription, streaming preview with the loaded model, a real daemon **subprocess** (socket control incl. get/set-config + select-model, toggle/cancel, clean shutdown), live X11 hotkey grab + overlay pixel proof, real CLI invocations (doctor/transcribe/history/config), live AI polish + rewrite against local Ollama (skipped when absent), .deb extract + relocated-venv import, one-shot installer DRY_RUN download | 29 |
 
 Integration tests run against your real PipeWire/X11/CUDA environment and are
-isolated through `FLUIDVOICE_CONFIG` / `FLUIDVOICE_SOCKET` / `XDG_DATA_HOME`
+isolated through `SAYITERMANO_CONFIG` / `SAYITERMANO_SOCKET` / `XDG_DATA_HOME`
 env overrides (the same overrides work for running multiple daemons).
 
 Layout: `fluidvoice/backends/` (speech engines) · `processing/` (fillers,
