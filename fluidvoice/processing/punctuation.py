@@ -91,6 +91,33 @@ _ORDERED_ACTIONS: list[tuple[list[str], str, bool]] = sorted(
     ((alias.split(), rendered, strip_hws)
      for aliases, rendered, strip_hws in FORMATTING_ACTIONS for alias in aliases),
     key=lambda c: len(c[0]), reverse=True)
+
+# User-extensible spoken formatting actions (upstream
+# SpokenFormattingActionRule, SettingsStore.swift:4170-4187): extra trigger
+# aliases per action, on top of the built-in defaults above.
+_ACTION_RENDERED = {"new_line": "\n", "new_paragraph": "\n\n",
+                    "tab": "\t", "space": " "}
+
+
+def _ordered_actions(extra: dict[str, list[str]] | None
+                     ) -> list[tuple[list[str], str, bool]]:
+    """Built-in action aliases plus validated user extras, longest-first.
+
+    Unknown action names, non-list alias values and non-string/blank
+    aliases are ignored - the built-in table always stays available."""
+    if not extra:
+        return _ORDERED_ACTIONS
+    cands = list(_ORDERED_ACTIONS)
+    for action, aliases in extra.items():
+        rendered = _ACTION_RENDERED.get(str(action))
+        if rendered is None or not isinstance(aliases, (list, tuple)):
+            continue
+        for alias in aliases:
+            if isinstance(alias, str) and alias.strip():
+                cands.append((alias.lower().split(), rendered, True))
+    cands.sort(key=lambda c: len(c[0]), reverse=True)
+    return cands
+
 _ORDERED_PUNCT: list[tuple[list[str], str, str]] = sorted(
     ((alias.split(), symbol, spacing)
      for aliases, symbol, spacing in PUNCTUATION_RULES for alias in aliases),
@@ -258,7 +285,8 @@ def _cleanup_generated(out: _Out) -> str:
 
 
 def format_spoken_punctuation(text: str, *, prefix: str = "literal",
-                              enabled: bool = True, app_hint: str | None = None) -> str:
+                              enabled: bool = True, app_hint: str | None = None,
+                              extra_actions: dict[str, list[str]] | None = None) -> str:
     if not enabled or not text or not prefix:
         return text
     if prefix.lower() not in text.lower():  # fast gate: full prefix substring
@@ -266,6 +294,7 @@ def format_spoken_punctuation(text: str, *, prefix: str = "literal",
 
     tokens = _tokenize(text)
     prefix_words = prefix.lower().split()
+    ordered_actions = _ordered_actions(extra_actions)
     r = _Renderer()
     i = 0
     while i < len(tokens):
@@ -279,7 +308,7 @@ def format_spoken_punctuation(text: str, *, prefix: str = "literal",
             continue
         j = r.skip_following_hws(tokens, after_prefix)
         matched = False
-        for words, rendered, strip_hws in _ORDERED_ACTIONS:
+        for words, rendered, strip_hws in ordered_actions:
             end = _match_words(tokens, j, words)
             if end is not None:
                 if strip_hws:

@@ -219,3 +219,53 @@ class TestEdgeCases:
         # performance gate: no prefix anywhere -> identical object content
         text = "comma period dash everywhere but no magic word"
         assert fmt(text) == text
+
+
+class TestUserActionTriggers:
+    """B4: user-extensible spoken formatting actions (upstream
+    SpokenFormattingActionRule parity) - extra trigger aliases per action
+    on top of the built-in new line/paragraph/tab/space defaults."""
+
+    def test_extra_alias_renders_newline(self):
+        out = fmt(
+            "hello literal nova vrstica world",
+            extra_actions={"new_line": ["nova vrstica"]})
+        assert out == "hello\nworld"
+
+    def test_extra_alias_paragraph_and_tab(self):
+        out = fmt(
+            "a literal nov odstavek b",
+            extra_actions={"new_paragraph": ["nov odstavek"]})
+        assert out == "a\n\nb"
+        out = fmt(
+            "a literal zamik b", extra_actions={"tab": ["zamik"]})
+        assert out == "a\tb"
+
+    def test_builtins_still_work_alongside_extras(self):
+        out = fmt(
+            "hello literal new line world",
+            extra_actions={"new_line": ["nova vrstica"]})
+        assert out == "hello\nworld"
+
+    def test_longest_alias_wins_between_extras(self):
+        # two competing extras: the 3-word alias consumes its full phrase
+        out = fmt(
+            "a literal nova vrstica podatki b",
+            extra_actions={"new_line": ["nova vrstica", "nova vrstica podatki"]})
+        assert out == "a\nb"
+
+    def test_garbage_extras_ignored(self):
+        good = {"new_line": ["nova vrstica"], "bogus_action": ["x y"],
+                "tab": "not a list", "space": [42, "", None, "  "]}
+        out = fmt(
+            "hello literal nova vrstica world", extra_actions=good)
+        assert out == "hello\nworld"
+        # invalid entries never break the builtins
+        assert fmt(
+            "a literal tab b", extra_actions=good) == "a\tb"
+
+    def test_extras_still_need_the_prefix(self):
+        out = fmt(
+            "hello nova vrstica world",
+            extra_actions={"new_line": ["nova vrstica"]})
+        assert out == "hello nova vrstica world"

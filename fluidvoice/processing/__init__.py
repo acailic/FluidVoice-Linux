@@ -25,5 +25,6 @@ def post_process(text: str, cfg: dict, app_hint: str | None = None) -> str:
             text,
             prefix=p.get("punctuation_prefix", "literal"),
             app_hint=app_hint,
+            extra_actions=p.get("formatting_action_triggers"),
         )
     return text
