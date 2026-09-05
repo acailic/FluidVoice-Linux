@@ -7,6 +7,7 @@ import json
 import shutil
 import time
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -278,6 +279,75 @@ def format_today(stats: dict) -> str:
     return (f"{stats.get('dictations', 0)} dictations, "
             f"{total // 60}:{total % 60:02d} minutes, "
             f"{stats.get('words', 0)} words")
+
+
+# -- usage stats (Stats page, upstream StatsView parity) ------------------------
+
+# Time-saved basis (upstream "Time Saved (user WPM)"): typing at 40 wpm vs
+# dictating at 150 wpm - the difference is time saved per word.
+TYPING_WPM = 40.0
+DICTATION_WPM = 150.0
+
+
+def _entry_words(entry: dict) -> int:
+    return len(str(entry.get("text") or entry.get("raw") or "").split())
+
+
+def usage_stats(entries: list[dict], now: float | None = None) -> dict:
+    """Whole-history usage summary for the Stats page: today block, day
+    streak (consecutive local days with at least one entry, today counts
+    only when active), all-time totals, time-saved estimate, and the
+    per-day activity series."""
+    now = time.time() if now is None else now
+    today = today_stats(entries, now)
+
+    by_day: dict[str, dict] = {}
+    for e in entries:
+        day = time.strftime("%Y-%m-%d", time.localtime(e.get("ts", 0)))
+        agg = by_day.setdefault(day, {"dictations": 0, "words": 0,
+                                      "seconds": 0.0})
+        agg["dictations"] += 1
+        agg["words"] += _entry_words(e)
+        agg["seconds"] += float(e.get("duration_s") or 0)
+
+    # streak: walk back from today; a day with nothing breaks it, but an
+    # empty TODAY does not (the day is not over yet) - start at yesterday.
+    days = set(by_day)
+    cursor = time.localtime(now)
+    streak = 0
+    if time.strftime("%Y-%m-%d", cursor) in days:
+        streak = 1
+    while True:
+        cursor = time.localtime(time.mktime(cursor[:3] + (0, 0, 0, 0, 0, -1))
+                                - 86400)
+        key = time.strftime("%Y-%m-%d", cursor)
+        if key in days:
+            streak += 1
+        else:
+            break
+    best = run = 0
+    prev: datetime | None = None
+    for day in sorted(days):
+        d = datetime.strptime(day, "%Y-%m-%d")
+        run = run + 1 if prev is not None and (d - prev).days == 1 else 1
+        best = max(best, run)
+        prev = d
+
+    total_words = sum(a["words"] for a in by_day.values())
+    total_seconds = sum(a["seconds"] for a in by_day.values())
+    n = len(entries)
+    minutes_saved = total_words * (1.0 / TYPING_WPM - 1.0 / DICTATION_WPM)
+    return {
+        "today": today,
+        "streak": streak,
+        "best_streak": best,
+        "dictations": n,
+        "words": total_words,
+        "seconds": total_seconds,
+        "avg_seconds": total_seconds / n if n else 0.0,
+        "minutes_saved": minutes_saved,
+        "by_day": by_day,
+    }
 
 
 # -- ZIP export ----------------------------------------------------------------

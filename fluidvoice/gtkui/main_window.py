@@ -412,6 +412,63 @@ class HistoryWindow(Adw.ApplicationWindow):
             vexpand=True))
         cmd_scroll.set_child(self.cmd_listbox)
         self.view_stack.add_titled(cmd_scroll, "commands", "Commands")
+
+        # -- Stats page (B6, upstream StatsView parity) ---------------------
+        stats_scroll = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        stats_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14,
+                            margin_top=14, margin_bottom=14,
+                            margin_start=14, margin_end=14)
+        stats_scroll.set_child(stats_box)
+
+        self.streak_lbl = Gtk.Label(css_classes=["title-3"], halign=Gtk.Align.START)
+        stats_box.append(self.streak_lbl)
+
+        today_g = Adw.PreferencesGroup(title="Today")
+        self._today_vals: dict[str, Gtk.Label] = {}
+        for key, title in (("dictations", "Dictations"),
+                           ("minutes", "Minutes dictated"),
+                           ("words", "Words")):
+            row = Adw.ActionRow(title=title)
+            val = Gtk.Label(css_classes=["dim-label", "numeric"])
+            row.add_suffix(val)
+            self._today_vals[key] = val
+            today_g.add(row)
+        stats_box.append(today_g)
+
+        all_g = Adw.PreferencesGroup(title="All time")
+        self._all_vals: dict[str, Gtk.Label] = {}
+        for key, title in (("dictations", "Dictations"),
+                           ("words", "Words"),
+                           ("minutes", "Minutes dictated"),
+                           ("avg", "Avg per dictation"),
+                           ("best", "Best streak (days)"),
+                           ("saved", "Time saved (dictating vs typing)")):
+            row = Adw.ActionRow(title=title)
+            val = Gtk.Label(css_classes=["dim-label", "numeric"])
+            row.add_suffix(val)
+            self._all_vals[key] = val
+            all_g.add(row)
+        stats_box.append(all_g)
+
+        chart_g = Adw.PreferencesGroup(
+            title="Activity",
+            description="dictations per day")
+        chart_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._span_btns: dict[int, Gtk.ToggleButton] = {}
+        for span in (7, 30):
+            tb = Gtk.ToggleButton(label=f"{span} days",
+                                  css_classes=["flat"], valign=Gtk.Align.CENTER)
+            tb.set_active(span == 7)
+            tb.connect("toggled", lambda b, s=span: self._on_span(b, s))
+            self._span_btns[span] = tb
+            chart_box.append(tb)
+        chart_g.header_suffix = chart_box
+        self.chart = Gtk.DrawingArea(vexpand=True, height_request=160)
+        self.chart.set_draw_func(self._draw_activity)
+        chart_g.add(self.chart)
+        stats_box.append(chart_g)
+
+        self.view_stack.add_titled(stats_scroll, "stats", "Stats")
         self.view_stack.connect("notify::visible-child",
                                 lambda *_: self._update_count())
         vbox.append(self.view_stack)
@@ -430,6 +487,82 @@ class HistoryWindow(Adw.ApplicationWindow):
 
     # -- data -----------------------------------------------------------------
 
+    _stats_span = 7
+
+    def _on_span(self, btn: Gtk.ToggleButton, span: int) -> None:
+        if btn.get_active():
+            self._stats_span = span
+            for other, b in self._span_btns.items():
+                if other != span:
+                    b.set_active(False)
+            self.chart.queue_draw()
+
+    def _update_stats(self) -> None:
+        """Stats page refresh - computed over the WHOLE history, ignoring
+        the search filter (which only applies to the Transcripts list)."""
+        try:
+            entries = self.c.history(q="", limit=5000)
+        except Exception:
+            entries = self._entries
+        s = history_mod.usage_stats(entries)
+        self._stats = s
+        self.streak_lbl.set_label(
+            f"{s['streak']}-day streak" + (" — keep going!" if s["streak"] else ""))
+        t = s["today"]
+        self._today_vals["dictations"].set_label(str(t["dictations"]))
+        self._today_vals["minutes"].set_label(f"{int(t['seconds']) // 60} min")
+        self._today_vals["words"].set_label(str(t["words"]))
+        self._all_vals["dictations"].set_label(str(s["dictations"]))
+        self._all_vals["words"].set_label(str(s["words"]))
+        self._all_vals["minutes"].set_label(f"{int(s['seconds']) // 60} min")
+        avg = s["avg_seconds"]
+        self._all_vals["avg"].set_label(
+            f"{int(avg) // 60}:{int(avg) % 60:02d}" if avg else "—")
+        self._all_vals["best"].set_label(str(s["best_streak"]))
+        self._all_vals["saved"].set_label(f"~{s['minutes_saved']:.0f} min")
+        self.chart.queue_draw()
+
+    def _draw_activity(self, _area, cr, width: int, height: int) -> None:
+        """One bar per day for the selected span; empty days draw at the
+        baseline so gaps stay visible (upstream StatsView activity chart)."""
+        import time as _time
+        s = getattr(self, "_stats", None)
+        if not s:
+            return
+        by_day = s["by_day"]
+        span = self._stats_span
+        now = _time.time()
+        keys = [_time.strftime("%Y-%m-%d", _time.localtime(now - i * 86400))
+                for i in range(span - 1, -1, -1)]
+        counts = [by_day.get(k, {}).get("dictations", 0) for k in keys]
+        labels = [k[5:] for k in keys]
+        peak = max(counts, default=0) or 1
+        n = len(keys)
+        gap = 6.0
+        bar_w = max(3.0, (width - gap * (n + 1)) / n)
+        top, bottom = 18.0, height - 22.0
+        for i, c in enumerate(counts):
+            x = gap + i * (bar_w + gap)
+            h = (bottom - top) * (c / peak) if c else 2.0
+            if c:
+                cr.set_source_rgba(0.35, 0.53, 0.90, 0.95)  # accent blue
+            else:
+                cr.set_source_rgba(0.5, 0.5, 0.5, 0.25)
+            cr.rounded_rectangle(x, bottom - h, bar_w, h, 3.0)
+            cr.fill()
+            if span == 7 or i % 5 == 0:
+                cr.set_source_rgba(0.5, 0.5, 0.5, 0.8)
+                cr.select_font_face("Sans", 0, 0)
+                cr.set_font_size(9.0)
+                cr.move_to(x, height - 8)
+                cr.show_text(labels[i])
+        if max(counts, default=0):
+            cr.set_source_rgba(0.5, 0.5, 0.5, 0.8)
+            cr.select_font_face("Sans", 0, 0)
+            cr.set_font_size(9.0)
+            cr.move_to(gap, 12)
+            cr.show_text(f"peak {peak}/day")
+
     def _on_search_changed(self, entry) -> None:
         self._query = entry.get_text().strip()
         if self._search_debounce:
@@ -447,6 +580,7 @@ class HistoryWindow(Adw.ApplicationWindow):
         except Exception:
             self._entries = []
         self._render()
+        self._update_stats()
 
     def _render(self) -> None:
         row = self.listbox.get_first_child()

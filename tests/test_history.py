@@ -141,3 +141,56 @@ class TestScrubCli:
         assert rc == 0
         assert "nothing to remove (1 entries, 0 test rows)" in out
         assert [e["ts"] for e in history.read_all()] == [1.0]
+
+
+class TestUsageStats:
+    """Stats page backend: streaks, totals, time-saved (B6)."""
+
+    @staticmethod
+    def at(day: str, hour: int = 10) -> float:
+        y, m, d = (int(x) for x in day.split("-"))
+        import time as _t
+        return _t.mktime((y, m, d, hour, 0, 0, 0, 0, -1))
+
+    @classmethod
+    def e(cls, day: str, text: str = "w1 w2") -> dict:
+        return {"ts": cls.at(day), "duration_s": 10.0, "text": text}
+
+    def test_streak_and_best_with_gap(self):
+        from fluidvoice.history import usage_stats
+        now = self.at("2026-09-05", 23)
+        s = usage_stats([self.e("2026-09-05"), self.e("2026-09-04"),
+                         self.e("2026-09-02")], now)
+        assert s["streak"] == 2 and s["best_streak"] == 2
+        assert s["words"] == 6 and s["dictations"] == 3
+        assert s["avg_seconds"] == 10.0
+
+    def test_today_open_streak_alive_via_yesterday(self):
+        from fluidvoice.history import usage_stats
+        now = self.at("2026-09-05", 23)
+        s = usage_stats([self.e("2026-09-04"), self.e("2026-09-03")], now)
+        assert s["streak"] == 2
+
+    def test_yesterday_empty_breaks_streak(self):
+        from fluidvoice.history import usage_stats
+        now = self.at("2026-09-05", 23)
+        s = usage_stats([self.e("2026-09-03"), self.e("2026-09-02")], now)
+        assert s["streak"] == 0 and s["best_streak"] == 2
+
+    def test_best_streak_spans_gaps(self):
+        from fluidvoice.history import usage_stats
+        now = self.at("2026-09-05", 23)
+        s = usage_stats([self.e("2026-08-30"), self.e("2026-08-31"),
+                         self.e("2026-09-01"), self.e("2026-09-04"),
+                         self.e("2026-09-05")], now)
+        assert s["best_streak"] == 3 and s["streak"] == 2
+
+    def test_minutes_saved_formula_and_empty(self):
+        from fluidvoice.history import (DICTATION_WPM, TYPING_WPM,
+                                        usage_stats)
+        now = self.at("2026-09-05", 23)
+        s = usage_stats([self.e("2026-09-05")], now)  # 2 words
+        assert s["minutes_saved"] == 2 * (1 / TYPING_WPM - 1 / DICTATION_WPM)
+        empty = usage_stats([], now)
+        assert empty["streak"] == 0 and empty["minutes_saved"] == 0.0
+        assert empty["avg_seconds"] == 0.0
