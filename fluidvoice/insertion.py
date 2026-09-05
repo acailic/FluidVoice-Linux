@@ -1,8 +1,17 @@
-"""Text insertion into the focused app (X11): typed keystrokes or clipboard paste.
+"""Text insertion into the focused app (X11 + Wayland): typed keystrokes
+or clipboard paste.
 
 Mirrors FluidVoice's TypingService strategies:
-- typed: xdotool type (keystroke simulation, "clipboard free insert")
-- paste: clipboard + Ctrl+V with clipboard restore ("reliable paste")
+- typed: xdotool type (X11) / wtype / ydotool (Wayland) - keystroke
+  simulation, "clipboard free insert"
+- paste: clipboard + Ctrl+V with clipboard restore ("reliable paste"):
+  xclip + verified selection read-observation on X11, wl-clipboard with a
+  fixed settle delay on Wayland (cross-client selection reads are
+  impossible there - see WAYLAND_PASTE_SETTLE_S).
+
+Wayland is additive: every branch is taken ONLY via the session probe
+(fluidvoice/session.py), never on "xdotool missing" - the X11 paths below
+stay byte-identical for x11/unknown sessions.
 """
 from __future__ import annotations
 
@@ -12,6 +21,8 @@ import shutil
 import subprocess
 import time
 from typing import Callable
+
+from . import session as session_mod
 
 
 class InsertError(RuntimeError):
@@ -41,6 +52,25 @@ HYGIENE_TARGETS = (
     ("application/x-copyq-hidden", b"1"),
 )
 
+# Wayland paste settle: the X11 read-observation (watch the target read the
+# selection we own) CANNOT be replicated on Wayland - no client can observe
+# another client's selection reads - so paste verification degrades to this
+# fixed delay. Documented divergence; doctor repeats it.
+WAYLAND_PASTE_SETTLE_S = 0.45
+# wl-copy forks and serves the clipboard (like xclip); same settle need.
+WAYLAND_CLIPBOARD_SETTLE_S = 0.15
+
+# spec token -> linux key code for `ydotool key <code>:<state>`. Covers every
+# spec the codebase can emit (paste keys, spoken-send, cancel) plus the
+# common extras; unknown tokens fail LOUDLY (InsertError) instead of sending
+# a wrong keystroke. Single source of truth for the wayland key mapping.
+LINUX_KEY_CODES = {
+    "ctrl": 29, "shift": 42, "alt": 56, "super": 125,
+    "enter": 28, "return": 28, "esc": 1, "escape": 1, "tab": 15,
+    "space": 57, "backspace": 14,
+    "a": 30, "c": 46, "v": 47, "x": 45,
+}
+
 
 def _display_active() -> bool:
     return bool(os.environ.get("DISPLAY"))
@@ -54,7 +84,11 @@ def _run(args: list[str], timeout: float = 15.0, stdin: bytes | None = None) -> 
 
 
 def active_window_class() -> str | None:
-    """WM_CLASS (or title) of the active window - the punctuation app hint."""
+    """WM_CLASS (or title) of the active window - the punctuation app hint.
+    Always None on Wayland: xdotool under Xwayland would report some X11
+    window's class while the real focus is elsewhere (misleading)."""
+    if session_mod.current().is_wayland:
+        return None
     if not (shutil.which("xdotool") and _display_active()):
         return None
     try:
@@ -72,15 +106,27 @@ def active_window_class() -> str | None:
         return None
 
 
-def insert_typed(text: str, delay_ms: int) -> None:
-    # xdotool has no "--" guard for type; a leading dash would be parsed as an
-    # option, so such texts go through the clipboard path instead.
+def insert_typed(text: str, delay_ms: int, *, tool: str | None = None) -> None:
+    """Simulate typing. tool=None keeps today's xdotool path; "wtype"/
+    "ydotool" are the Wayland tools (same leading-dash hazard: xdotool and
+    wtype both parse leading '-' as an option, so such texts must paste)."""
     if text.startswith("-"):
         raise InsertError("text starts with '-' needs paste mode")
-    proc = _run(["xdotool", "type", "--delay", str(max(0, delay_ms)),
-                 "--clearmodifiers", text])
+    if tool is None:
+        cmd = ["xdotool", "type", "--delay", str(max(0, delay_ms)),
+               "--clearmodifiers", text]
+        name = "xdotool"
+    elif tool == "wtype":
+        cmd = _wtype_type_cmd(text, delay_ms)
+        name = "wtype"
+    elif tool == "ydotool":
+        cmd = _ydotool_type_cmd(text, delay_ms)
+        name = "ydotool"
+    else:
+        raise InsertError(f"unknown insertion tool: {tool!r}")
+    proc = _run(cmd)
     if proc.returncode != 0:
-        raise InsertError(f"xdotool type failed: {proc.stderr.decode()[:200]}")
+        raise InsertError(f"{name} type failed: {proc.stderr.decode()[:200]}")
 
 
 def _clipboard_read() -> bytes | None:
@@ -126,6 +172,158 @@ def _clipboard_write(data: bytes) -> None:
                      stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL).communicate(data)
     time.sleep(0.15)
+
+
+# ---------------------------------------------------------------------------
+# Wayland insertion (additive): tool resolution + command builders, the
+# single source of truth for every external-tool argv so a live-verified
+# flag fix is a one-line change.
+# ---------------------------------------------------------------------------
+
+def _resolve_wayland_tool(cfg: dict,
+                          which: Callable[[str], str | None] | None = None
+                          ) -> tuple[str | None, str]:
+    """insertion.wayland_tool (auto|wtype|ydotool) -> (tool, reason), via
+    the shared resolver (GNOME excludes wtype in auto; missing tools fall
+    through). The reason feeds doctor, not a user notification."""
+    info = session_mod.current()
+    pref = str((cfg.get("insertion", {}) or {}).get("wayland_tool", "auto"))
+    return session_mod.resolve_wayland_tool(pref, info.desktop_all, which)
+
+
+def _wtype_type_cmd(text: str, delay_ms: int) -> list[str]:
+    return ["wtype", "-d", str(max(0, delay_ms)), text]
+
+
+def _wtype_key_cmd(spec: str) -> list[str]:
+    # wtype -k takes 'ctrl+v'-style combos (xkb keysym names)
+    return ["wtype", "-k", spec]
+
+
+def _ydotool_type_cmd(text: str, delay_ms: int) -> list[str]:
+    return ["ydotool", "type", "-d", str(max(0, delay_ms)), text]
+
+
+def _ydotool_key_cmd(spec: str) -> list[str]:
+    """'ctrl+v' -> ydotool key 29:1 47:1 47:0 29:0 (mods press, key tap,
+    mods release). Unknown tokens raise instead of mistyping."""
+    parts = [p.strip().lower() for p in spec.split("+") if p.strip()]
+    if not parts:
+        raise InsertError(f"empty key spec for ydotool: {spec!r}")
+    codes = []
+    for p in parts:
+        if p not in LINUX_KEY_CODES:
+            raise InsertError(f"no ydotool key code for {p!r} (spec {spec!r})")
+        codes.append(LINUX_KEY_CODES[p])
+    mods, key = codes[:-1], codes[-1]
+    events = ([f"{m}:1" for m in mods] + [f"{key}:1", f"{key}:0"]
+              + [f"{m}:0" for m in reversed(mods)])
+    return ["ydotool", "key"] + events
+
+
+def _key_cmd(tool: str | None, spec: str) -> list[str]:
+    """Dispatch one key combo to the resolved wayland tool."""
+    if tool == "wtype":
+        return _wtype_key_cmd(spec)
+    if tool == "ydotool":
+        return _ydotool_key_cmd(spec)
+    raise InsertError("no wayland typing tool for the keystroke "
+                      "(install wtype or ydotool)")
+
+
+def _wl_copy_args(type_: str | None = None) -> list[str]:
+    return ["wl-copy"] + (["--type", type_] if type_ else [])
+
+
+def _wl_paste_args() -> list[str]:
+    return ["wl-paste", "--no-newline"]
+
+
+def _wl_paste_types_args() -> list[str]:
+    return ["wl-paste", "--list-types"]
+
+
+def _wl_clipboard_write(data: bytes, type_: str | None = None) -> None:
+    # wl-copy forks and serves (like xclip); same settle discipline
+    subprocess.Popen(_wl_copy_args(type_),
+                     stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL).communicate(data)
+    time.sleep(WAYLAND_CLIPBOARD_SETTLE_S)
+
+
+def _wl_clipboard_read() -> bytes | None:
+    proc = _run(_wl_paste_args(), timeout=5)
+    if proc.returncode == 0:
+        return proc.stdout
+    return None  # empty clipboard
+
+
+def _wl_clipboard_snapshot() -> tuple[bytes | None, str | None]:
+    """The pre-paste wayland clipboard as (bytes | None, mime). The mime
+    comes from one `wl-paste --list-types` probe so a restore can put the
+    ORIGINAL type back (text/plain;charset=utf-8, image/png, ...).
+    Mirrors _clipboard_snapshot semantics: never fail an insert over a
+    clipboard we cannot read back."""
+    previous = _wl_clipboard_read()
+    if previous is None:
+        return None, None
+    proc = _run(_wl_paste_types_args(), timeout=5)
+    types = proc.stdout.decode(errors="replace") if proc.returncode == 0 else ""
+    mime = next((t.strip() for t in types.splitlines()
+                 if t.strip()), None)
+    return previous, mime
+
+
+def _wl_restore_clipboard(previous: bytes | None, mime: str | None,
+                          on_notice: Callable[[str], None] | None) -> None:
+    """Best-effort blind restore via wl-copy (with the original mime
+    type). Never raises - a failed restore warns through on_notice (the
+    paste already landed; raising would double-insert on a retry). No
+    hygiene-marker support on wayland (documented divergence: clipboard
+    managers will see the dictation flash)."""
+    if previous is None:
+        return  # clipboard was empty before the paste
+    try:
+        _wl_clipboard_write(previous, mime)
+    except Exception:
+        if on_notice is not None:
+            on_notice("Clipboard restore failed - "
+                      "your previous clipboard may be lost")
+
+
+def _insert_paste_wayland(text: str, *, key: str = "ctrl+v",
+                          tool: str | None = None,
+                          on_notice: Callable[[str], None] | None = None) -> None:
+    """Wayland clipboard paste: wl-copy the text, keystroke via the typing
+    tool, fixed settle, wl-copy restore.
+
+    Two deliberate divergences from the X11 verified-paste design (see
+    docs/STATUS.md): the paste CANNOT be verified by observing the target
+    read the selection (no cross-client observation on Wayland) - a fixed
+    delay (WAYLAND_PASTE_SETTLE_S) replaces the read-observation - and no
+    clipboard-manager hygiene markers can be advertised while we hold the
+    selection, so managers will see the dictation flash."""
+    if not (shutil.which("wl-copy") and shutil.which("wl-paste")):
+        raise InsertError("wl-clipboard is required for paste mode on "
+                          "wayland (install wl-clipboard)")
+    if tool is None:
+        raise InsertError("no wayland typing tool for the paste keystroke "
+                          "(install wtype or ydotool)")
+    data = text.encode()
+    previous, mime = _wl_clipboard_snapshot()
+    try:
+        try:
+            _wl_clipboard_write(data)
+        except Exception as e:  # spawn failures surface as InsertError so
+            # the auto-mode ladder can fall through to typed insertion
+            raise InsertError(f"wl-copy failed: {e}") from e
+        proc = _run(_key_cmd(tool, key), timeout=10)
+        if proc.returncode != 0:
+            raise InsertError(f"paste keystroke failed: "
+                              f"{proc.stderr.decode()[:200]}")
+        time.sleep(WAYLAND_PASTE_SETTLE_S)  # verification impossible: settle
+    finally:
+        _wl_restore_clipboard(previous, mime, on_notice)
 
 
 def _restore_clipboard(previous: bytes | None, prev_is_text: bool, *,
@@ -241,7 +439,12 @@ def insert_text(text: str, cfg: dict, wm_class: str | None = None,
     and typed insertions ending in a word character gain one trailing
     space (insertion.terminal_autocomplete_space) so autocomplete commits;
     the space is typing-only - clipboard copy and history keep the text
-    without it. on_notice surfaces paste-fallback / restore warnings."""
+    without it. on_notice surfaces paste-fallback / restore warnings.
+
+    Wayland sessions route to _insert_text_wayland (wm_class is always
+    None there: terminal quirks are inert, documented divergence)."""
+    if session_mod.current().is_wayland:
+        return _insert_text_wayland(text, cfg, on_notice)
     mode = cfg["insertion"]["mode"]
     threshold = cfg["insertion"].get("paste_threshold_chars", 1200)
     delay = cfg["insertion"].get("type_delay_ms", 8)
@@ -268,20 +471,95 @@ def insert_text(text: str, cfg: dict, wm_class: str | None = None,
     return "typed"
 
 
+def _insert_text_wayland(text: str, cfg: dict,
+                        on_notice: Callable[[str], None] | None = None) -> str:
+    """Wayland insert: the same mode/threshold/leading-dash routing as the
+    X11 body, over the wtype/ydotool + wl-clipboard backends.
+
+    Degradation ladder (each step only when the previous is impossible):
+      tool+typed -> tool+wl-clipboard paste -> wl-copy + "paste manually"
+      notice ("clipboard-fallback") -> InsertError (the pipeline notifies;
+      history still records the take). Terminal quirks never apply: without
+    a WM_CLASS equivalent (AT-SPI is future work) ctrl+shift+v and the
+    autocomplete space stay off - a wrong plain ctrl+v in a terminal is
+    recoverable, a mistyped terminal-paste is not."""
+    mode = cfg["insertion"]["mode"]
+    threshold = cfg["insertion"].get("paste_threshold_chars", 1200)
+    delay = cfg["insertion"].get("type_delay_ms", 8)
+    tool, _reason = _resolve_wayland_tool(cfg)
+    use_paste = (mode == "paste" or len(text) > threshold or text.startswith("-"))
+    if use_paste:
+        try:
+            _insert_paste_wayland(text, tool=tool, on_notice=on_notice)
+            return "paste"
+        except InsertError:
+            if mode == "paste":
+                raise
+            if on_notice is not None:
+                on_notice("Paste did not land - trying to type instead")
+    if tool is not None:
+        try:
+            insert_typed(text, delay, tool=tool)
+            return "typed"
+        except InsertError:
+            if on_notice is not None:
+                on_notice("Typing failed - falling back to the clipboard")
+    if shutil.which("wl-copy"):
+        try:
+            copy_to_clipboard(text, wayland=True)
+        except Exception:
+            pass
+        else:
+            if on_notice is not None:
+                on_notice("Copied to clipboard - paste manually (install "
+                          "wtype or ydotool to type automatically)")
+            return "clipboard-fallback"
+    raise InsertError("no wayland insertion tool available - install "
+                      "wtype or ydotool (plus wl-clipboard for paste mode)")
+
+
 def clipboard_fallback(text: str) -> None:
     """Last resort when neither typing nor pasting worked: leave text on the clipboard."""
-    copy_to_clipboard(text)
+    copy_to_clipboard(text)  # auto-detects the session (xclip / wl-copy)
 
 
-def press_key(spec: str) -> None:
-    """Press a key combo (e.g. 'enter', 'shift+enter') in the focused window."""
-    proc = _run(["xdotool", "key", "--clearmodifiers", spec], timeout=5)
+def press_key(spec: str, *, tool: str | None = None) -> None:
+    """Press a key combo (e.g. 'enter', 'shift+enter') in the focused window.
+    tool=None keeps today's xdotool path on X11/unknown sessions and
+    auto-resolves the wayland tool on a wayland session (no cfg at this
+    call depth -> the "auto" preference; spoken-send, paste-last and
+    command-mode reruns get wayland for free)."""
+    if tool is None and session_mod.current().is_wayland:
+        tool, _reason = _resolve_wayland_tool({})
+        if tool is None:
+            raise InsertError("no wayland typing tool for the keystroke "
+                              "(install wtype or ydotool)")
+    if tool is None:
+        cmd = ["xdotool", "key", "--clearmodifiers", spec]
+        name = "xdotool"
+    else:
+        cmd = _key_cmd(tool, spec)
+        name = tool
+    proc = _run(cmd, timeout=5)
     if proc.returncode != 0:
-        raise InsertError(f"key press failed: {proc.stderr.decode()[:200]}")
+        raise InsertError(f"{name} key press failed: "
+                          f"{proc.stderr.decode()[:200]}")
 
 
-def copy_to_clipboard(text: str) -> None:
-    """Put text on the clipboard without typing (upstream copyTranscriptionToClipboard)."""
+def copy_to_clipboard(text: str, *, wayland: bool | None = None) -> None:
+    """Put text on the clipboard without typing (upstream copyTranscriptionToClipboard).
+    wayland=None auto-detects via the session probe (the daemon's
+    always-copy call sites stay session-correct); True/False force it."""
+    if wayland is None:
+        wayland = session_mod.current().is_wayland
+    if wayland:
+        if not shutil.which("wl-copy"):
+            return
+        try:
+            _wl_clipboard_write(text.encode())
+        except Exception:
+            pass
+        return
     if not shutil.which("xclip"):
         return
     try:

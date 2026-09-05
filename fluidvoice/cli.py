@@ -334,6 +334,12 @@ def _describe(resp: dict) -> str:
         if "today" in resp:
             from . import history
             text += "\ntoday: " + history.format_today(resp["today"])
+        caps = resp.get("capabilities") or {}
+        if resp.get("session", {}).get("type") == "wayland":
+            # the wayland capability line (x11 prints nothing new)
+            text += ("\nsession: wayland — insertion: "
+                     f"{caps.get('insertion', '?')} — hotkey: DE shortcut "
+                     f"— overlay: {caps.get('overlay', '?')}")
         if resp.get("update_available"):
             text += (f"\nupdate available: {resp['update_available']} "
                      "(sayit-ermano update)")

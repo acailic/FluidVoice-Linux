@@ -85,3 +85,14 @@ def socket_path() -> Path:
         return Path(override)
     runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
     return Path(runtime) / "sayit-ermano.sock"
+
+
+def bin_dir() -> Path:
+    """Private helper scripts (the Wayland DE-shortcut toggle wrapper)."""
+    return data_dir() / "bin"
+
+
+def toggle_script() -> Path:
+    """The bindable `sayit-ermano toggle` wrapper written on Wayland
+    sessions (see session.ensure_toggle_script)."""
+    return bin_dir() / "sayit-ermano-toggle"

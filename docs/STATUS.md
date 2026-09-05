@@ -324,8 +324,84 @@ matrix + upstream changelog with its refresh loop).
       dict vs per-store pickers.
 
 ### Wayland parity (v0.3)
-- [ ] Insertion via ydotool/wtype; wl-clipboard restore; DE-shortcut /
-      evdev hotkey paths.
+- [x] **Shipped (2026-09)** — the daemon is genuinely useful on a Wayland
+      session; X11 behavior is byte-identical (the port is strictly
+      additive; every wayland branch is gated ONLY on the session probe:
+      `XDG_SESSION_TYPE` > `WAYLAND_DISPLAY` > `DISPLAY` > unknown-as-x11,
+      `fluidvoice/session.py`).
+      - **Session + capability matrix**: daemon startup logs one
+        `session: wayland (gnome) - capabilities: …` line; `status`
+        carries additive `session`/`capabilities` keys; `doctor` prints
+        the per-capability matrix with per-tool found/missing and flips
+        its exit code only when insertion is `unavailable`; Settings →
+        Wayland shows the same resolution.
+      - **Insertion**: `wtype` (auto resolution skips it on GNOME — no
+        zwp virtual-keyboard protocol) or `ydotool` (any compositor;
+        needs `ydotoold` + `/dev/uinput`; spec→code table with loud
+        errors for unmapped keys), `insertion.wayland_tool` =
+        `auto|wtype|ydotool`. Typed insertion is the default (no
+        clipboard flash), matching xdotool semantics; paste mode uses
+        wl-clipboard with snapshot + restore of the original mime type.
+        Degradation ladder: tool+typed → tool+wl-paste → wl-copy +
+        "paste manually" notice (`clipboard-fallback`) → InsertError.
+      - **Hotkey**: no global grabs exist — the daemon writes a bindable
+        `~/.local/share/sayit-ermano/bin/sayit-ermano-toggle` script and
+        prints per-DE bind steps (GNOME/KDE/COSMIC/generic) in doctor and
+        Settings → Wayland (copy button + open-DE-panel button on
+        GNOME/KDE). Optional **evdev push-to-talk**
+        (`hotkey.wayland_evdev`, default off): hold a physical key read
+        from `/dev/input` — a PRIVILEGED path (input group +
+        `pip install 'sayit-ermano[wayland]'`), never fatal when absent.
+      - **Overlay**: the notification preview IS the wayland preview
+        (FluidOverlay's existing notify fallback); the X11 pill is not
+        possible on GNOME-Wayland in v1 and a wlroots layer-shell pill
+        is future work (out of scope).
+      - **Rewrite selection capture** works via tool-ctrl+c + wl-paste/
+        wl-copy restore; spoken-send/paste-last keys route through the
+        resolved tool; `copy_to_clipboard`/`clipboard_fallback` use
+        wl-copy on wayland sessions.
+      - **Divergences (deliberate)**: (1) paste verification degrades to
+        a fixed settle (`WAYLAND_PASTE_SETTLE_S = 0.45`) — cross-client
+        selection-read observation, the core of the X11 verified paste,
+        is impossible on Wayland; (2) no clipboard-manager hygiene
+        markers while flashing the clipboard — wayland clipboard managers
+        will see the dictation; (3) no app hints (no WM_CLASS equivalent;
+        AT-SPI future work), so `terminal_apps` quirks (ctrl+shift+v,
+        autocomplete space, spoken-send Enter blocklist) are inert.
+      - **Deviation from the task text (documented)**: a literal KDE
+        shortcut-file import was rejected — Plasma 6 custom-command
+        shortcuts live in `kglobalshortcutsrc` under kglobalacceld with
+        no supported import format; writing it blind is fragile. The
+        bindable script + open-panel button + per-DE instructions
+        deliver the same outcome honestly.
+- [ ] **Live smoke checklist** (run per compositor, priority GNOME-Wayland
+      then sway; note results here as they land — unit coverage is
+      complete in `tests/test_wayland_capabilities.py`, these are the
+      live-verification items):
+      1. Baseline, no tools installed: daemon starts in the foreground
+         AND under the installed systemd user unit (the unit bakes
+         `Environment=DISPLAY` — confirm `XDG_SESSION_TYPE`/
+         `WAYLAND_DISPLAY` reached `systemctl --user show-environment`;
+         the probe tolerates a stale DISPLAY, the unit comment says so).
+         Tray/socket/`status` alive; a dictation transcribes and lands in
+         history; the "no insertion tool" notification appears.
+      2. sway + wtype: typed insertion into a terminal and an editor;
+         spoken-send Enter; paste-last; paste mode via wl-clipboard —
+         verify the pre-paste clipboard is restored after both paths;
+         leading-dash text takes the paste path.
+      3. GNOME + ydotool (ydotoold running, uinput perms): same set; note
+         whether key-duration tuning is needed (fix the central
+         `_ydotool_*` builders only).
+      4. Overlay: recording shows the notification preview; no X11-pill
+         attempt noise in the log.
+      5. Doctor on the live session: matrix + per-tool found/missing
+         correct; exit 0 with insertion resolved, non-zero without.
+      6. Settings → Wayland: renders, Copy yields a working script; bind
+         it in the DE; toggle dictation via the shortcut.
+      7. evdev push-to-talk (if input-group access): hold-to-talk works;
+         note the device-name match.
+      8. X11 regression, same build: full manual pass (hotkey grab, pill
+         preview, verified paste, spoken-send, rewrite) — zero deltas.
 
 ### Models (v0.4)
 - [x] **Parakeet TDT v2/v3 via ONNX** — DONE: curated sherpa-onnx tarball

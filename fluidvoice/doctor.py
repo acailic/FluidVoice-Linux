@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from . import __version__, backends, paths
+from . import session as session_mod
 from .config import load_config
 
 
@@ -366,24 +367,122 @@ def _duplicate_install_lines(home: Path | None = None) -> list[str]:
     return []
 
 
+def _session_matrix_lines(cfg: dict) -> list[str]:
+    """Session type + per-capability backend matrix (the wayland port's
+    honest surface: one row per capability naming the resolved backend,
+    with per-tool found/missing detail and the install hint when insertion
+    is unavailable)."""
+    info = session_mod.probe()
+    caps = session_mod.capabilities(info, cfg=cfg)
+    where = info.type + (f" ({info.desktop})" if info.desktop else "")
+    lines = [f"session: {where}  DISPLAY={os.environ.get('DISPLAY', '-')} "
+             f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '-')}"]
+    rows = [("hotkey", "hotkey"), ("insertion", "insertion"),
+            ("clipboard", "clipboard"), ("overlay", "overlay"),
+            ("preview", "preview"), ("tray", "tray"),
+            ("app-hint", "app hints")]
+    for cap, label in rows:
+        value = caps[cap]
+        note = ""
+        if info.is_wayland:
+            if cap == "insertion" and value == "unavailable":
+                value = "UNAVAILABLE"
+                note = " - install wtype or ydotool"
+            elif cap == "insertion":
+                tools = [f"{t} {'found' if shutil.which(t) else 'missing'}"
+                         for t in session_mod.WAYLAND_TYPE_TOOLS]
+                note = f" ({', '.join(tools)}; xdotool is X11-only)"
+            elif cap in ("overlay", "preview"):
+                note = " (X11 pill not possible here; layer-shell pill: future)"
+            elif cap == "hotkey":
+                note = " (no global grabs on wayland - bind a DE shortcut)"
+        lines.append(f"  {label}: {value}{note}")
+    if info.is_wayland:
+        _tool, reason = session_mod.resolve_wayland_tool(
+            str((cfg.get("insertion", {}) or {}).get("wayland_tool",
+                                                       "auto")),
+            info.desktop_all)
+        if reason:
+            lines.append(f"  note: {reason}")
+        lines.append("  paste verification: fixed delay only - cross-client "
+                     "selection reads (the X11 read-observation) are "
+                     "impossible on Wayland")
+    return lines
+
+
+def _evdev_ptt_lines(cfg: dict) -> list[str]:
+    """Optional evdev push-to-talk (hotkey.wayland_evdev): python-evdev
+    presence, /dev/input access and the input-group requirement - the
+    privileged path, said plainly."""
+    h = (cfg.get("hotkey", {}) or {})
+    enabled = bool(h.get("wayland_evdev", False))
+    device = str(h.get("wayland_evdev_device", "") or "")
+    key = str(h.get("wayland_evdev_key", "KEY_RIGHTCTRL") or "")
+    state = "enabled" if enabled else "off (hotkey.wayland_evdev)"
+    lines = [f"  evdev push-to-talk: {state}",
+             f"  device pattern: {device or '(unset)'} · key: {key}"]
+    try:
+        import evdev  # noqa: F401
+    except ImportError:
+        lines.append("  python-evdev: MISSING (pip install "
+                     "'sayit-ermano[wayland]' or pip install evdev)")
+        return lines
+    import glob
+    events = glob.glob("/dev/input/event*")
+    if not events:
+        lines.append("  /dev/input: no event devices")
+        return lines
+    readable = [e for e in events if os.access(e, os.R_OK)]
+    if len(readable) == len(events):
+        lines.append(f"  /dev/input: {len(readable)}/{len(events)} event "
+                     "devices readable")
+    elif readable:
+        lines.append(f"  /dev/input: {len(readable)}/{len(events)} readable - "
+                     "add yourself to the 'input' group for the rest "
+                     "(privileged path)")
+    else:
+        lines.append("  /dev/input: NOT readable - add yourself to the input "
+                     "group (privileged path): sudo usermod -aG input $USER")
+    if device:
+        matches = []
+        for e in readable:
+            try:
+                name = evdev.InputDevice(e).name
+            except Exception:
+                continue
+            if device.lower() in name.lower():
+                matches.append(f"{name} ({e})")
+        lines.append("  matching devices: " + (", ".join(matches) if matches
+                     else "none - check hotkey.wayland_evdev_device"))
+    return lines
+
+
 def run() -> int:
     print(f"SayItErmano v{__version__} doctor\n")
     ok = True
-
-    session = os.environ.get("XDG_SESSION_TYPE", "unknown")
-    print(f"session: {session}  DISPLAY={os.environ.get('DISPLAY', '-')} "
-          f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '-')}")
-    if session == "x11":
-        print("  X11: full experience (global hotkey + xdotool typing)")
-    elif session == "wayland":
-        print("  Wayland: DE-shortcut -> `sayit-ermano toggle` works; typing needs "
-              "ydotool/wtype (see README)")
-        ok = False
 
     try:
         cfg = load_config(paths.config_file())
     except Exception:
         cfg = {}
+
+    info = session_mod.probe()
+    caps = session_mod.capabilities(info, cfg=cfg)
+    print("session:")
+    for line in _session_matrix_lines(cfg):
+        print(line)
+    if info.is_wayland:
+        print("  shortcut:")
+        for line in session_mod.de_shortcut_instructions(
+                info.desktop_all, str(paths.toggle_script())):
+            print("    " + line)
+        if caps["insertion"] == "unavailable":
+            ok = False  # the one wayland hard failure: nothing can insert text
+        if bool((cfg.get("hotkey", {}) or {}).get("wayland_evdev", False)):
+            print("  evdev push-to-talk:")
+            for line in _evdev_ptt_lines(cfg):
+                print("    " + line)
+
     print("\nversion/updates:")
     for line in _update_lines(cfg):
         print(line)
@@ -403,7 +502,12 @@ def run() -> int:
         ("pw-record", "PipeWire recording (preferred)"),
         ("parecord", "PulseAudio recording (fallback)"),
         ("xdotool", "typing text into apps (X11)"),
-        ("xclip", "clipboard paste mode + restore"),
+        ("xclip", "clipboard paste mode + restore (X11)"),
+        ("wtype", "typing text into apps (Wayland; wlroots/KDE - not GNOME)"),
+        ("ydotool", "typing on any compositor via uinput (Wayland; needs "
+                  "ydotoold running + /dev/uinput access)"),
+        ("wl-copy", "clipboard on Wayland (wl-clipboard)"),
+        ("wl-paste", "clipboard read/restore on Wayland (wl-clipboard)"),
         ("notify-send", "desktop notifications"),
         ("pw-play", "start/stop sounds"),
         ("ffmpeg", "transcribe fallback for non-WAV/undecodable input"),

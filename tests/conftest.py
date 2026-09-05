@@ -78,6 +78,16 @@ os.environ["XDG_CONFIG_HOME"] = str(TEST_XDG_ROOT / "config")
 os.environ["XDG_CACHE_HOME"] = str(TEST_XDG_ROOT / "cache")
 atexit.register(shutil.rmtree, TEST_XDG_ROOT, ignore_errors=True)
 
+# Pin the session type to X11 for the whole suite: the Wayland port gates
+# ONLY on this probe (fluidvoice/session.py), and the pre-existing tests
+# exercise the xdotool/xclip paths — pinning means they take the X11
+# branch no matter what display server the dev machine/CI runner sits on
+# (headless runner: "unknown" also behaves as X11, but pinning makes it
+# explicit and immune to a runner with a stray WAYLAND_DISPLAY). Per-test
+# monkeypatch.setenv("XDG_SESSION_TYPE", "wayland") keeps winning.
+os.environ["XDG_SESSION_TYPE"] = "x11"
+os.environ.pop("WAYLAND_DISPLAY", None)
+
 
 def _fingerprint(p: Path):
     """None when the file is missing, else (mtime_ns, size, sha256) —

@@ -1176,3 +1176,54 @@ class TestUpdateSurfacing:
         assert "sayit-ermano update" in text
         assert "updates.check = false" in text
         w.close()
+
+
+class TestSettingsWaylandPage:
+    """Settings -> Wayland: capability rows, the bindable command and the
+    per-DE instructions (v0.3 wayland port)."""
+
+    def test_page_renders_bindable_command_and_caps(self, loop, monkeypatch):
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        monkeypatch.setenv("XDG_CURRENT_DESKTOP", "GNOME")
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        monkeypatch.setattr("fluidvoice.session.shutil.which",
+                            lambda n: "/usr/bin/" + n if n in
+                            ("ydotool", "wl-copy", "wl-paste") else None)
+        w = SettingsWindow(client=StubClient())
+        w.present()
+        pump(loop)
+        assert w.wayland_page.get_name() == "wayland"
+        # the three setting rows exist (validated save path)
+        assert ("insertion", "wayland_tool") in w._rows
+        assert ("hotkey", "wayland_evdev") in w._rows
+        assert ("hotkey", "wayland_evdev_device") in w._rows
+        assert ("hotkey", "wayland_evdev_key") in w._rows
+        # capability rows resolved for the wayland session
+        assert w._wayland_cap_rows["session"].get_subtitle() == "wayland (gnome)"
+        assert w._wayland_cap_rows["insertion"].get_subtitle() == "ydotool"
+        assert w._wayland_cap_rows["hotkey"].get_subtitle() == "de-shortcut"
+        # the bindable command is the generated toggle script
+        command = w.wayland_script_row.get_subtitle()
+        assert "sayit-ermano-toggle" in command
+        # GNOME instructions render (the bind steps the doctor prints too)
+        assert any("GNOME" in r.get_title()
+                   for r in w._wayland_instruction_rows)
+        assert any(command in r.get_title()
+                   for r in w._wayland_instruction_rows)
+        # GNOME has a known panel -> the open button row is visible
+        assert w.wayland_open_row.get_visible() is True
+        w.close()
+
+    def test_unknown_desktop_hides_open_row(self, loop, monkeypatch):
+        from fluidvoice.gtkui.settings_window import SettingsWindow
+        monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        monkeypatch.setenv("XDG_CURRENT_DESKTOP", "sway")
+        monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+        w = SettingsWindow(client=StubClient())
+        w.present()
+        pump(loop)
+        assert w.wayland_open_row.get_visible() is False
+        assert any("custom command shortcut" in r.get_title()
+                   for r in w._wayland_instruction_rows)
+        w.close()

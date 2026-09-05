@@ -45,9 +45,14 @@ class RewriteError(RuntimeError):
 
 def capture_selection() -> str:
     """Snapshot the current selection: Ctrl+C, read PRIMARY-safe via clipboard,
-    restore the clipboard afterwards. Returns '' when nothing is selected."""
+    restore the clipboard afterwards. Returns '' when nothing is selected.
+    Wayland sessions use the wtype/ydotool + wl-clipboard equivalents
+    (_capture_selection_wayland); the X11 path below is unchanged."""
     import subprocess
     import time
+    from . import session as session_mod
+    if session_mod.current().is_wayland:
+        return _capture_selection_wayland()
     from .insertion import _clipboard_read, _clipboard_write
     previous = _clipboard_read()
     subprocess.run(["xdotool", "key", "--clearmodifiers", "ctrl+c"],
@@ -58,6 +63,40 @@ def capture_selection() -> str:
     # restore the user's clipboard (unless the selection copied nothing new)
     if previous is not None and previous != selected:
         _clipboard_write(previous)
+    return text.strip()
+
+
+def _capture_selection_wayland() -> str:
+    """Rewrite-mode selection capture on wayland: ctrl+c through the
+    resolved typing tool, wl-paste read, wl-copy restore (mime-aware).
+    Returns '' when no typing tool / wl-clipboard is available (rewrite
+    proceeds without context, like a failed X11 capture)."""
+    import shutil
+    import subprocess
+    import time
+    from .insertion import (_key_cmd, _resolve_wayland_tool,
+                            _wl_clipboard_read, _wl_clipboard_snapshot,
+                            _wl_clipboard_write)
+    if not (shutil.which("wl-copy") and shutil.which("wl-paste")):
+        return ""
+    tool, _reason = _resolve_wayland_tool({})
+    if tool is None:
+        return ""
+    previous, mime = _wl_clipboard_snapshot()
+    try:
+        subprocess.run(_key_cmd(tool, "ctrl+c"), capture_output=True,
+                       timeout=5)
+    except FileNotFoundError:
+        return ""
+    time.sleep(0.12)
+    selected = _wl_clipboard_read() or b""
+    text = selected.decode(errors="replace")
+    # restore the user's clipboard (unless the selection copied nothing new)
+    if previous is not None and previous != selected:
+        try:
+            _wl_clipboard_write(previous, mime)
+        except Exception:
+            pass
     return text.strip()
 
 

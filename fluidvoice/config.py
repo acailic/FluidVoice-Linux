@@ -47,6 +47,13 @@ DEFAULTS: dict[str, Any] = {
         "rewrite_key": "",  # optional keysym for Rewrite mode (needs [ai])
         "command_key": "",  # optional keysym for Command mode (needs [ai])
         "paste_key": "",  # optional keysym: re-type the last transcription
+        # Wayland (no global grabs): optional physical push-to-talk read
+        # straight from /dev/input (PRIVILEGED: needs the input group and
+        # python-evdev, `pip install 'sayit-ermano[wayland]'`). Off by
+        # default; the DE-shortcut assist is the primary wayland hotkey.
+        "wayland_evdev": False,
+        "wayland_evdev_device": "",  # device-name substring, e.g. "Keyboard"
+        "wayland_evdev_key": "KEY_RIGHTCTRL",  # ecodes KEY_* name
     },
     "recording": {
         "command": "auto",  # auto | pw-record | parecord
@@ -134,6 +141,10 @@ DEFAULTS: dict[str, Any] = {
         # Keystroke used to paste in terminal apps (general.terminal_apps);
         # X11 terminals need ctrl+shift+v
         "terminal_paste_key": "ctrl+shift+v",
+        # Wayland typing tool: auto | wtype | ydotool. auto prefers wtype
+        # (wlroots/KDE) and skips it on GNOME (no virtual-keyboard
+        # protocol), falling back to ydotool (needs ydotoold + uinput).
+        "wayland_tool": "auto",
     },
     "sounds": {
         "enabled": True,
@@ -219,6 +230,12 @@ modifiers = []
 mode = "toggle"
 # Optional extra key that cancels a running recording (keysym name, "" = off)
 cancel_key = ""
+# Wayland push-to-talk via evdev (privileged: needs the input group +
+# python-evdev). wayland_evdev_device matches /dev/input device names
+# by substring; wayland_evdev_key is an ecodes KEY_* name.
+wayland_evdev = false
+wayland_evdev_device = ""
+wayland_evdev_key = "KEY_RIGHTCTRL"
 
 [recording]
 # auto | pw-record | parecord
@@ -311,6 +328,10 @@ verify_paste = true
 # Keystroke used to paste in terminal apps (general.terminal_apps); X11
 # terminals pass ctrl+v through to the app, they need ctrl+shift+v
 terminal_paste_key = "ctrl+shift+v"
+# Wayland typing tool: auto | wtype | ydotool (wtype needs wlroots/KDE;
+# ydotool works everywhere but needs ydotoold + /dev/uinput access).
+# Ignored on X11 sessions.
+wayland_tool = "auto"
 
 [sounds]
 enabled = true
@@ -382,7 +403,8 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
     "general": ["language", "copy_to_clipboard", "tray_enabled",
                 "terminal_apps", "pause_when_locked"],
     "hotkey": ["key", "modifiers", "mode", "cancel_key", "rewrite_key", "paste_key",
-                "command_key"],
+                "command_key", "wayland_evdev", "wayland_evdev_device",
+                "wayland_evdev_key"],
     "recording": ["command", "device", "mic_priority", "max_seconds",
                   "skip_silent",
                   "first_pcm_timeout", "spoken_send_enabled", "spoken_send_phrase",
@@ -403,7 +425,7 @@ _SAVE_WHITELIST: dict[str, list[str]] = {
            "timeout_seconds", "max_retries", "per_app_prompts", "base_prompt"],
     "insertion": ["mode", "type_delay_ms", "paste_threshold_chars",
                   "terminal_autocomplete_space", "verify_paste",
-                  "terminal_paste_key"],
+                  "terminal_paste_key", "wayland_tool"],
     "sounds": ["enabled", "volume"],
     "notifications": ["enabled"],
     "updates": ["check", "notify"],
@@ -493,6 +515,8 @@ SETTING_RANGES: dict[tuple[str, str], Any] = {
     ("hotkey", "rewrite_key"): ("str", 64),
     ("hotkey", "paste_key"): ("str", 64),
     ("hotkey", "command_key"): ("str", 64),
+    ("hotkey", "wayland_evdev_device"): ("str", 128),
+    ("hotkey", "wayland_evdev_key"): ("str", 64),
     ("command", "max_turns"): ("int", (1, 20)),
     ("command", "working_dir"): ("str", 4096),
     ("command", "timeout_seconds"): ("float", (1, 3600)),
@@ -523,6 +547,7 @@ SETTING_ENUMS: dict[tuple[str, str], set] = {
     ("model", "device"): {"auto", "cuda", "cpu"},
     ("model", "compute"): {"auto", "float16", "int8"},
     ("insertion", "mode"): {"auto", "typed", "paste"},
+    ("insertion", "wayland_tool"): {"auto", "wtype", "ydotool"},
     ("recording", "command"): {"auto", "pw-record", "parecord"},
     ("recording", "spoken_send_key"): {"enter", "shift+enter", "ctrl+enter"},
 }
@@ -544,6 +569,7 @@ SETTING_BOOLS = {("general", "copy_to_clipboard"), ("general", "tray_enabled"),
                  ("history", "save"), ("history", "save_audio"),
                  ("insertion", "terminal_autocomplete_space"),
                  ("insertion", "verify_paste"),
+                 ("hotkey", "wayland_evdev"),
                  ("model", "eager_warmup")}
 # list-valued pass-through keys the UI owns
 SETTING_LISTS = (("processing", "filler_words"), ("processing", "dictionary"),
@@ -553,7 +579,8 @@ ALLOWED_SETTINGS: dict[str, set] = {
     "general": {"language", "copy_to_clipboard", "tray_enabled",
                 "terminal_apps", "pause_when_locked"},
     "hotkey": {"key", "modifiers", "mode", "cancel_key", "rewrite_key", "paste_key",
-               "command_key"},
+               "command_key", "wayland_evdev", "wayland_evdev_device",
+               "wayland_evdev_key"},
     "recording": {"command", "device", "mic_priority", "max_seconds",
                   "skip_silent",
                   "first_pcm_timeout", "spoken_send_enabled",
@@ -574,7 +601,7 @@ ALLOWED_SETTINGS: dict[str, set] = {
            "timeout_seconds", "max_retries", "per_app_prompts", "base_prompt"},
     "insertion": {"mode", "type_delay_ms", "paste_threshold_chars",
                   "terminal_autocomplete_space", "verify_paste",
-                  "terminal_paste_key"},
+                  "terminal_paste_key", "wayland_tool"},
     "sounds": {"enabled", "volume"},
     "notifications": {"enabled"},
     "updates": {"check", "notify"},

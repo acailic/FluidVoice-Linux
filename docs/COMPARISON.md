@@ -6,7 +6,7 @@ pre-release). These are the Linux-native tools in the same space:
 
 | Tool | Engine | AI polish | Spoken punctuation | Global hotkey | Insertion | X11/Wayland |
 |---|---|---|---|---|---|---|
-| **SayItErmano (this, formerly FluidVoiceLinux)** | faster-whisper / whisper.cpp / torch (CUDA) | ✅ verbatim FluidVoice prompt, any OpenAI-compatible endpoint | ✅ full "literal" rule table w/ contexts | ✅ XGrabKey (toggle+hold) | typed + paste w/ restore | X11 now / Wayland roadmap |
+| **SayItErmano (this, formerly FluidVoiceLinux)** | faster-whisper / whisper.cpp / torch (CUDA) | ✅ verbatim FluidVoice prompt, any OpenAI-compatible endpoint | ✅ full "literal" rule table w/ contexts | ✅ XGrabKey (toggle+hold); Wayland: DE shortcut + evdev PTT (v0.3) | typed + paste w/ restore: xdotool/xclip (X11), wtype/ydotool + wl-clipboard (Wayland, v0.3) | X11 + Wayland (v0.3) |
 | [Handy](https://github.com/cjpais/handy) | whisper.cpp | ➖ | ➖ | ✅ | paste | both (Tauri) |
 | [Vocalinux](https://github.com/jatinkrmalik/vocalinux) | whisper.cpp/VOSK + Silero VAD | ➖ | ➖ | ✅ | xdotool/ydotool | both |
 | [nerd-dictation](https://github.com/ideasman42/nerd-dictation) | VOSK | ➖ | ➖ | ✅ (its own) | xdotool | X11 (community Wayland) |

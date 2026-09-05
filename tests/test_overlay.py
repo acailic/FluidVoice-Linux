@@ -185,6 +185,30 @@ class TestFluidOverlayFallback:
         o.set_state("processing")
         o.close()               # must not raise
 
+    def test_wayland_session_degrades_to_notify_preview(self, monkeypatch):
+        """The declared wayland overlay: notifications are the wayland
+        preview (layer-shell pill is future work; GNOME-Wayland has no
+        pill at all in v1) - a wayland session with a failing X stack
+        must degrade to notify-send exactly like the headless case."""
+        import fluidvoice.overlay as ov
+        from fluidvoice.preview import NotifyPreview
+
+        monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+
+        def boom(*a, **k):
+            raise OSError("no X display (wayland session)")
+
+        monkeypatch.setattr("Xlib.display.Display", boom)
+        shown: list[str] = []
+        monkeypatch.setattr(NotifyPreview, "show",
+                            lambda self, t: shown.append(t))
+        o = ov.FluidOverlay()
+        assert not o.using_overlay
+        o.show("wayland preview")
+        assert shown == ["wayland preview"]
+        o.close()               # must not raise
+
 
 class TestConfirmState:
     def test_confirmation_pill_text(self):

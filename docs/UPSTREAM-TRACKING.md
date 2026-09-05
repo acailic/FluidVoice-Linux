@@ -54,7 +54,7 @@ new that Linux doesn't have" a one-command answer.
 
 | macOS capability | Linux port | Notes / substitute |
 |---|---|---|
-| Global push hotkey (Right ⌥) | ✅ | Right Ctrl (any keysym) via XGrabKey; on Wayland bind a DE shortcut to `fluidvoice toggle` |
+| Global push hotkey (Right ⌥) | ✅ | X11: Right Ctrl (any keysym) via XGrabKey. Wayland (v0.3): DE custom shortcut → the generated `sayit-ermano-toggle` script (Settings → Wayland assists; doctor prints per-DE steps) + optional evdev push-to-talk (`hotkey.wayland_evdev`) |
 | Whisper models (tiny→large) | ✅ | faster-whisper (CUDA/int8), whisper.cpp, torch backends; Parakeet TDT via ONNX Runtime (explicit `backend = "parakeet"`) |
 | Parakeet TDT v2/v3 (upstream default) | ✅ | offline v2/v3 via the community ONNX exports (sherpa-onnx) + our own numpy log-mel + greedy TDT decode over ONNX Runtime — no NeMo dependency; explicit `backend = "parakeet"` selection ("auto" still prefers the whisper family — deliberate divergence, see STATUS.md) |
 | Parakeet Flash / Realtime, Nemotron Speech 3.5 (streaming) | 🚧 later | streaming engines also unlock tighter live preview |
@@ -70,7 +70,7 @@ new that Linux doesn't have" a one-command answer.
 | Slash-command/mention literal formatting (`/ fix`, `@ John Smith`) | ✅ / ⏳ | literal forms ported (squeeze after AI cleanup, `processing.slash_mention_squeeze`); upstream's SPOKEN forms (`slash fix`, `at sign John`, `tag John`) ⏳ |
 | Command mode (voice → actions) | ✅ v2 | upstream tool schema ported into the strict-JSON protocol (`tools` shape from `TerminalService.swift:20-61`: `execute_terminal_command` with per-arg validation, upstream's only-honored tool name enforced loudly); the destructive-command list ported VERBATIM (`CommandModeService.swift:562-598`: 19 prefixes + 9 compound patterns + the anywhere `rm -` rule, literal case-insensitive matching) plus a user-extensible `command.destructive_patterns` list; confirm-every-run with a two-press strong confirm for destructive commands is a deliberate divergence (see STATUS); follow-up context = in-memory per-app last-5/300 s window with spoken "new session" clear (vs upstream's persisted 30-chat global store, `ChatHistoryStore.swift:93-110`); History Commands view with Copy + confirm-gated Re-run; native tool_calls wire format and persistent chat sessions remain upstream-only |
 | Per-app prompt sets | ⏳ v0.2 | frontmost-app hint already captured |
-| Smart typing via accessibility APIs | ✅ / 🚧 | xdotool on X11 ✅; Wayland insertion 🚧 v0.3 (ydotool/wtype); AT-SPI fallback ⏳ |
+| Smart typing via accessibility APIs | ✅ / 🚧 | xdotool on X11 ✅; wtype/ydotool on Wayland ✅ (v0.3); AT-SPI app hints ⏳ (wayland terminal quirks are inert) |
 | Menu bar + notch overlay | ✅ (equivalent) | tray/panel icon via StatusNotifierItem (`tray.py`): click = toggle, right-click = settings, recording badge, tooltip w/ hotkey; notch ➖ N/A |
 | Audio history (budget, retention) | ✅ | history JSONL + GB budget; searchable History page w/ inline replay, delete, clear; ZIP export ✅ (history + retained audio) |
 | Today-usage stats | ✅ | History window header line, `fluidvoice status` `today:` line (local midnight) |

@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from . import __version__, backends, control, insertion, ui
 from . import history as history_mod
-from . import paths
+from . import paths, session as session_mod
 from . import update as update_mod
 from .ai.client import AIClient, AIError
 from .ai.prompts import base_prompt_for
@@ -341,11 +341,15 @@ class Daemon:
         self._rewrite_hotkey = None
         self._srv: Any = None
         self._process_thread: threading.Thread | None = None
+        self._session = session_mod.probe()  # session type + capabilities
+        self._evdev_ptt: Any = None  # optional evdev push-to-talk (wayland)
 
     # -- lifecycle -----------------------------------------------------------
 
     def run(self) -> None:
         log(f"SayItErmano v{__version__} starting")
+        self._session = session_mod.probe()
+        self._log_session()
         self._sweep_stale_tmp()
         try:
             self.backend = self._backend_factory(self.cfg)
@@ -373,6 +377,7 @@ class Daemon:
         if self.use_hotkey:
             self._start_hotkey()
         self._start_mouse_ptt()
+        self._start_evdev_ptt()
 
         self._start_tray()
         self._start_micmon()
@@ -398,6 +403,16 @@ class Daemon:
                 time.sleep(0.3)
         finally:
             self.shutdown()
+
+    def _log_session(self) -> None:
+        """One honest startup line: the session type and the capability
+        backends it resolves to (fluidvoice/session.py). The wayland
+        bind-script hint is logged by _start_hotkey, not duplicated here."""
+        info = self._session
+        caps = session_mod.capabilities(info, cfg=self.cfg)
+        where = f"{info.type}" + (f" ({info.desktop})" if info.desktop else "")
+        summary = " ".join(f"{k}={v}" for k, v in caps.items())
+        log(f"session: {where} - capabilities: {summary}")
 
     def _start_tray(self) -> None:
         """Panel/tray icon (StatusNotifierItem): click toggles dictation,
@@ -724,6 +739,8 @@ class Daemon:
             self._hotkey.stop()
         if self._mouse_ptt:
             self._mouse_ptt.stop()
+        if self._evdev_ptt:
+            self._evdev_ptt.stop()
         if self._rewrite_hotkey:
             self._rewrite_hotkey.stop()
         if self._command_hotkey:
@@ -752,7 +769,15 @@ class Daemon:
                     pass
 
     def _start_hotkey(self) -> str | None:
-        """(Re-)grab the dictation hotkeys. Returns the first error, if any."""
+        """(Re-)grab the dictation hotkeys. Returns the first error, if any.
+        Wayland sessions skip the X grabs entirely (they cannot work) and
+        say so once: the declared wayland hotkey is the DE-shortcut assist."""
+        if self._session.is_wayland:
+            script = session_mod.ensure_toggle_script()
+            log("hotkey: wayland session - global grabs do not exist; bind a "
+                f"DE custom shortcut to {script or '`sayit-ermano toggle`'} "
+                "(sayit-ermano doctor prints per-DE steps)")
+            return None
         from .hotkey import HotkeyError, HotkeyListener
         error = None
         hk = self.cfg["hotkey"]
@@ -874,7 +899,8 @@ class Daemon:
         release detection, see hotkey.MousePTTListener). Empty config =
         off (silent skip). Failures WARN + notify but never kill the
         daemon - the keyboard hotkey keeps working. Returns the first
-        error, if any."""
+        error, if any. Wayland: XGrabButton only sees Xwayland apps -
+        skipped with a hint at the evdev push-to-talk instead."""
         from .hotkey import HotkeyError, MousePTTListener, parse_button_spec
         spec = (self.cfg["recording"].get("push_to_talk_button") or "").strip()
         try:
@@ -887,6 +913,10 @@ class Daemon:
                       timeout_ms=8000,
                       enabled=self.cfg["notifications"]["enabled"])
             return str(e)
+        if self._session.is_wayland and button is not None:
+            log("mouse push-to-talk: X11-only (XGrabButton sees Xwayland apps "
+                "at best) - use hotkey.wayland_evdev on wayland")
+            return None
         if button is None:
             return None  # not configured: keyboard hotkey only
         try:
@@ -943,6 +973,54 @@ class Daemon:
             raise RuntimeError(f"mouse push-to-talk re-bind failed: {error} "
                                "(fix the button and save again)")
 
+    # -- wayland evdev push-to-talk (hotkey.wayland_evdev) --------------------
+
+    def _start_evdev_ptt(self) -> str | None:
+        """Optional physical push-to-talk on wayland: hold a key read from
+        /dev/input (privileged path - input group + python-evdev). Off by
+        default; any failure WARNs and leaves the daemon fully useful.
+        Returns the first error, if any."""
+        hk = self.cfg["hotkey"]
+        if not self._session.is_wayland or not hk.get("wayland_evdev", False):
+            return None
+        from .evdev_ptt import EvdevPTT
+        try:
+            ptt = EvdevPTT(
+                device_substr=str(hk.get("wayland_evdev_device", "")),
+                key_name=str(hk.get("wayland_evdev_key", "KEY_RIGHTCTRL")),
+                on_press=self._evdev_toggle,
+                on_release=self._evdev_toggle,
+                log=log)
+            if not ptt.start():
+                return "evdev push-to-talk unavailable (see the daemon log)"
+            self._evdev_ptt = ptt
+            for line in ptt.summary:
+                log(line)
+            return None
+        except Exception as e:  # noqa: BLE001 - never fatal (the plan)
+            self._evdev_ptt = None
+            log(f"WARN evdev push-to-talk unavailable: {e}")
+            return str(e)
+
+    def _evdev_toggle(self) -> None:
+        """Both edges of the hold map to toggle() (press starts, release
+        stops + transcribes) - the daemon's own state machine keeps it
+        idempotent."""
+        self.toggle()
+
+    def _restart_evdev_ptt(self) -> None:
+        """Re-arm after a settings change (the hotkey.* restart hook)."""
+        if self._evdev_ptt is not None:
+            try:
+                self._evdev_ptt.stop()
+            except Exception as e:
+                log(f"WARN stopping old evdev push-to-talk failed: {e}")
+            self._evdev_ptt = None
+        error = self._start_evdev_ptt()
+        if error:
+            raise RuntimeError(f"evdev push-to-talk re-bind failed: {error} "
+                               "(check the device pattern and save again)")
+
     def _rebuild_recorder(self) -> None:
         """New Recorder from the current cfg (command/device changed)."""
         rcfg = self.cfg["recording"]
@@ -975,6 +1053,8 @@ class Daemon:
 
         if any(k.startswith("hotkey.") for k in changed):
             _try("hotkeys", self._restart_hotkey)
+            if self._session.is_wayland:
+                _try("evdev push-to-talk", self._restart_evdev_ptt)
         if any(k in ("recording.push_to_talk_button",
                      "recording.push_to_talk_modifiers") for k in changed):
             _try("mouse push-to-talk", self._restart_mouse_ptt)
@@ -1122,6 +1202,12 @@ class Daemon:
                                           if self._mouse_ptt is not None
                                           else None),
                     "locked": self._locked,
+                    # session type + per-capability backends (wayland port
+                    # v0.3; additive keys - JSON consumers unaffected)
+                    "session": {"type": self._session.type,
+                                "desktop": self._session.desktop},
+                    "capabilities": session_mod.capabilities(
+                        self._session, cfg=self.cfg),
                     "warmup": dict(self.warmup),
                     "active_model": self._active_model_name(),
                     "active_model_key": backends.backend_model_key(self.backend)

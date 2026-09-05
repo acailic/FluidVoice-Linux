@@ -50,10 +50,24 @@ sources. Everything below is a known, classified gap — see
 - [x] GAAV mode (lowercase-first / strip trailing period) — DONE.
 
 ## v0.3 — Wayland parity
-- [ ] Insertion via ydotool/wtype + wlr virtual-keyboard protocol.
-- [ ] Hotkey: document/bind DE shortcuts per compositor (GNOME/KDE/COSMIC);
-      optional evdev listener for physical push-to-talk.
-- [ ] Clipboard via wl-clipboard (wl-copy/wl-paste) with restore.
+- [x] Insertion via ydotool/wtype + wlr virtual-keyboard protocol — DONE:
+      `fluidvoice/session.py` probes the session (XDG_SESSION_TYPE >
+      WAYLAND_DISPLAY > DISPLAY > unknown-as-x11); wayland insertion uses
+      `wtype` (auto-skipped on GNOME — no virtual-keyboard protocol) or
+      `ydotool` (spec→code table, `insertion.wayland_tool`), with the
+      per-capability matrix on `status`/`doctor`/Settings → Wayland.
+- [x] Hotkey: document/bind DE shortcuts per compositor (GNOME/KDE/COSMIC);
+      optional evdev listener for physical push-to-talk — DONE: the daemon
+      writes a bindable `sayit-ermano-toggle` script and prints per-DE
+      steps (doctor + Settings → Wayland); `hotkey.wayland_evdev` adds a
+      physical hold-to-talk key read from /dev/input (privileged path,
+      `pip install 'sayit-ermano[wayland]'`).
+- [x] Clipboard via wl-clipboard (wl-copy/wl-paste) with restore — DONE:
+      paste mode snapshots via `wl-paste`, writes `wl-copy`, pastes through
+      the typing tool, restores with the original mime type. Deliberate
+      divergence: paste verification degrades to a fixed settle delay
+      (cross-client selection reads are impossible on Wayland) and no
+      clipboard-manager hygiene markers (see STATUS).
 
 ## v0.4 — model variety
 - [ ] Parakeet TDT v2/v3 on GPU via NeMo / ONNX Runtime — upstream's default
